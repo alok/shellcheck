@@ -1,0 +1,17 @@
+name = "ShellCheck4"
+version = "0.1.0"
+defaultTargets = ["shellcheck4"]
+
+[[require]]
+name = "mathlib"
+scope = "leanprover-community"
+git = "https://github.com/leanprover-community/mathlib4"
+rev = "master"
+
+[[lean_lib]]
+name = "ShellCheck"
+srcDir = "."
+
+[[lean_exe]]
+name = "shellcheck4"
+root = "Main"
