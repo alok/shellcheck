@@ -12,3 +12,5 @@ import ShellCheck.Regex
 import ShellCheck.ASTLib
 import ShellCheck.Fixer
 import ShellCheck.Graph
+import ShellCheck.Parser
+import ShellCheck.CFG
