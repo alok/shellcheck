@@ -14,3 +14,5 @@ import ShellCheck.Fixer
 import ShellCheck.Graph
 import ShellCheck.Parser
 import ShellCheck.CFG
+import ShellCheck.CFGAnalysis
+import ShellCheck.AnalyzerLib
