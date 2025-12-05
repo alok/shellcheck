@@ -220,15 +220,156 @@ def createEnvironmentState : InternalState :=
     |> addVars variablesWithoutSpaces spacelessState
     |> addVars specialIntegerVariables integerState
 
-/-- Analyze control flow (stub - returns empty analysis) -/
+/-- Max for SpaceStatus based on constructor index -/
+def SpaceStatus.max (a b : SpaceStatus) : SpaceStatus :=
+  if a.ctorIdx >= b.ctorIdx then a else b
+
+/-- Min for NumericalStatus based on constructor index -/
+def NumericalStatus.min (a b : NumericalStatus) : NumericalStatus :=
+  if a.ctorIdx <= b.ctorIdx then a else b
+
+/-- Merge two variable states (join operation for DFA) -/
+def mergeVariableState (a b : VariableState) : VariableState := {
+  variableValue := {
+    literalValue := if a.variableValue.literalValue == b.variableValue.literalValue
+                    then a.variableValue.literalValue
+                    else Option.none
+    spaceStatus := SpaceStatus.max a.variableValue.spaceStatus b.variableValue.spaceStatus
+    numericalStatus := NumericalStatus.min a.variableValue.numericalStatus b.variableValue.numericalStatus
+  }
+  variableProperties := a.variableProperties ++ b.variableProperties
+}
+
+/-- Merge two program states (join operation for DFA) -/
+def mergeProgramState (a b : ProgramState) : ProgramState := {
+  variablesInScope := a.variablesInScope.fold (fun m k v =>
+    match m.get? k with
+    | some v' => m.insert k (mergeVariableState v v')
+    | Option.none => m.insert k v
+  ) b.variablesInScope
+  exitCodes := a.exitCodes ++ b.exitCodes |>.eraseDups
+  stateIsReachable := a.stateIsReachable || b.stateIsReachable
+}
+
+/-- Helper to create variable state from a value -/
+def valueToVariableState (value : CFValue) : VariableState :=
+  match value with
+  | .CFValueString =>
+    { variableValue := unknownVariableValue
+      variableProperties := [[]] }
+  | .CFValueInteger =>
+    { variableValue := unknownIntegerValue
+      variableProperties := [[.CFVPInteger]] }
+  | .CFValueComputed _ parts =>
+    let isLiteral := parts.all fun p => match p with
+      | .CFStringLiteral _ => true
+      | _ => false
+    { variableValue := {
+        literalValue := if isLiteral then
+          some (parts.foldl (fun acc p => match p with
+            | .CFStringLiteral s => acc ++ s
+            | _ => acc) "")
+        else Option.none
+        spaceStatus := .SpaceStatusUnknown
+        numericalStatus := .NumericalStatusUnknown
+      }
+      variableProperties := [[]] }
+  | _ =>
+    unknownVariableState
+
+/-- Apply a CFG effect to a program state -/
+def applyEffect (effect : CFEffect) (state : ProgramState) : ProgramState :=
+  match effect with
+  | .CFReadVariable _name =>
+    -- Reading doesn't change state
+    state
+  | .CFWriteVariable name value =>
+    let varState := valueToVariableState value
+    { state with variablesInScope := state.variablesInScope.insert name varState }
+  | .CFWriteGlobal name value =>
+    let varState := valueToVariableState value
+    { state with variablesInScope := state.variablesInScope.insert name varState }
+  | .CFWriteLocal name value =>
+    let varState := valueToVariableState value
+    { state with variablesInScope := state.variablesInScope.insert name varState }
+  | .CFWritePrefix name value =>
+    let varState := valueToVariableState value
+    { state with variablesInScope := state.variablesInScope.insert name varState }
+  | .CFSetProps _ name props =>
+    match state.variablesInScope.get? name with
+    | some varState =>
+      let newVarState := { varState with variableProperties := props :: varState.variableProperties }
+      { state with variablesInScope := state.variablesInScope.insert name newVarState }
+    | Option.none =>
+      let newVarState := { unknownVariableState with variableProperties := props :: unknownVariableState.variableProperties }
+      { state with variablesInScope := state.variablesInScope.insert name newVarState }
+  | .CFUnsetProps _ name _props =>
+    { state with variablesInScope := state.variablesInScope.erase name }
+  | .CFUndefine name =>
+    { state with variablesInScope := state.variablesInScope.erase name }
+  | .CFUndefineVariable name =>
+    { state with variablesInScope := state.variablesInScope.erase name }
+  | _ =>
+    state  -- Other effects don't change variable state
+
+/-- Apply a list of effects to a program state -/
+def applyEffects (effects : List IdTagged) (state : ProgramState) : ProgramState :=
+  effects.foldl (fun s eff => applyEffect eff.effect s) state
+
+/-- Process a CFG node and return the outgoing state -/
+def processNode (node : CFNode) (incoming : ProgramState) : ProgramState :=
+  match node with
+  | .CFApplyEffects effects =>
+    applyEffects effects incoming
+  | .CFSetExitCode id =>
+    { incoming with exitCodes := [id] }
+  | .CFUnreachable =>
+    { incoming with stateIsReachable := false }
+  | .CFEntryPoint _ =>
+    incoming
+  | _ =>
+    incoming
+
+/-- Initial program state for analysis -/
+def initialProgramState : ProgramState :=
+  internalToExternal createEnvironmentState
+
+/-- Analyze control flow using iterative dataflow analysis -/
 def analyzeControlFlow (params : CFGParameters) (root : Token) : CFGAnalysis :=
   let cfgResult := buildGraph params root
+  let graph := cfgResult.cfGraph
+
+  -- Initialize all nodes with empty state
+  let initState : ProgramState := initialProgramState
+  let emptyData : Std.HashMap Node (ProgramState × ProgramState) :=
+    graph.nodes.foldl (fun m lnode =>
+      m.insert lnode.node (initState, initState)
+    ) {}
+
+  -- Simple forward analysis: process nodes in order
+  -- (A proper implementation would use worklist algorithm with fixpoint iteration)
+  let nodeToData := graph.nodes.foldl (fun data lnode =>
+    -- Get incoming state from predecessors
+    let preds := graph.edges.filter (fun e => e.dst == lnode.node) |>.map (·.src)
+    let incoming := preds.foldl (fun acc pred =>
+      match data.get? pred with
+      | some (_, outgoing) => mergeProgramState acc outgoing
+      | Option.none => acc
+    ) initState
+
+    -- Process the node
+    let outgoing := processNode lnode.label incoming
+
+    -- Store the result
+    data.insert lnode.node (incoming, outgoing)
+  ) emptyData
+
   {
     graph := cfgResult.cfGraph
     tokenToRange := cfgResult.cfIdToRange
     tokenToNodes := cfgResult.cfIdToNodes
     postDominators := cfgResult.cfPostDominators
-    nodeToData := {}  -- DFA would populate this
+    nodeToData := nodeToData
   }
 
 -- Theorems (stubs)

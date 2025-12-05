@@ -8,6 +8,12 @@ scope = "leanprover-community"
 git = "https://github.com/leanprover-community/mathlib4"
 rev = "master"
 
+# TODO: Add lean-regex when compatible with Lean 4.26+
+# [[require]]
+# name = "Regex"
+# git = "https://github.com/bergmannjg/regex"
+# rev = "main"
+
 [[lean_lib]]
 name = "ShellCheck"
 srcDir = "."

@@ -532,7 +532,7 @@ def getVariablesFromLiteral (s : String) : List String :=
 where
   go : List Char → List Char → List String → List String
   | [], [], acc => acc.reverse
-  | [], curr, acc => (String.mk curr.reverse :: acc).reverse
+  | [], curr, acc => (String.ofList curr.reverse :: acc).reverse
   | '$' :: '{' :: rest, [], acc => goInBrace rest [] acc
   | '$' :: c :: rest, [], acc =>
     if c.isAlpha || c == '_' then
@@ -543,13 +543,13 @@ where
     if isAlphaNum c || c == '_' then
       go rest (c :: curr) acc
     else
-      go rest [] (String.mk curr.reverse :: acc)
+      go rest [] (String.ofList curr.reverse :: acc)
   | _ :: rest, [], acc => go rest [] acc
 
   goInBrace : List Char → List Char → List String → List String
   | [], _, acc => acc.reverse
   | '}' :: rest, curr, acc =>
-    go rest [] (String.mk curr.reverse :: acc)
+    go rest [] (String.ofList curr.reverse :: acc)
   | c :: rest, curr, acc =>
     if isAlphaNum c || c == '_' then
       goInBrace rest (c :: curr) acc

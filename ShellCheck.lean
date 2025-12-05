@@ -16,3 +16,8 @@ import ShellCheck.Parser
 import ShellCheck.CFG
 import ShellCheck.CFGAnalysis
 import ShellCheck.AnalyzerLib
+import ShellCheck.Analytics
+import ShellCheck.Checks
+import ShellCheck.Analyzer
+import ShellCheck.Checker
+import ShellCheck.Formatters

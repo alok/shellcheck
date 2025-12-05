@@ -17,7 +17,7 @@ open Std.Internal.Parsec.String
 /-- Parser state with position tracking -/
 structure ParserState where
   input : String
-  pos : String.Pos
+  pos : String.Pos.Raw
   line : Nat
   column : Nat
   deriving Repr, Inhabited
@@ -54,7 +54,7 @@ def mkState (input : String) : ParserState := {
 }
 
 /-- Get current position -/
-def getPos : Parser String.Pos := fun s => .ok s.pos s
+def getPos : Parser String.Pos.Raw := fun s => .ok s.pos s
 
 /-- Get current line -/
 def getLine : Parser Nat := fun s => .ok s.line s
@@ -64,20 +64,20 @@ def getColumn : Parser Nat := fun s => .ok s.column s
 
 /-- Check if at end of input -/
 def isEof : Parser Bool := fun s =>
-  .ok (s.pos >= s.input.endPos) s
+  .ok (s.pos >= s.input.rawEndPos) s
 
 /-- Peek at next character without consuming -/
 def peek? : Parser (Option Char) := fun s =>
-  if s.pos < s.input.endPos then
-    .ok (some (s.input.get s.pos)) s
+  if s.pos < s.input.rawEndPos then
+    .ok (some (s.pos.get s.input)) s
   else
     .ok none s
 
 /-- Consume a single character -/
 def anyChar : Parser Char := fun s =>
-  if s.pos < s.input.endPos then
-    let c := s.input.get s.pos
-    let newPos := s.input.next s.pos
+  if s.pos < s.input.rawEndPos then
+    let c := s.pos.get s.input
+    let newPos := s.pos.next s.input
     let (newLine, newCol) :=
       if c == '\n' then (s.line + 1, 1)
       else (s.line, s.column + 1)
@@ -87,10 +87,10 @@ def anyChar : Parser Char := fun s =>
 
 /-- Consume a character satisfying a predicate -/
 def satisfy (p : Char → Bool) (desc : String := "character") : Parser Char := fun s =>
-  if s.pos < s.input.endPos then
-    let c := s.input.get s.pos
+  if s.pos < s.input.rawEndPos then
+    let c := s.pos.get s.input
     if p c then
-      let newPos := s.input.next s.pos
+      let newPos := s.pos.next s.input
       let (newLine, newCol) :=
         if c == '\n' then (s.line + 1, 1)
         else (s.line, s.column + 1)
@@ -114,20 +114,20 @@ def noneOf (cs : String) : Parser Char :=
 
 /-- Match a specific string -/
 partial def string (str : String) : Parser String := fun s =>
-  let rec go (i : String.Pos) (state : ParserState) : Result String :=
-    if i >= str.endPos then
+  let rec go (i : String.Pos.Raw) (state : ParserState) : Result String :=
+    if i >= str.rawEndPos then
       .ok str state
-    else if state.pos >= state.input.endPos then
+    else if state.pos >= state.input.rawEndPos then
       .error s!"expected \"{str}\"" s
     else
-      let expected := str.get i
-      let actual := state.input.get state.pos
+      let expected := i.get str
+      let actual := state.pos.get state.input
       if expected == actual then
-        let newPos := state.input.next state.pos
+        let newPos := state.pos.next state.input
         let (newLine, newCol) :=
           if actual == '\n' then (state.line + 1, 1)
           else (state.line, state.column + 1)
-        go (str.next i) { state with pos := newPos, line := newLine, column := newCol }
+        go (i.next str) { state with pos := newPos, line := newLine, column := newCol }
       else
         .error s!"expected \"{str}\"" s
   go 0 s
@@ -209,7 +209,7 @@ def notFollowedBy (p : Parser α) : Parser Unit := fun s =>
 
 /-- End of input -/
 def eof : Parser Unit := fun s =>
-  if s.pos >= s.input.endPos then
+  if s.pos >= s.input.rawEndPos then
     .ok () s
   else
     .error "expected end of input" s
@@ -265,18 +265,18 @@ def run (p : Parser α) (input : String) : Except String α :=
 /-- Collect characters while predicate holds -/
 partial def takeWhile (p : Char → Bool) : Parser String := fun s =>
   let rec go (acc : List Char) (state : ParserState) : Result String :=
-    if state.pos >= state.input.endPos then
-      .ok (String.mk acc.reverse) state
+    if state.pos >= state.input.rawEndPos then
+      .ok (String.ofList acc.reverse) state
     else
-      let c := state.input.get state.pos
+      let c := state.pos.get state.input
       if p c then
-        let newPos := state.input.next state.pos
+        let newPos := state.pos.next state.input
         let (newLine, newCol) :=
           if c == '\n' then (state.line + 1, 1)
           else (state.line, state.column + 1)
         go (c :: acc) { state with pos := newPos, line := newLine, column := newCol }
       else
-        .ok (String.mk acc.reverse) state
+        .ok (String.ofList acc.reverse) state
   go [] s
 
 /-- Collect at least one character while predicate holds -/
