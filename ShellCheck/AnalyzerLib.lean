@@ -1060,6 +1060,130 @@ def quotesMayConflictWithSC2281 (params : Parameters) (t : Token) : Bool :=
     | _ => false
   | _ => false
 
+/-- Function definition record -/
+structure FunctionDefinition where
+  name : String
+  token : Token
+  body : Token
+  deriving Repr, Inhabited
+
+/-- Find function definition from a token -/
+def findFunctionDefinition (t : Token) : Option FunctionDefinition :=
+  match t.inner with
+  | .T_Function _ _ name body =>
+    some { name := name, token := t, body := body }
+  | _ => none
+
+/-- Find alias definition from a token -/
+def findAliasDefinition (t : Token) : Option (String × Token) :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: args) =>
+    if getLiteralString cmd == some "alias" then
+      match args.head? with
+      | some arg =>
+        match getLiteralString arg with
+        | some s =>
+          let parts := s.splitOn "="
+          match parts with
+          | name :: _ => some (name, t)
+          | _ => none
+        | none => none
+      | none => none
+    else none
+  | _ => none
+
+/-- Collect all function definitions from tree -/
+partial def collectFunctionDefinitions (t : Token) : List FunctionDefinition :=
+  let self := findFunctionDefinition t |>.toList
+  let children := getTokenChildren t
+  self ++ children.flatMap collectFunctionDefinitions
+
+/-- Build a map from function name to definition -/
+def getFunctionMap (root : Token) : Std.HashMap String FunctionDefinition :=
+  let funcs := collectFunctionDefinitions root
+  funcs.foldl (fun m f => m.insert f.name f) {}
+
+/-- Collect all alias definitions from tree -/
+partial def collectAliasDefinitions (t : Token) : List (String × Token) :=
+  let self := findAliasDefinition t |>.toList
+  let children := getTokenChildren t
+  self ++ children.flatMap collectAliasDefinitions
+
+/-- Build a map from alias name to token -/
+def getAliasMap (root : Token) : Std.HashMap String Token :=
+  let aliases := collectAliasDefinitions root
+  aliases.foldl (fun m (name, tok) => m.insert name tok) {}
+
+/-- Get all functions and aliases combined -/
+def getFunctionsAndAliases (root : Token) : Std.HashMap String Token :=
+  let funcMap := getFunctionMap root
+  let aliasMap := getAliasMap root
+  -- Combine: functions take precedence
+  aliasMap.fold (fun m name tok =>
+    if m.contains name then m else m.insert name tok
+  ) (funcMap.fold (fun m name funcDef => m.insert name funcDef.token) {})
+
+/-- Check if a variable reference is positional ($1, $2, etc.) -/
+def isPositionalReference (name : String) : Bool :=
+  match name.toList with
+  | [] => false
+  | c :: rest =>
+    if c.isDigit then
+      rest.all (·.isDigit)
+    else
+      name == "@" || name == "*" || name == "#"
+
+/-- Get all positional variable references in a token tree -/
+partial def getPositionalReferences (t : Token) : List (Token × String) :=
+  match t.inner with
+  | .T_DollarBraced _ content =>
+    let str := getBracedReference (String.join (oversimplify content))
+    if isPositionalReference str then [(t, str)] else []
+  | _ =>
+    let children := getTokenChildren t
+    children.flatMap getPositionalReferences
+
+/-- Check if function uses positional parameters -/
+def functionUsesPositionalParams (func : FunctionDefinition) : List (Token × String) :=
+  getPositionalReferences func.body
+
+/-- Find all command invocations in tree -/
+partial def findCommandInvocations (t : Token) : List (Token × String) :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: _) =>
+    match getLiteralString cmd with
+    | some name => [(t, name)]
+    | none => []
+  | .T_Redirecting _ inner =>
+    match inner.inner with
+    | .T_SimpleCommand _ (cmd :: _) =>
+      match getLiteralString cmd with
+      | some name => [(t, name)]
+      | none => []
+    | _ => []
+  | _ =>
+    let children := getTokenChildren t
+    children.flatMap findCommandInvocations
+
+/-- Get token ID range for post-dominator analysis -/
+def getTokenIdRange (t : Token) : (Id × Id) :=
+  (t.id, t.id)  -- Simplified; real impl would get span
+
+/-- Check if one token comes before another in source order (by ID) -/
+def tokenBefore (t1 t2 : Token) : Bool :=
+  t1.id.val < t2.id.val
+
+/-- External commands that accept function/alias names as arguments -/
+def commandsWithFunctionAsArg : List String :=
+  ["xargs", "find", "parallel", "env", "sudo", "su", "nohup", "time",
+   "nice", "ionice", "strace", "ltrace", "watch", "timeout", "ssh"]
+
+/-- Check if a word token contains just a variable that could be a function name -/
+def couldBeFunctionReference (funcMap : Std.HashMap String Token) (t : Token) : Option String :=
+  match getLiteralString t with
+  | some name => if funcMap.contains name then some name else none
+  | none => none
+
 /-- Make parameters from analysis spec -/
 def makeParameters (spec : AnalysisSpec) : Parameters :=
   let root := spec.asScript

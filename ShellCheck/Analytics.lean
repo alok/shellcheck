@@ -2332,6 +2332,143 @@ def checkBashAsLogin (_params : Parameters) (t : Token) : List TokenComment :=
     else []
   | _ => []
 
+/-!
+## Function Scope Analysis
+
+Complex checks that analyze function definitions and their usage across the script.
+-/
+
+/-- SC2032: Use 'export -f' to export functions to subprocess
+    SC2033: Shell functions can't be passed to external commands -/
+def checkFunctionsUsedExternally (params : Parameters) (_root : Token) : List TokenComment :=
+  let funcMap := getFunctionsAndAliases params.rootNode
+  if funcMap.isEmpty then []
+  else
+    -- Find all command invocations
+    let invocations := findCommandInvocations params.rootNode
+    invocations.foldl (fun acc (cmdToken, cmdName) =>
+      -- Check if this is a command that accepts another command as argument
+      if commandsWithFunctionAsArg.contains cmdName then
+        -- Check the arguments for function/alias names
+        match cmdToken.inner with
+        | .T_SimpleCommand _ (_ :: args) =>
+          acc ++ args.filterMap fun arg =>
+            match couldBeFunctionReference funcMap arg with
+            | some funcName =>
+              some (makeComment .warningC arg.id 2033
+                s!"Shell functions can't be passed to external commands. Use separate script or 'export -f {funcName}'.")
+            | Option.none => Option.none
+        | .T_Redirecting _ inner =>
+          match inner.inner with
+          | .T_SimpleCommand _ (_ :: args) =>
+            acc ++ args.filterMap fun arg =>
+              match couldBeFunctionReference funcMap arg with
+              | some funcName =>
+                some (makeComment .warningC arg.id 2033
+                  s!"Shell functions can't be passed to external commands. Use separate script or 'export -f {funcName}'.")
+              | Option.none => Option.none
+          | _ => acc
+        | _ => acc
+      else acc
+    ) []
+
+/-- SC2119: Use function "$@" if function's $1 should mean script's $1
+    SC2120: Function references arguments, but none are ever passed -/
+def checkUnpassedInFunctions (params : Parameters) (_root : Token) : List TokenComment :=
+  let funcMap := getFunctionMap params.rootNode
+  if funcMap.isEmpty then []
+  else
+    -- Find all function calls and track which functions are called with arguments
+    let callsWithArgs := collectFunctionCalls params.rootNode funcMap
+    -- Check each function for positional parameter usage
+    funcMap.fold (fun acc _name func =>
+      let positionalRefs := functionUsesPositionalParams func
+      if positionalRefs.isEmpty then acc
+      else
+        -- Check if function is ever called with arguments
+        match callsWithArgs.get? func.name with
+        | some callers =>
+          let hasArgsCall := callers.any (·.2)  -- .2 is hasArgs
+          if hasArgsCall then acc
+          else
+            -- Warn on function definition that function is never called with args
+            acc ++ positionalRefs.map fun (refTok, refName) =>
+              makeComment .warningC refTok.id 2120
+                s!"'{func.name}' references argument ${refName}, but none are ever passed."
+        | Option.none =>
+          -- Function is never called - warn at definition
+          acc ++ [makeComment .infoC func.token.id 2120
+            s!"'{func.name}' uses positional parameters but is never called."]
+    ) []
+where
+  collectFunctionCalls (root : Token) (funcMap : Std.HashMap String FunctionDefinition) :
+      Std.HashMap String (List (Token × Bool)) :=
+    let calls := findCommandInvocations root
+    calls.foldl (fun m (tok, name) =>
+      if funcMap.contains name then
+        let hasArgs := match tok.inner with
+          | .T_SimpleCommand _ (_ :: args) => !args.isEmpty
+          | .T_Redirecting _ inner =>
+            match inner.inner with
+            | .T_SimpleCommand _ (_ :: args) => !args.isEmpty
+            | _ => false
+          | _ => false
+        let existing := m.get? name |>.getD []
+        m.insert name ((tok, hasArgs) :: existing)
+      else m
+    ) {}
+
+/-- SC2218: This function is used but never defined -/
+def checkUseBeforeDefinition (params : Parameters) (_root : Token) : List TokenComment :=
+  let funcMap := getFunctionMap params.rootNode
+  if funcMap.isEmpty then []
+  else
+    -- Find all command invocations
+    let invocations := findCommandInvocations params.rootNode
+    invocations.foldl (fun acc (cmdToken, cmdName) =>
+      match funcMap.get? cmdName with
+      | some func =>
+        -- Check if invocation comes before definition
+        if tokenBefore cmdToken func.token then
+          acc ++ [makeComment .warningC cmdToken.id 2218
+            s!"This function is used but never defined. Did you mean '{cmdName}'?"]
+        else acc
+      | Option.none => acc
+    ) []
+
+/-!
+## CFG-Based Analysis
+
+Checks that use control flow graph analysis for more precise tracking.
+-/
+
+/-- SC2086: CFG-aware quoting check - checks if variable may contain spaces along any path -/
+def checkSpacefulnessCfg (params : Parameters) (t : Token) : List TokenComment :=
+  match params.cfgAnalysis with
+  | Option.none => []  -- No CFG analysis available, skip
+  | some cfg =>
+    match t.inner with
+    | .T_DollarBraced _ content =>
+      if not (isQuoteFree params.shellType params.parentMap t) then
+        let varName := ASTLib.getBracedReference (String.join (oversimplify content))
+        -- Check if variable may have spaces based on CFG state
+        match getIncomingState cfg t.id with
+        | some state =>
+          match state.variablesInScope.get? varName with
+          | some varState =>
+            if varState.variableValue.spaceStatus == .SpaceStatusUnknown ||
+               varState.variableValue.spaceStatus == .SpaceStatusSpaces then
+              [makeComment .warningC t.id 2086
+                "Double quote to prevent globbing and word splitting."]
+            else []
+          | Option.none =>
+            -- Unknown variable - warn conservatively
+            [makeComment .warningC t.id 2086
+              "Double quote to prevent globbing and word splitting."]
+        | Option.none => []
+      else []
+    | _ => []
+
 -- All node checks
 def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnquotedDollarAt,
@@ -2447,7 +2584,9 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkBracketSpacing,
   checkDollarBraceExpansionInCommand,
   checkUnquotedVariable,
-  checkBashAsLogin
+  checkBashAsLogin,
+  -- CFG-aware checks
+  checkSpacefulnessCfg
 ]
 
 -- All tree checks
@@ -2456,7 +2595,11 @@ def treeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnusedAssignments,
   checkUnassignedReferences,
   checkShebangParameters,
-  checkShebang
+  checkShebang,
+  -- Function scope analysis checks (operate on whole tree)
+  checkFunctionsUsedExternally,
+  checkUnpassedInFunctions,
+  checkUseBeforeDefinition
 ]
 
 /-!
