@@ -358,7 +358,8 @@ def isQuoteFreeContext (strict : Bool) (t : Token) : Option Bool :=
 /-- Check if token is in a quote-free context by walking up parent tree -/
 def isQuoteFreeNode (strict : Bool) (_shell : Shell) (tree : Std.HashMap Id Token) (t : Token) : Bool :=
   isQuoteFreeElement t ||
-  checkParents (getPath tree t)
+  -- Skip first element (self) and check only parents
+  checkParents (getPath tree t |>.drop 1)
 where
   checkParents : List Token → Bool
     | [] => false
@@ -513,8 +514,18 @@ partial def getModifiedVariablesImpl (t : Token) : List (Token × Token × Strin
           | _ => DataType.DataString (.SourceFrom [value])
         some (word, word, name, dataType)
       | _ => none
+    -- Detect for loop variable (for VAR in ...)
+    let forLoopVars := match words with
+      | forKw :: varTok :: inKw :: _ =>
+        match (getLiteralString forKw, getLiteralString varTok, getLiteralString inKw) with
+        | (some "for", some varName, some "in") =>
+          if isVariableName varName then
+            [(varTok, varTok, varName, DataType.DataString .SourceExternal)]
+          else []
+        | _ => []
+      | _ => []
     -- Handle read, declare, export, local, etc.
-    assignVars ++ wordAssignVars ++ getModifiedVariableCommand t words
+    assignVars ++ wordAssignVars ++ forLoopVars ++ getModifiedVariableCommand t words
   | .TA_Unary op v =>
     match v.inner with
     | .TA_Variable name _ =>

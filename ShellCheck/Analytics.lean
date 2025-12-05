@@ -132,14 +132,18 @@ Individual analysis rules applied to each token.
 -/
 
 /-- SC2086: Double quote to prevent globbing and word splitting -/
-def checkUnquotedDollarAt (_params : Parameters) (t : Token) : List TokenComment :=
+def checkUnquotedDollarAt (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_DollarBraced _ content =>
-    let str := oversimplify content |>.foldl (· ++ ·) ""
-    -- Warn for $@, $*, or any variable name (simplified version)
-    if str == "@" || str == "*" || isVariableName str then
-      [makeComment .warningC t.id 2086 "Double quote to prevent globbing and word splitting."]
-    else []
+    -- Skip if already in a quoted context
+    if isQuoteFree params.shellType params.parentMap t then
+      []
+    else
+      let str := oversimplify content |>.foldl (· ++ ·) ""
+      -- Warn for $@, $*, or any variable name (simplified version)
+      if str == "@" || str == "*" || isVariableName str then
+        [makeComment .warningC t.id 2086 "Double quote to prevent globbing and word splitting."]
+      else []
   | _ => []
 where
   isVariableName (s : String) : Bool :=
@@ -1384,7 +1388,7 @@ def checkUnquotedVariables (params : Parameters) (t : Token) : List TokenComment
     if name ∈ specialVarsNoQuote then []
     else if isArrayExpansion t then []  -- Covered by SC2068
     else if isCountingReference t then []
-    else if isQuoteFree params t then []
+    else if isQuoteFreeLocal params t then []
     else [makeComment .infoC t.id 2086
         "Double quote to prevent globbing and word splitting."]
   | _ => []
@@ -1398,17 +1402,9 @@ where
       let str := oversimplify content |>.foldl (· ++ ·) ""
       str.startsWith "#"
     | _ => false
-  isQuoteFree (params : Parameters) (t : Token) : Bool :=
-    -- Simplified - check if we're in a quote-free context
-    match params.parentMap.get? t.id with
-    | some parent =>
-      match parent.inner with
-      | .T_Assignment .. => true
-      | .T_Condition .. => true
-      | .T_DollarArithmetic .. => true
-      | .T_Arithmetic .. => true
-      | _ => false
-    | Option.none => false
+  isQuoteFreeLocal (params : Parameters) (t : Token) : Bool :=
+    -- Use the full isQuoteFree check from AnalyzerLib
+    ShellCheck.AnalyzerLib.isQuoteFree params.shellType params.parentMap t
 
 /-- SC2123: PATH is the shell search path. Use another name -/
 def checkOverridingPath (_params : Parameters) (t : Token) : List TokenComment :=
