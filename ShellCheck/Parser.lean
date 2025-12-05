@@ -218,19 +218,27 @@ def mkToken (inner : InnerToken Token) (line col : Nat := 1) : TokenBuilderM Tok
 partial def tokenizeScript (script : String) (filename : String) : (Option Token × Std.HashMap Id (Position × Position)) :=
   let lines := script.splitOn "\n"
   let builder : TokenBuilderM (Option Token) := do
-    -- Parse shebang if present
-    let shebang ← mkToken (.T_Literal "") 1 1
+    -- Parse shebang if present (first line starting with #!)
+    let shebangStr := match lines.head? with
+      | some firstLine =>
+        if firstLine.startsWith "#!" then firstLine.drop 2  -- drop the #!
+        else ""
+      | none => ""
+    let shebang ← mkToken (.T_Literal shebangStr) 1 1
 
     -- Parse each line into simple commands
     let mut commands : List Token := []
     let mut lineNum := 1
+    let mut isFirstLine := true
 
     for line in lines do
       let trimmed := line.trim
-      -- Skip empty lines and comments
-      if trimmed.isEmpty || trimmed.startsWith "#" then
+      -- Skip shebang on first line (already processed), empty lines and comments
+      if (isFirstLine && trimmed.startsWith "#!") || trimmed.isEmpty || trimmed.startsWith "#" then
         lineNum := lineNum + 1
+        isFirstLine := false
         continue
+      isFirstLine := false
 
       -- Tokenize the line as a simple command
       let words := trimmed.splitOn " " |>.filter (!·.isEmpty)
