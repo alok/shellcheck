@@ -215,13 +215,74 @@ def checkBackticks (_params : Parameters) (t : Token) : List TokenComment :=
 
 /-- SC2034: Variable appears to be unused -/
 def checkUnusedAssignments (params : Parameters) (t : Token) : List TokenComment :=
-  -- Would track variable assignments and references
-  []
+  let flow := getVariableFlow params t
+  let assigned := getAssignedVariables flow
+  let referenced := getReferencedVariables flow
+  -- Find variables that are assigned but never referenced
+  assigned.filterMap fun (token, name, dataType) =>
+    -- Skip special variables and exports
+    if isSpecialVar name || not (isTrueAssignmentSource dataType) then
+      Option.none
+    else if not (referenced.any fun (_, n) => n == name) then
+      some (makeComment .warningC token.id 2034
+        s!"{name} appears unused. Verify use (or export if used externally).")
+    else Option.none
+where
+  getAssignedVariables (flow : List StackData) : List (Token × String × DataType) :=
+    flow.filterMap fun s =>
+      match s with
+      | .Assignment (token, _, name, dt) => some (token, name, dt)
+      | _ => Option.none
+
+  getReferencedVariables (flow : List StackData) : List (Token × String) :=
+    flow.filterMap fun s =>
+      match s with
+      | .Reference (token, _, name) => some (token, name)
+      | _ => Option.none
+
+  isSpecialVar (name : String) : Bool :=
+    name ∈ ["_", "OPTARG", "OPTIND", "REPLY", "RANDOM", "LINENO",
+            "SECONDS", "BASH_VERSION", "BASH_VERSINFO", "PWD", "OLDPWD",
+            "IFS", "PATH", "HOME", "USER", "SHELL", "TERM", "LANG",
+            "LC_ALL", "PS1", "PS2", "PS3", "PS4", "PROMPT_COMMAND"]
+    || name.startsWith "_"
+    || name.all Char.isUpper  -- Likely exported env vars
 
 /-- SC2154: Variable is referenced but not assigned -/
 def checkUnassignedReferences (params : Parameters) (t : Token) : List TokenComment :=
-  -- Would track variable references and assignments
-  []
+  let flow := getVariableFlow params t
+  let assigned := getAssignedVariables flow
+  let referenced := getReferencedVariables flow
+  -- Find variables that are referenced but never assigned
+  referenced.filterMap fun (token, name) =>
+    if isSpecialVar name then
+      Option.none
+    else if not (assigned.any fun (_, n, _) => n == name) then
+      some (makeComment .warningC token.id 2154
+        s!"{name} is referenced but not assigned.")
+    else Option.none
+where
+  getAssignedVariables (flow : List StackData) : List (Token × String × DataType) :=
+    flow.filterMap fun s =>
+      match s with
+      | .Assignment (token, _, name, dt) => some (token, name, dt)
+      | _ => Option.none
+
+  getReferencedVariables (flow : List StackData) : List (Token × String) :=
+    flow.filterMap fun s =>
+      match s with
+      | .Reference (token, _, name) => some (token, name)
+      | _ => Option.none
+
+  isSpecialVar (name : String) : Bool :=
+    name ∈ ["_", "OPTARG", "OPTIND", "REPLY", "RANDOM", "LINENO",
+            "SECONDS", "BASH_VERSION", "BASH_VERSINFO", "PWD", "OLDPWD",
+            "IFS", "PATH", "HOME", "USER", "SHELL", "TERM", "LANG",
+            "LC_ALL", "PS1", "PS2", "PS3", "PS4", "PROMPT_COMMAND",
+            "@", "*", "#", "?", "-", "$", "!", "0", "1", "2", "3", "4",
+            "5", "6", "7", "8", "9"]
+    || name.startsWith "_"
+    || name.all Char.isUpper  -- Likely env vars or positional params
 
 /-- SC2164: Use 'cd ... || exit' or 'cd ... || return' -/
 def checkUncheckedCdPushdPopd (params : Parameters) (t : Token) : List TokenComment :=
@@ -326,6 +387,414 @@ def checkSpuriousExpansion (_params : Parameters) (t : Token) : List TokenCommen
     else []
   | _ => []
 
+/-- SC2000: See if you can use ${#variable} instead of echo | wc -/
+def checkEchoWc (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ [a, b] =>
+    let acmd := oversimplify a
+    let bcmd := oversimplify b
+    if acmd == ["echo", "${VAR}"] then
+      if bcmd == ["wc", "-c"] || bcmd == ["wc", "-m"] then
+        [makeComment .styleC t.id 2000 "See if you can use ${#variable} instead."]
+      else []
+    else []
+  | _ => []
+
+/-- SC2036: If you wanted to assign the output of the pipeline, use a=$(b | c) -/
+def checkPipedAssignment (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ (first :: _ :: _) =>
+    match first.inner with
+    | .T_Redirecting _ cmd =>
+      match cmd.inner with
+      | .T_SimpleCommand (_::_) [] =>  -- Has assignments, no words
+        [makeComment .warningC t.id 2036
+          "If you wanted to assign the output of the pipeline, use a=$(b | c) ."]
+      | _ => []
+    | _ => []
+  | _ => []
+
+/-- SC2037: To assign the output of a command, use var=$(cmd) -/
+def checkAssignAteCommand (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand [assign] (firstWord :: _) =>
+    match assign.inner with
+    | .T_Assignment _ _ _ value =>
+      -- Check if first word looks like a flag or glob
+      if isFlag firstWord || isGlob firstWord then
+        [makeComment .errorC t.id 2037 "To assign the output of a command, use var=$(cmd) ."]
+      else
+        -- Check if it's a known command name
+        let cmdStr := getLiteralString value |>.getD ""
+        if cmdStr ∈ commonCommands then
+          [makeComment .warningC t.id 2209
+            "Use var=$(command) to assign output (or quote to assign string)."]
+        else []
+    | _ => []
+  | _ => []
+where
+  commonCommands : List String := ["ls", "cat", "pwd", "date", "whoami", "hostname",
+    "uname", "id", "basename", "dirname", "head", "tail", "wc", "grep", "find",
+    "cut", "tr", "sort", "uniq", "awk", "sed"]
+
+/-- SC2099: Use $((..)) for arithmetics -/
+def checkArithmeticOpCommand (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand [_assign] (firstWord :: _) =>
+    let op := getLiteralString firstWord |>.getD ""
+    if op ∈ ["+", "-", "*", "/"] then
+      [makeComment .warningC firstWord.id 2099
+        s!"Use $((..)) for arithmetics, e.g. i=$((i {op} 2))"]
+    else []
+  | _ => []
+
+/-- SC2002: Useless cat. Consider cmd < file | .. instead -/
+def checkUuoc (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ (first :: _ :: _) =>
+    match first.inner with
+    | .T_Redirecting _ cmd =>
+      if isCommand cmd "cat" then
+        match getCommandArgs cmd with
+        | [word] =>
+          let str := getLiteralString word |>.getD ""
+          if not (str.startsWith "-") && not (willBecomeMultipleArgs word) then
+            [makeComment .styleC word.id 2002
+              "Useless cat. Consider 'cmd < file | ..' or 'cmd file | ..' instead."]
+          else []
+        | _ => []
+      else []
+    | _ => []
+  | _ => []
+where
+  getCommandArgs (t : Token) : List Token :=
+    match t.inner with
+    | .T_SimpleCommand _ (_ :: args) => args
+    | _ => []
+
+/-- SC2009: Consider using pgrep instead of grepping ps output -/
+def checkPsGrep (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+    let cmdNames := cmds.filterMap fun c => getCommandBasename c
+    if hasPsGrep cmdNames then
+      cmds.filterMap fun c =>
+        if getCommandBasename c == some "ps" then
+          some (makeComment .infoC c.id 2009
+            "Consider using pgrep instead of grepping ps output.")
+        else none
+    else []
+  | _ => []
+where
+  hasPsGrep (names : List String) : Bool :=
+    match names with
+    | "ps" :: rest => rest.any (· == "grep")
+    | _ :: rest => hasPsGrep rest
+    | [] => false
+
+/-- SC2010: Don't use ls | grep -/
+def checkLsGrep (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+    let cmdNames := cmds.filterMap fun c => getCommandBasename c
+    if hasLsGrep cmdNames then
+      cmds.filterMap fun c =>
+        if getCommandBasename c == some "ls" then
+          some (makeComment .warningC c.id 2010
+            "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.")
+        else none
+    else []
+  | _ => []
+where
+  hasLsGrep (names : List String) : Bool :=
+    match names with
+    | "ls" :: rest => rest.any (· == "grep")
+    | _ :: rest => hasLsGrep rest
+    | [] => false
+
+/-- SC2011: Use find .. -print0 | xargs -0 instead of ls | xargs -/
+def checkLsXargs (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+    let cmdNames := cmds.filterMap fun c => getCommandBasename c
+    if hasLsXargs cmdNames then
+      cmds.filterMap fun c =>
+        if getCommandBasename c == some "ls" then
+          some (makeComment .warningC c.id 2011
+            "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames.")
+        else none
+    else []
+  | _ => []
+where
+  hasLsXargs (names : List String) : Bool :=
+    match names with
+    | "ls" :: rest => rest.any (· == "xargs")
+    | _ :: rest => hasLsXargs rest
+    | [] => false
+
+/-- SC2038: Use find -print0 | xargs -0 -/
+def checkFindXargs (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+    let cmdNames := cmds.filterMap fun c => getCommandBasename c
+    if hasFindXargs cmdNames then
+      let allArgs := cmds.flatMap oversimplify
+      -- Check if -print0 or -0 is used
+      if not (allArgs.any (· == "-print0") || allArgs.any (· == "-0") ||
+              allArgs.any (· == "--null") || allArgs.any fun s => s.endsWith "printf") then
+        cmds.filterMap fun c =>
+          if getCommandBasename c == some "find" then
+            some (makeComment .warningC c.id 2038
+              "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames.")
+          else none
+      else []
+    else []
+  | _ => []
+where
+  hasFindXargs (names : List String) : Bool :=
+    match names with
+    | "find" :: rest => rest.any (· == "xargs")
+    | _ :: rest => hasFindXargs rest
+    | [] => false
+
+/-- SC2126: Consider using grep -c instead of grep|wc -l -/
+def checkGrepWc (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+    let cmdNames := cmds.filterMap fun c => getCommandBasename c
+    if hasGrepWc cmdNames then
+      let allArgs := cmds.flatMap oversimplify
+      -- Skip if grep has -o, -l, -L, -r, -R, -A, -B, or wc has -c, -m, -w
+      if not (allArgs.any fun s => s ∈ ["-o", "--only-matching", "-l", "-L",
+              "-r", "-R", "--recursive", "-A", "-B", "--after-context", "--before-context",
+              "-c", "--count", "-m", "-w", "--words"]) then
+        cmds.filterMap fun c =>
+          if getCommandBasename c == some "grep" then
+            some (makeComment .styleC c.id 2126
+              "Consider using 'grep -c' instead of 'grep|wc -l'.")
+          else none
+      else []
+    else []
+  | _ => []
+where
+  hasGrepWc (names : List String) : Bool :=
+    match names with
+    | "grep" :: rest => rest.any (· == "wc")
+    | _ :: rest => hasGrepWc rest
+    | [] => false
+
+/-- Helper for SC2096 -/
+partial def checkShebangParametersImpl (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Annotation _ inner => checkShebangParametersImpl inner
+  | .T_Script shebang _ =>
+    match shebang.inner with
+    | .T_Literal sb =>
+      let words := sb.splitOn " " |>.filter (· != "")
+      -- More than 2 words (#!/path/to/env bash -x) and not using -S or --split-string
+      if words.length > 2 &&
+         not (Regex.containsSubstring sb "-S" || Regex.containsSubstring sb "--split-string") then
+        [makeComment .errorC t.id 2096 "On most OS, shebangs can only specify a single parameter."]
+      else []
+    | _ => []
+  | _ => []
+
+/-- SC2096: On most OS, shebangs can only specify a single parameter -/
+def checkShebangParameters (_params : Parameters) (t : Token) : List TokenComment :=
+  checkShebangParametersImpl t
+
+/-- Helper for SC2148 -/
+partial def checkShebangImpl (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Annotation _ inner => checkShebangImpl params inner
+  | .T_Script shebang _ =>
+    match shebang.inner with
+    | .T_Literal sb =>
+      let comments1 :=
+        if sb.isEmpty && not params.shellTypeSpecified then
+          [makeComment .errorC t.id 2148
+            "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive."]
+        else []
+      let comments2 :=
+        if Regex.containsSubstring sb "ash" && not (Regex.containsSubstring sb "bash") then
+          [makeComment .warningC t.id 2187
+            "Ash scripts will be checked as Dash. Add '# shellcheck shell=dash' to silence."]
+        else []
+      let comments3 :=
+        if not sb.isEmpty && not (sb.startsWith "/") && not (sb.startsWith "#") then
+          [makeComment .errorC t.id 2239
+            "Ensure the shebang uses an absolute path to the interpreter."]
+        else []
+      let firstWord := sb.splitOn " " |>.head? |>.getD ""
+      let comments4 :=
+        if firstWord.endsWith "/" then
+          [makeComment .errorC t.id 2246
+            "This shebang specifies a directory. Ensure the interpreter is a file."]
+        else []
+      comments1 ++ comments2 ++ comments3 ++ comments4
+    | _ => []
+  | _ => []
+
+/-- SC2148: Tips depend on target shell and yours is unknown -/
+def checkShebang (params : Parameters) (t : Token) : List TokenComment :=
+  checkShebangImpl params t
+
+/-- SC2162: read without -r will mangle backslashes -/
+def checkReadWithoutR (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ words =>
+    if isCommand t "read" then
+      let args := words.flatMap oversimplify
+      if not (args.any fun s => s == "-r" || (s.startsWith "-" && s.any (· == 'r'))) then
+        [makeComment .warningC t.id 2162 "read without -r will mangle backslashes."]
+      else []
+    else []
+  | _ => []
+
+/-- SC2129: Consider using { cmd1; cmd2; } >> file instead of repeated redirects -/
+def checkMultipleRedirectsImpl (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_BraceGroup cmds =>
+    let redirectedCmds := cmds.filter hasAppendRedirect
+    if redirectedCmds.length >= 3 then
+      [makeComment .styleC t.id 2129
+        "Consider using { cmd1; cmd2; } >> file instead of individual redirects."]
+    else []
+  | _ => []
+where
+  hasAppendRedirect (cmd : Token) : Bool :=
+    match cmd.inner with
+    | .T_Redirecting redirects _ =>
+      redirects.any fun r =>
+        match r.inner with
+        | .T_FdRedirect _ op =>
+          match op.inner with
+          | .T_IoFile opToken _ =>
+            getLiteralString opToken == some ">>"
+          | _ => false
+        | _ => false
+    | _ => false
+
+/-- SC2128: Expanding an array without an index gives the first element -/
+def checkArrayWithoutIndex (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarBraced _ content =>
+    let str := oversimplify content |>.foldl (· ++ ·) ""
+    -- Check if it's an array variable without [@] or [*] or [n]
+    if isVariableName str && not (str.any (· == '[')) then
+      -- This is simplified - would need to track which vars are arrays
+      []
+    else []
+  | _ => []
+where
+  isVariableName (s : String) : Bool :=
+    match s.toList with
+    | c :: _ => c.isAlpha || c == '_'
+    | [] => false
+
+/-- SC2071: > is for string comparisons. Use -gt instead -/
+def checkNumberComparisons (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary _ op lhs rhs =>
+    if op ∈ [">", "<", ">=", "<=", "\\>", "\\<"] then
+      -- Check if operands look like numbers or numeric variables
+      let lhsNum := isNumericLooking lhs
+      let rhsNum := isNumericLooking rhs
+      if lhsNum || rhsNum then
+        let suggestion := match op with
+          | ">" => "-gt"
+          | "<" => "-lt"
+          | ">=" => "-ge"
+          | "<=" => "-le"
+          | "\\>" => "-gt"
+          | "\\<" => "-lt"
+          | _ => op
+        [makeComment .warningC t.id 2071
+          s!"{op} is for string comparisons. Use {suggestion} instead."]
+      else []
+    else []
+  | _ => []
+where
+  isNumericLooking (t : Token) : Bool :=
+    match getLiteralString t with
+    | some s => s.all (fun c => c.isDigit || c == '-')
+    | Option.none =>
+      match t.inner with
+      | .T_DollarBraced _ _ => true  -- Could be numeric
+      | _ => false
+
+/-- SC2072: Decimals are not supported. Use bc or awk -/
+def checkDecimalComparisons (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary _ op lhs rhs =>
+    if op ∈ ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"] then
+      let lhsDecimal := hasDecimal lhs
+      let rhsDecimal := hasDecimal rhs
+      if lhsDecimal || rhsDecimal then
+        [makeComment .errorC t.id 2072
+          "Decimals are not supported. Either use integers only, or use bc or awk to compare."]
+      else []
+    else []
+  | _ => []
+where
+  hasDecimal (t : Token) : Bool :=
+    match getLiteralString t with
+    | some s => s.any (· == '.') && s.any Char.isDigit
+    | Option.none => false
+
+/-- SC2143: Use grep -q instead of comparing output -/
+def checkGrepQ (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary _ op lhs rhs =>
+    if op ∈ ["!=", "=", "==", "-n", "-z"] then
+      if hasGrep lhs || hasGrep rhs then
+        [makeComment .styleC t.id 2143
+          "Use grep -q instead of comparing output with [ -n .. ]."]
+      else []
+    else []
+  | .TC_Unary _ op inner =>
+    if op ∈ ["-n", "-z"] then
+      if hasGrep inner then
+        [makeComment .styleC t.id 2143
+          "Use grep -q instead of comparing output with [ -n .. ]."]
+      else []
+    else []
+  | _ => []
+where
+  hasGrep (t : Token) : Bool :=
+    match t.inner with
+    | .T_DollarExpansion cmds =>
+      cmds.any fun c => getCommandBasename c == some "grep"
+    | .T_Backticked cmds =>
+      cmds.any fun c => getCommandBasename c == some "grep"
+    | .T_NormalWord parts =>
+      -- Non-recursive check - just check first level for command subs
+      parts.any fun p =>
+        match p.inner with
+        | .T_DollarExpansion cmds => cmds.any fun c => getCommandBasename c == some "grep"
+        | .T_Backticked cmds => cmds.any fun c => getCommandBasename c == some "grep"
+        | _ => false
+    | _ => false
+
+/-- SC2035: Use ./*glob* or -- *glob* to avoid expanding into flags -/
+def checkGlobAsCommand (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (first :: _) =>
+    match first.inner with
+    | .T_NormalWord parts =>
+      if parts.any isGlobStart then
+        [makeComment .warningC first.id 2035
+          "Use ./*glob* or -- *glob* so names with dashes won't become options."]
+      else []
+    | _ => []
+  | _ => []
+where
+  isGlobStart (t : Token) : Bool :=
+    match t.inner with
+    | .T_Glob s => s.startsWith "*" || s.startsWith "?"
+    | .T_Extglob _ _ => true
+    | _ => false
+
 -- All node checks
 def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnquotedDollarAt,
@@ -341,14 +810,33 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkRmGlob,
   checkMultipleRedirects,
   checkSingleQuotedExpansion,
-  checkSpuriousExpansion
+  checkSpuriousExpansion,
+  -- New checks
+  checkEchoWc,
+  checkPipedAssignment,
+  checkAssignAteCommand,
+  checkArithmeticOpCommand,
+  checkUuoc,
+  checkPsGrep,
+  checkLsGrep,
+  checkLsXargs,
+  checkFindXargs,
+  checkGrepWc,
+  checkReadWithoutR,
+  checkMultipleRedirectsImpl,
+  checkNumberComparisons,
+  checkDecimalComparisons,
+  checkGrepQ,
+  checkGlobAsCommand
 ]
 
 -- All tree checks
 def treeChecks : List (Parameters → Token → List TokenComment) := [
   nodeChecksToTreeCheck nodeChecks,
   checkUnusedAssignments,
-  checkUnassignedReferences
+  checkUnassignedReferences,
+  checkShebangParameters,
+  checkShebang
 ]
 
 /-!

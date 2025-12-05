@@ -409,10 +409,414 @@ def getReferencedVariables (_parents : Std.HashMap Id Token) (t : Token) : List 
 def isCodeInRange (fromCode toCode : Int) (code : Code) : Bool :=
   fromCode ≤ code && code < toCode
 
-/-- Get variable flow from AST -/
-def getVariableFlow (_params : Parameters) (_root : Token) : List StackData :=
-  -- Simplified stub - would do full stack analysis
-  []
+/-- Check if character is alphanumeric -/
+def isAlphaNumChar (c : Char) : Bool := c.isAlpha || c.isDigit
+
+/-- Get variables from a literal string like "$foo" -/
+def getVariablesFromLiteral (s : String) : List String :=
+  go s.toList [] []
+where
+  go : List Char → List Char → List String → List String
+  | [], [], acc => acc.reverse
+  | [], curr, acc => (String.ofList curr.reverse :: acc).reverse
+  | '$' :: '{' :: rest, [], acc => goInBrace rest [] acc
+  | '$' :: c :: rest, [], acc =>
+    if c.isAlpha || c == '_' then
+      go rest [c] acc
+    else
+      go rest [] acc
+  | c :: rest, curr@(_ :: _), acc =>
+    if isAlphaNumChar c || c == '_' then
+      go rest (c :: curr) acc
+    else
+      go rest [] (String.ofList curr.reverse :: acc)
+  | _ :: rest, [], acc => go rest [] acc
+
+  goInBrace : List Char → List Char → List String → List String
+  | [], _, acc => acc.reverse
+  | '}' :: rest, curr, acc =>
+    go rest [] (String.ofList curr.reverse :: acc)
+  | c :: rest, curr, acc =>
+    if isAlphaNumChar c || c == '_' then
+      goInBrace rest (c :: curr) acc
+    else
+      goInBrace rest curr acc
+
+/-- Get variables from literal token -/
+def getVariablesFromLiteralToken (t : Token) : List String :=
+  getVariablesFromLiteral (getLiteralStringDef " " t)
+
+/-- Get modified variables from a token -/
+partial def getModifiedVariablesImpl (t : Token) : List (Token × Token × String × DataType) :=
+  match t.inner with
+  | .T_SimpleCommand assigns [] =>
+    assigns.filterMap fun assign =>
+      match assign.inner with
+      | .T_Assignment _ name _ word =>
+        some (assign, assign, name, .DataString (.SourceFrom [word]))
+      | _ => none
+  | .T_SimpleCommand _ words =>
+    -- Handle read, declare, export, local, etc.
+    getModifiedVariableCommand t words
+  | .TA_Unary op v =>
+    match v.inner with
+    | .TA_Variable name _ =>
+      if Regex.containsSubstring op "++" || Regex.containsSubstring op "--" then
+        [(t, v, name, .DataString .SourceInteger)]
+      else []
+    | _ => []
+  | .TA_Assignment op lhs _ =>
+    match lhs.inner with
+    | .TA_Variable name _ =>
+      if op ∈ ["=", "*=", "/=", "%=", "+=", "-=", "<<=", ">>=", "&=", "^=", "|="] then
+        [(t, t, name, .DataString .SourceInteger)]
+      else []
+    | _ => []
+  | .T_BatsTest _ _ =>
+    [(t, t, "lines", .DataArray .SourceExternal),
+     (t, t, "status", .DataString .SourceInteger),
+     (t, t, "output", .DataString .SourceExternal),
+     (t, t, "stderr", .DataString .SourceExternal),
+     (t, t, "stderr_lines", .DataArray .SourceExternal)]
+  | .TC_Unary _ op token =>
+    if op == "-v" then
+      match getVariableForTestDashV token with
+      | some str => [(t, token, str, .DataString .SourceChecked)]
+      | none => []
+    else if op == "-n" || op == "-z" then
+      markAsChecked t token
+    else []
+  | .TC_Nullary _ token => markAsChecked t token
+  | .T_DollarBraced _ l =>
+    let str := String.join (oversimplify l)
+    let modifier := getBracedModifier str
+    if modifier.startsWith "=" || modifier.startsWith ":=" then
+      [(t, t, getBracedReference str, .DataString (.SourceFrom [l]))]
+    else []
+  | .T_FdRedirect varStr op =>
+    if varStr.startsWith "{" then
+      let varName := (varStr.drop 1).takeWhile (· != '}')
+      if not (isClosingFileOp op) then
+        [(t, t, varName, .DataString .SourceInteger)]
+      else []
+    else []
+  | .T_CoProc nameOpt _ =>
+    match nameOpt with
+    | some token =>
+      match getLiteralString token with
+      | some name => [(t, t, name, .DataArray .SourceInteger)]
+      | none => []
+    | none => [(t, t, "COPROC", .DataArray .SourceInteger)]
+  | .T_ForIn str [] _ => [(t, t, str, .DataString .SourceExternal)]
+  | .T_ForIn str words _ => [(t, t, str, .DataString (.SourceFrom words))]
+  | .T_SelectIn str words _ => [(t, t, str, .DataString (.SourceFrom words))]
+  | _ => []
+where
+  isClosingFileOp (t : Token) : Bool :=
+    match t.inner with
+    | .T_IoDuplicate _ s => s == "-"
+    | _ => false
+
+  getVariableForTestDashV (token : Token) : Option String := do
+    let str ← getLiteralStringExt (fun t =>
+      match t.inner with
+      | .T_Glob s => some s
+      | _ => some (String.singleton (Char.ofNat 0))) token
+    let varName := str.takeWhile (· != '[')
+    if isVariableName varName then some varName else none
+
+  markAsChecked (place : Token) (token : Token) : List (Token × Token × String × DataType) :=
+    (getWordParts token).filterMap fun part =>
+      match part.inner with
+      | .T_DollarBraced _ l =>
+        let str := getBracedReference (String.join (oversimplify l))
+        if isVariableName str then
+          some (place, part, str, .DataString .SourceChecked)
+        else none
+      | _ => none
+
+  getModifiedVariableCommand (base : Token) (words : List Token) :
+      List (Token × Token × String × DataType) :=
+    match words with
+    | [] => []
+    | cmd :: rest =>
+      match getLiteralString cmd with
+      | some "read" => getReadVariables base rest
+      | some "export" => getModifierParams DataType.DataString rest
+      | some "declare" => getDeclareVariables base rest
+      | some "typeset" => getDeclareVariables base rest
+      | some "local" => getModifierParams DataType.DataString rest
+      | some "readonly" => getModifierParams DataType.DataString rest
+      | some "let" => getLetVariables base rest
+      | some "printf" => getPrintfVariable base rest
+      | some "mapfile" => getMapfileVariable base rest
+      | some "readarray" => getMapfileVariable base rest
+      | some "getopts" =>
+        match rest with
+        | _ :: var :: _ => getLiteralVariable base var
+        | _ => []
+      | _ => []
+
+  getReadVariables (base : Token) (args : List Token) :
+      List (Token × Token × String × DataType) :=
+    -- Simplified: get last non-flag arguments as variable names
+    args.reverse.take 1 |>.filterMap fun arg =>
+      match getLiteralString arg with
+      | some s =>
+        if not (s.startsWith "-") && isVariableName s then
+          some (base, arg, s, .DataString .SourceExternal)
+        else none
+      | none => none
+
+  getDeclareVariables (_base : Token) (args : List Token) :
+      List (Token × Token × String × DataType) :=
+    getModifierParams DataType.DataString args
+
+  getModifierParams (defaultType : DataSource → DataType) (args : List Token) :
+      List (Token × Token × String × DataType) :=
+    args.filterMap fun arg =>
+      match arg.inner with
+      | .T_Assignment _ name _ value =>
+        some (arg, arg, name, defaultType (DataSource.SourceFrom [value]))
+      | _ =>
+        match getLiteralString arg with
+        | some s =>
+          if isVariableName s then
+            some (arg, arg, s, defaultType DataSource.SourceDeclaration)
+          else none
+        | none => none
+
+  getLetVariables (base : Token) (args : List Token) :
+      List (Token × Token × String × DataType) :=
+    args.filterMap fun arg =>
+      let s := String.join (oversimplify arg)
+      let varName := s.dropWhile (fun c => c == '+' || c == '-')
+                      |>.takeWhile isVariableChar
+      if varName.isEmpty then none
+      else some (base, arg, varName, .DataString (.SourceFrom [arg]))
+
+  getPrintfVariable (base : Token) (args : List Token) :
+      List (Token × Token × String × DataType) :=
+    -- Look for -v flag
+    match findFlag "-v" args with
+    | some (_, valueToken) =>
+      match getLiteralString valueToken with
+      | some varName =>
+        let baseName := varName.takeWhile (· != '[')
+        [(base, valueToken, baseName, .DataString (.SourceFrom args))]
+      | none => []
+    | none => []
+
+  getMapfileVariable (base : Token) (args : List Token) :
+      List (Token × Token × String × DataType) :=
+    -- Last non-flag argument is array name, default is MAPFILE
+    let nonFlags := args.filter fun a =>
+      match getLiteralString a with
+      | some s => not (s.startsWith "-")
+      | none => true
+    match nonFlags.getLast? with
+    | some arg =>
+      match getLiteralString arg with
+      | some name =>
+        if isVariableName name then [(base, arg, name, .DataArray .SourceExternal)]
+        else [(base, base, "MAPFILE", .DataArray .SourceExternal)]
+      | none => [(base, base, "MAPFILE", .DataArray .SourceExternal)]
+    | none => [(base, base, "MAPFILE", .DataArray .SourceExternal)]
+
+  getLiteralVariable (base : Token) (arg : Token) :
+      List (Token × Token × String × DataType) :=
+    match getLiteralString arg with
+    | some s =>
+      if isVariableName s then [(base, arg, s, .DataString .SourceExternal)]
+      else []
+    | none => []
+
+  findFlag (flag : String) : List Token → Option (Token × Token)
+  | [] => none
+  | [_] => none
+  | f :: v :: rest =>
+    if getLiteralString f == some flag then some (f, v)
+    else findFlag flag (v :: rest)
+
+/-- Get referenced variables from a token -/
+partial def getReferencedVariablesImpl (parents : Std.HashMap Id Token) (t : Token) :
+    List (Token × Token × String) :=
+  match t.inner with
+  | .T_DollarBraced _ l =>
+    let str := String.join (oversimplify l)
+    let mainRef := (t, t, getBracedReference str)
+    let indexRefs := getIndexReferences str |>.map fun x => (l, l, x)
+    let offsetRefs := getOffsetReferences (getBracedModifier str) |>.map fun x => (l, l, x)
+    mainRef :: indexRefs ++ offsetRefs
+  | .TA_Variable name _ =>
+    if isArithmeticAssignment parents t then []
+    else [(t, t, name)]
+  | .T_Assignment mode name _ word =>
+    let selfRef := if mode == .append then [(t, t, name)] else []
+    selfRef ++ specialReferences name t word
+  | .TC_Unary _ op token =>
+    if op == "-v" || op == "-R" then getIfReference t token
+    else []
+  | .TC_Binary .doubleBracket op lhs rhs =>
+    if isDereferencingBinaryOp op then
+      getIfReference t lhs ++ getIfReference t rhs
+    else []
+  | .T_BatsTest _ _ =>
+    [(t, t, "lines"), (t, t, "status"), (t, t, "output")]
+  | .T_FdRedirect varStr op =>
+    if varStr.startsWith "{" then
+      let varName := (varStr.drop 1).takeWhile (· != '}')
+      match op.inner with
+      | .T_IoDuplicate _ s => if s == "-" then [(t, t, varName)] else []
+      | _ => []
+    else []
+  | _ => getReferencedVariableCommand t
+where
+  getIndexReferences (s : String) : List String :=
+    -- Extract variable names from array indices like foo[bar]
+    let afterBracket := s.dropWhile (· != '[')
+    if afterBracket.isEmpty then []
+    else
+      let indexPart := (afterBracket.drop 1).takeWhile (· != ']')
+      if isVariableName indexPart then [indexPart] else []
+
+  getOffsetReferences (modifier : String) : List String :=
+    -- Extract variables from offset expressions like ${var:offset:length}
+    if modifier.startsWith ":" then
+      let parts := modifier.splitOn ":"
+      parts.filterMap fun p =>
+        let name := p.takeWhile isVariableChar
+        if isVariableName name then some name else none
+    else []
+
+  isArithmeticAssignment (parents : Std.HashMap Id Token) (t : Token) : Bool :=
+    match parents.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .TA_Assignment "=" lhs _ => lhs.id == t.id
+      | _ => false
+    | none => false
+
+  specialReferences (name : String) (base : Token) (word : Token) :
+      List (Token × Token × String) :=
+    if name ∈ ["PS1", "PS2", "PS3", "PS4", "PROMPT_COMMAND"] then
+      getVariablesFromLiteralToken word |>.map fun x => (base, base, x)
+    else []
+
+  getIfReference (context : Token) (token : Token) : List (Token × Token × String) :=
+    match getVariableForTestDashV token with
+    | some str => [(context, token, getBracedReference str)]
+    | none => []
+
+  getVariableForTestDashV (token : Token) : Option String := do
+    let str ← getLiteralStringExt (fun t =>
+      match t.inner with
+      | .T_Glob s => some s
+      | _ => some (String.singleton (Char.ofNat 0))) token
+    let varName := str.takeWhile (· != '[')
+    if isVariableName varName then some varName else none
+
+  isDereferencingBinaryOp (op : String) : Bool :=
+    op ∈ ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"]
+
+  getReferencedVariableCommand (t : Token) : List (Token × Token × String) :=
+    match t.inner with
+    | .T_SimpleCommand _ (cmd :: rest) =>
+      match getLiteralString cmd with
+      | some "export" => getExportReferences t rest
+      | some "declare" => getDeclareReferences t rest
+      | some "typeset" => getDeclareReferences t rest
+      | some "trap" =>
+        match rest with
+        | handler :: _ => getVariablesFromLiteralToken handler |>.map fun x => (t, handler, x)
+        | [] => []
+      | some "alias" =>
+        rest.flatMap fun arg => getVariablesFromLiteralToken arg |>.map fun x => (t, arg, x)
+      | _ => []
+    | _ => []
+
+  getExportReferences (base : Token) (args : List Token) : List (Token × Token × String) :=
+    -- Check if -f flag is present
+    let hasF := args.any fun a => getLiteralString a == some "-f"
+    if hasF then []
+    else args.filterMap fun arg =>
+      match arg.inner with
+      | .T_Assignment _ name _ _ => some (arg, arg, name)
+      | _ =>
+        match getLiteralString arg with
+        | some s => if isVariableName s && not (s.startsWith "-") then some (arg, arg, s) else none
+        | none => none
+
+  getDeclareReferences (base : Token) (args : List Token) : List (Token × Token × String) :=
+    let flags := args.filterMap fun a =>
+      match getLiteralString a with
+      | some s => if s.startsWith "-" then some s else none
+      | none => none
+    let hasXorP := flags.any fun f => f.any (· == 'x') || f.any (· == 'p')
+    let hasFOrBigF := flags.any fun f => f.any (· == 'f') || f.any (· == 'F')
+    if hasXorP && not hasFOrBigF then
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_Assignment _ name _ _ => some (arg, arg, name)
+        | _ =>
+          match getLiteralString arg with
+          | some s => if isVariableName s && not (s.startsWith "-") then some (arg, arg, s) else none
+          | none => none
+    else []
+
+/-- Determine the scope type of a token -/
+def leadTypeImpl (params : Parameters) (t : Token) : Scope :=
+  match t.inner with
+  | .T_DollarExpansion _ => .SubshellScope "$(..) expansion"
+  | .T_Backticked _ => .SubshellScope "`..` expansion"
+  | .T_Backgrounded _ => .SubshellScope "backgrounding &"
+  | .T_Subshell _ => .SubshellScope "(..) group"
+  | .T_BatsTest _ _ => .SubshellScope "@bats test"
+  | .T_CoProcBody _ => .SubshellScope "coproc"
+  | .T_Redirecting _ _ =>
+    match causesSubshell params t with
+    | some true => .SubshellScope "pipeline"
+    | _ => .NoneScope
+  | _ => .NoneScope
+where
+  causesSubshell (params : Parameters) (t : Token) : Option Bool := do
+    let parent ← params.parentMap.get? t.id
+    match parent.inner with
+    | .T_Pipeline _ list =>
+      match list with
+      | _ :: _ :: _ =>
+        if params.hasLastpipe then
+          some (list.getLast?.map (·.id) != some t.id)
+        else some true
+      | _ => some false
+    | _ => none
+
+/-- Check if assignment comes first in this construct -/
+def assignFirst (t : Token) : Bool :=
+  match t.inner with
+  | .T_ForIn _ _ _ => true
+  | .T_SelectIn _ _ _ => true
+  | .T_BatsTest _ _ => true
+  | _ => false
+
+/-- Collect tokens depth-first with stack analysis for variable flow -/
+partial def doStackAnalysisForFlow (params : Parameters) (t : Token) : List StackData :=
+  let scopeType := leadTypeImpl params t
+  let startScope := if scopeType != .NoneScope then [.StackScope scopeType] else []
+  let preAssign := if assignFirst t then getModifiedVariablesImpl t |>.map .Assignment else []
+
+  let children := getTokenChildren t
+  let childFlows := children.flatMap (doStackAnalysisForFlow params)
+
+  let reads := getReferencedVariablesImpl params.parentMap t |>.map .Reference
+  let postAssign := if not (assignFirst t) then getModifiedVariablesImpl t |>.map .Assignment else []
+  let endScope := if scopeType != .NoneScope then [.StackScopeEnd] else []
+
+  startScope ++ preAssign ++ childFlows ++ reads ++ postAssign ++ endScope
+
+/-- Get variable flow from AST - walks the AST tracking assignments and references with scope -/
+def getVariableFlow (params : Parameters) (root : Token) : List StackData :=
+  doStackAnalysisForFlow params root |>.reverse
 
 /-- Check if a data source is a true assignment (not declaration/check) -/
 def isTrueAssignmentSource : DataType → Bool
@@ -521,44 +925,6 @@ def isConfusedGlobRegex (s : String) : Bool :=
     last == '*' && secondLast != '\\' && secondLast != '.'
   else
     false
-
-/-- Check if character is alphanumeric -/
-def isAlphaNum (c : Char) : Bool := c.isAlpha || c.isDigit
-
-/-- Get variables from a literal string like "$foo" -/
-def getVariablesFromLiteral (s : String) : List String :=
-  -- Simplified: extract $name patterns
-  go s.toList [] []
-where
-  go : List Char → List Char → List String → List String
-  | [], [], acc => acc.reverse
-  | [], curr, acc => (String.ofList curr.reverse :: acc).reverse
-  | '$' :: '{' :: rest, [], acc => goInBrace rest [] acc
-  | '$' :: c :: rest, [], acc =>
-    if c.isAlpha || c == '_' then
-      go rest [c] acc
-    else
-      go rest [] acc
-  | c :: rest, curr@(_ :: _), acc =>
-    if isAlphaNum c || c == '_' then
-      go rest (c :: curr) acc
-    else
-      go rest [] (String.ofList curr.reverse :: acc)
-  | _ :: rest, [], acc => go rest [] acc
-
-  goInBrace : List Char → List Char → List String → List String
-  | [], _, acc => acc.reverse
-  | '}' :: rest, curr, acc =>
-    go rest [] (String.ofList curr.reverse :: acc)
-  | c :: rest, curr, acc =>
-    if isAlphaNum c || c == '_' then
-      goInBrace rest (c :: curr) acc
-    else
-      goInBrace rest curr acc
-
-/-- Get variables from literal token -/
-def getVariablesFromLiteralToken (t : Token) : List String :=
-  getVariablesFromLiteral (getLiteralStringDef " " t)
 
 /-- Find first match where predicate is Just True -/
 def findFirst (p : α → Option Bool) : List α → Option α
