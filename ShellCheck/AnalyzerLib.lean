@@ -497,9 +497,24 @@ partial def getModifiedVariablesImpl (t : Token) : List (Token × Token × Strin
       | .T_Assignment _ name _ word =>
         some (assign, assign, name, .DataString (.SourceFrom [word]))
       | _ => none
-  | .T_SimpleCommand _ words =>
+  | .T_SimpleCommand assigns words =>
+    -- Check for assignments in assigns list
+    let assignVars := assigns.filterMap fun assign =>
+      match assign.inner with
+      | .T_Assignment _ name _ word =>
+        some (assign, assign, name, .DataString (.SourceFrom [word]))
+      | _ => none
+    -- Also check for assignments in words list (simplified parser puts them there)
+    let wordAssignVars := words.filterMap fun word =>
+      match word.inner with
+      | .T_Assignment _ name _ value =>
+        let dataType := match value.inner with
+          | .T_Array _ => DataType.DataArray (.SourceFrom [value])
+          | _ => DataType.DataString (.SourceFrom [value])
+        some (word, word, name, dataType)
+      | _ => none
     -- Handle read, declare, export, local, etc.
-    getModifiedVariableCommand t words
+    assignVars ++ wordAssignVars ++ getModifiedVariableCommand t words
   | .TA_Unary op v =>
     match v.inner with
     | .TA_Variable name _ =>

@@ -214,6 +214,38 @@ def mkToken (inner : InnerToken Token) (line col : Nat := 1) : TokenBuilderM Tok
   modify fun st => { st with positions := st.positions.insert id (pos, endPos) }
   return ⟨id, inner⟩
 
+/-- Split a string into shell words, respecting parentheses, quotes, and braces -/
+def splitShellWords (s : String) : List String :=
+  let chars := s.toList
+  go chars "" 0 0 0 false false []
+where
+  go : List Char → String → Nat → Nat → Nat → Bool → Bool → List String → List String
+  | [], curr, _, _, _, _, _, acc =>
+    if curr.isEmpty then acc.reverse else (acc.cons curr).reverse
+  | c :: rest, curr, parenDepth, braceDepth, bracketDepth, inSingle, inDouble, acc =>
+    if inSingle then
+      if c == '\'' then go rest (curr.push c) parenDepth braceDepth bracketDepth false inDouble acc
+      else go rest (curr.push c) parenDepth braceDepth bracketDepth inSingle inDouble acc
+    else if inDouble then
+      if c == '"' then go rest (curr.push c) parenDepth braceDepth bracketDepth inSingle false acc
+      else if c == '\\' then
+        match rest with
+        | c2 :: rest2 => go rest2 (curr.push c |>.push c2) parenDepth braceDepth bracketDepth inSingle inDouble acc
+        | [] => go [] (curr.push c) parenDepth braceDepth bracketDepth inSingle inDouble acc
+      else go rest (curr.push c) parenDepth braceDepth bracketDepth inSingle inDouble acc
+    else if c == '\'' then go rest (curr.push c) parenDepth braceDepth bracketDepth true inDouble acc
+    else if c == '"' then go rest (curr.push c) parenDepth braceDepth bracketDepth inSingle true acc
+    else if c == '(' then go rest (curr.push c) (parenDepth + 1) braceDepth bracketDepth inSingle inDouble acc
+    else if c == ')' then go rest (curr.push c) (parenDepth - 1) braceDepth bracketDepth inSingle inDouble acc
+    else if c == '{' then go rest (curr.push c) parenDepth (braceDepth + 1) bracketDepth inSingle inDouble acc
+    else if c == '}' then go rest (curr.push c) parenDepth (braceDepth - 1) bracketDepth inSingle inDouble acc
+    else if c == '[' then go rest (curr.push c) parenDepth braceDepth (bracketDepth + 1) inSingle inDouble acc
+    else if c == ']' then go rest (curr.push c) parenDepth braceDepth (bracketDepth - 1) inSingle inDouble acc
+    else if c == ' ' && parenDepth == 0 && braceDepth == 0 && bracketDepth == 0 then
+      if curr.isEmpty then go rest "" parenDepth braceDepth bracketDepth inSingle inDouble acc
+      else go rest "" parenDepth braceDepth bracketDepth inSingle inDouble (acc.cons curr)
+    else go rest (curr.push c) parenDepth braceDepth bracketDepth inSingle inDouble acc
+
 /-- Simple tokenizer that creates basic token structures -/
 partial def tokenizeScript (script : String) (filename : String) : (Option Token × Std.HashMap Id (Position × Position)) :=
   let lines := script.splitOn "\n"
@@ -240,8 +272,8 @@ partial def tokenizeScript (script : String) (filename : String) : (Option Token
         continue
       isFirstLine := false
 
-      -- Tokenize the line as a simple command
-      let words := trimmed.splitOn " " |>.filter (!·.isEmpty)
+      -- Tokenize the line as a simple command (respecting parentheses and quotes)
+      let words := splitShellWords trimmed
       if words.isEmpty then
         lineNum := lineNum + 1
         continue
@@ -272,6 +304,14 @@ partial def tokenizeScript (script : String) (filename : String) : (Option Token
   (result, finalState.positions)
 
 where
+  /-- Check if a string is a valid shell variable name -/
+  isValidVarName (s : String) : Bool :=
+    if s.isEmpty then false
+    else
+      let first := s.get! 0
+      (first.isAlpha || first == '_') &&
+        s.toList.all fun c => c.isAlpha || c.isDigit || c == '_'
+
   /-- Tokenize a single word, recognizing $ variables -/
   tokenizeWord (word : String) (filename : String) (line col : Nat) : TokenBuilderM Token := do
     if word.startsWith "$" then
@@ -306,8 +346,38 @@ where
       let parts ← tokenizeDoubleQuotedParts content filename line (col + 1)
       mkToken (.T_DoubleQuoted parts) line col
     else
-      -- Plain literal
-      mkToken (.T_Literal word) line col
+      -- Check for assignment pattern (var=value or var+=value)
+      match word.splitOn "=" with
+      | [beforeEq, afterEq] =>
+        -- Check if it's a valid variable assignment (not ==, or comparison)
+        if isValidVarName beforeEq || (beforeEq.endsWith "+" && isValidVarName (beforeEq.dropRight 1)) then
+          let isAppend := beforeEq.endsWith "+"
+          let mode : AST.AssignmentMode := if isAppend then .append else .assign
+          let varName := if isAppend then beforeEq.dropRight 1 else beforeEq
+          -- Parse the value part
+          let valueTok ← if afterEq.startsWith "(" && afterEq.endsWith ")" then
+            -- Array assignment like (a b c)
+            let arrayContent := afterEq.drop 1 |>.dropRight 1
+            let arrayWords := arrayContent.splitOn " " |>.filter (fun s => !s.isEmpty)
+            let elems ← arrayWords.mapM fun w => mkToken (.T_Literal w) line col
+            mkToken (.T_Array elems) line col
+          else if afterEq.startsWith "\"" && afterEq.endsWith "\"" then
+            let content := afterEq.drop 1 |>.dropRight 1
+            let parts ← tokenizeDoubleQuotedParts content filename line col
+            mkToken (.T_DoubleQuoted parts) line col
+          else if afterEq.startsWith "'" && afterEq.endsWith "'" then
+            mkToken (.T_SingleQuoted (afterEq.drop 1 |>.dropRight 1)) line col
+          else if afterEq.startsWith "$" then
+            tokenizeWord afterEq filename line col
+          else
+            mkToken (.T_Literal afterEq) line col
+          mkToken (.T_Assignment mode varName [] valueTok) line col
+        else
+          -- Not a valid assignment, treat as literal
+          mkToken (.T_Literal word) line col
+      | _ =>
+        -- Plain literal or multiple = signs
+        mkToken (.T_Literal word) line col
 
   /-- Tokenize parts inside double quotes -/
   tokenizeDoubleQuotedParts (content : String) (filename : String) (line col : Nat) : TokenBuilderM (List Token) := do
