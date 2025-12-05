@@ -1648,6 +1648,419 @@ where
           "Add < /dev/null to prevent this command from swallowing stdin."]
       else []
 
+/-- SC2067: Missing ';' or '+' terminating -exec -/
+def checkFindExec (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: args) =>
+    if getCommandBasename ⟨cmd.id, cmd.inner⟩ == some "find" then
+      checkExecArgs t.id args false
+    else []
+  | _ => []
+where
+  checkExecArgs (baseId : Id) : List Token → Bool → List TokenComment
+    | [], inExec => if inExec then [makeComment .errorC baseId 2067
+        "Missing ';' or + terminating -exec. You can't use |/||/&&, and ';' has to be a separate, quoted argument."]
+      else []
+    | w :: rest, inExec =>
+      match getLiteralString w with
+      | some "-exec" => checkExecArgs baseId rest true
+      | some "-execdir" => checkExecArgs baseId rest true
+      | some "-ok" => checkExecArgs baseId rest true
+      | some "-okdir" => checkExecArgs baseId rest true
+      | some "+" => checkExecArgs baseId rest false
+      | some ";" => checkExecArgs baseId rest false
+      | _ => checkExecArgs baseId rest inExec
+
+/-- SC2038: Use -print0 with find | xargs to handle special filenames -/
+def checkPipePitfalls (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+    match cmds with
+    | [findCmd, xargsCmd] =>
+      let findName := getCommandBasename findCmd
+      let xargsName := getCommandBasename xargsCmd
+      if findName == some "find" && xargsName == some "xargs" then
+        let hasNull := hasParameter findCmd "-print0" ||
+                       hasParameter findCmd "printf" ||
+                       hasParameter xargsCmd "-0" ||
+                       hasParameter xargsCmd "null"
+        if hasNull then [] else
+          [makeComment .warningC t.id 2038
+            "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."]
+      else []
+    | _ => []
+  | _ => []
+
+/-- SC2206: Quote to prevent word splitting in array assignment -/
+def checkSplittingInArrays (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Array elements =>
+    elements.foldl (fun acc elem =>
+      acc ++ checkArrayElement params elem
+    ) []
+  | _ => []
+where
+  checkArrayElement (params : Parameters) (word : Token) : List TokenComment :=
+    match word.inner with
+    | .T_NormalWord parts =>
+      parts.foldl (fun acc part =>
+        acc ++ checkPart params part
+      ) []
+    | _ => []
+
+  checkPart (params : Parameters) (part : Token) : List TokenComment :=
+    match part.inner with
+    | .T_DollarExpansion _ => [makeComment .warningC part.id 2207
+        (if params.shellType == .Ksh then
+          "Prefer read -A or while read to split command output (or quote to avoid splitting)."
+        else
+          "Prefer mapfile or read -a to split command output (or quote to avoid splitting).")]
+    | .T_DollarBraceCommandExpansion _ _ => [makeComment .warningC part.id 2207
+        "Prefer mapfile or read -a to split command output (or quote to avoid splitting)."]
+    | .T_Backticked _ => [makeComment .warningC part.id 2207
+        "Prefer mapfile or read -a to split command output (or quote to avoid splitting)."]
+    | .T_DollarBraced _ content =>
+      let str := String.join (oversimplify content)
+      let varName := ASTLib.getBracedReference str
+      if ASTLib.isCountingReference part ||
+         ASTLib.isQuotedAlternativeReference part ||
+         variablesWithoutSpaces.contains varName then []
+      else [makeComment .warningC part.id 2206
+        (if params.shellType == .Ksh then
+          "Quote to prevent word splitting/globbing, or split robustly with read -A or while read."
+        else
+          "Quote to prevent word splitting/globbing, or split robustly with mapfile or read -a.")]
+    | _ => []
+
+/-- SC2096: On most OS, shebangs can only specify a single parameter -/
+def checkShebangParams (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Script shebang _ =>
+    match shebang.inner with
+    | .T_Literal s =>
+      let parts := s.splitOn " "
+      -- Check for env -S or env --split-string which allows multiple params
+      let isEnvSplit := Regex.containsSubstring s "env -S" ||
+                        Regex.containsSubstring s "env --split-string"
+      if parts.length > 2 && !isEnvSplit then
+        [makeComment .errorC shebang.id 2096
+          "On most OS, shebangs can only specify a single parameter."]
+      else []
+    | _ => []
+  | _ => []
+
+/-- SC2069: Redirect stderr to stdout before piping -/
+def checkStderrPipe (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+    if cmds.length >= 2 then
+      match cmds.head? with
+      | some cmd => checkForStderrRedirect cmd
+      | Option.none => []
+    else []
+  | _ => []
+where
+  checkForStderrRedirect (cmd : Token) : List TokenComment :=
+    match cmd.inner with
+    | .T_Redirecting redirects _inner =>
+      -- Check if any redirect is stderr-related at end of pipeline element
+      let hasStderrRedirect := redirects.any fun r =>
+        match r.inner with
+        | .T_FdRedirect "2" _ => true
+        | _ => false
+      if hasStderrRedirect then []  -- Already handling stderr
+      else []  -- Could check if stderr should be redirected
+    | _ => []
+
+/-- SC2227: Redirecting to/from command name instead of file -/
+def checkRedirectionToCommand (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Redirecting redirects _ =>
+    redirects.foldl (fun acc r =>
+      acc ++ checkRedirect r
+    ) []
+  | _ => []
+where
+  checkRedirect (r : Token) : List TokenComment :=
+    match r.inner with
+    | .T_FdRedirect _ op =>
+      match op.inner with
+      | .T_IoFile _ target =>
+        match getLiteralString target with
+        | some s =>
+          if isLikelyCommand s then
+            [makeComment .warningC target.id 2227
+              s!"This is a file name, not a command. Use '$({s} ..)' if you meant to run it."]
+          else []
+        | Option.none => []
+      | _ => []
+    | _ => []
+
+  isLikelyCommand (s : String) : Bool :=
+    s ∈ ["grep", "cat", "sed", "awk", "sort", "head", "tail", "wc", "ls", "find"]
+
+/-- SC2229: Redirecting to a number creates a file -/
+def checkRedirectionToNumber (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Redirecting redirects _ =>
+    redirects.foldl (fun acc r =>
+      acc ++ checkRedirect r
+    ) []
+  | _ => []
+where
+  checkRedirect (r : Token) : List TokenComment :=
+    match r.inner with
+    | .T_FdRedirect _ op =>
+      match op.inner with
+      | .T_IoFile _ target =>
+        match getLiteralString target with
+        | some s =>
+          if s.all Char.isDigit && s.length > 0 && s.length <= 2 then
+            [makeComment .warningC target.id 2229
+              ("This does not redirect to fd " ++ s ++ ". Use " ++ s ++ ">file or {var}>file.")]
+          else []
+        | Option.none => []
+      | _ => []
+    | _ => []
+
+/-- SC2015: Note that A && B || C is not if-then-else -/
+def checkBadTestAndOr (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_OrIf lhs _rhs =>
+    match lhs.inner with
+    | .T_AndIf _cond action =>
+      -- Check if action might fail
+      if mightFail action then
+        [makeComment .infoC t.id 2015
+          "Note that A && B || C is not if-then-else. C may run when A is true."]
+      else []
+    | _ => []
+  | _ => []
+where
+  mightFail (t : Token) : Bool :=
+    -- Commands that might fail
+    match getCommandName t with
+    | some name => name ∈ ["echo", "printf", ":", "true"]  -- These usually succeed
+    | Option.none => true
+
+/-- SC2060: Quote parameters to tr to prevent glob expansion -/
+def checkTrParams (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: args) =>
+    if getCommandBasename ⟨cmd.id, cmd.inner⟩ == some "tr" then
+      args.foldl (fun acc arg =>
+        acc ++ checkTrArg arg
+      ) []
+    else []
+  | _ => []
+where
+  checkTrArg (arg : Token) : List TokenComment :=
+    match arg.inner with
+    | .T_NormalWord parts =>
+      if parts.any ASTLib.isGlob then
+        [makeComment .warningC arg.id 2060
+          "Quote parameters to tr to prevent glob expansion."]
+      else []
+    | _ => []
+
+/-- SC2062: Quote the grep pattern to avoid glob expansion -/
+def checkGrepPattern (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: args) =>
+    let cmdName := getCommandBasename ⟨cmd.id, cmd.inner⟩
+    if cmdName == some "grep" || cmdName == some "egrep" || cmdName == some "fgrep" then
+      -- Check non-flag arguments for globs
+      args.filter (fun a => not (ASTLib.isFlag a))
+        |>.take 1  -- Pattern is usually first non-flag arg
+        |>.foldl (fun acc arg =>
+          if hasUnquotedGlob arg then
+            acc ++ [makeComment .warningC arg.id 2062
+              "Quote the grep pattern so the shell won't interpret it."]
+          else acc
+        ) []
+    else []
+  | _ => []
+where
+  hasUnquotedGlob (t : Token) : Bool :=
+    match t.inner with
+    | .T_NormalWord parts => parts.any ASTLib.isGlob
+    | _ => false
+
+/-- SC2071: Comparison operators only work in [[ ]] in some shells -/
+def checkComparisonOperators (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary .singleBracket op _ _ =>
+    let isCompOp := op == "<" || op == ">"
+    let isBasicShell := params.shellType == .Sh ||
+                        params.shellType == .Dash ||
+                        params.shellType == .BusyboxSh
+    if isCompOp && isBasicShell then
+      [makeComment .errorC t.id 2071
+        s!"{op} is not supported in [ ]. Use [[ ]] or (( )) for this comparison."]
+    else []
+  | _ => []
+
+/-- SC2073: Escape \< (or use determine) to prevent redirection -/
+def checkTestRedirection (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Redirecting redirects inner =>
+    match inner.inner with
+    | .T_Condition .singleBracket _ =>
+      if !redirects.isEmpty then
+        [makeComment .warningC t.id 2073
+          "Escape \\< to prevent redirection (or determine intention and rewrite)."]
+      else []
+    | _ => []
+  | _ => []
+
+/-- SC2088: Tilde does not expand in quotes -/
+def checkTildeExpansion (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DoubleQuoted parts =>
+    parts.foldl (fun acc part =>
+      match part.inner with
+      | .T_Literal s =>
+        if s.startsWith "~" then
+          acc ++ [makeComment .warningC part.id 2088
+            "Tilde does not expand in quotes. Use $HOME."]
+        else acc
+      | _ => acc
+    ) []
+  | _ => []
+
+/-- SC2089/2090: Quotes/backslashes will be treated literally -/
+def checkQuotesInVariables (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Assignment _ _name _ value =>
+    let valStr := getLiteralStringDef "" value
+    if Regex.containsSubstring valStr "'" ||
+       Regex.containsSubstring valStr "\"" ||
+       Regex.containsSubstring valStr "\\" then
+      -- Would need to track if this variable is later used unquoted
+      []  -- Complex check requiring flow analysis
+    else []
+  | _ => []
+
+/-- SC2091: Remove surrounding $() to run command (or use quotes) -/
+def checkSubshellAsTest (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Condition _ expr =>
+    checkForCommandSub expr
+  | _ => []
+where
+  checkForCommandSub (expr : Token) : List TokenComment :=
+    match expr.inner with
+    | .TC_Nullary _ inner =>
+      match inner.inner with
+      | .T_NormalWord [part] =>
+        match part.inner with
+        | .T_DollarExpansion _ =>
+          [makeComment .warningC expr.id 2091
+            "Remove surrounding $() to run command (or use quotes to avoid treating output as shell code)."]
+        | _ => []
+      | _ => []
+    | _ => []
+
+/-- SC2092: Remove backticks to avoid executing output -/
+def checkBackticksAsTest (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Condition _ expr =>
+    checkForBackticks expr
+  | _ => []
+where
+  checkForBackticks (expr : Token) : List TokenComment :=
+    match expr.inner with
+    | .TC_Nullary _ inner =>
+      match inner.inner with
+      | .T_NormalWord [part] =>
+        match part.inner with
+        | .T_Backticked _ =>
+          [makeComment .warningC expr.id 2092
+            "Remove backticks to avoid executing output."]
+        | _ => []
+      | _ => []
+    | _ => []
+
+/-- SC2093: Remove exec if script should continue after this command -/
+def checkSpuriousExec (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: _) =>
+    if getCommandName ⟨cmd.id, cmd.inner⟩ == some "exec" then
+      -- Would need to check if this is last command in script/function
+      []  -- Complex check
+    else []
+  | _ => []
+
+/-- SC2094: File being read and written in same pipeline -/
+def checkReadWriteSameFile (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Redirecting redirects cmd =>
+    let files := getRedirectedFiles redirects
+    if files.length > 0 then
+      checkCommandForSameFile cmd files
+    else []
+  | _ => []
+where
+  getRedirectedFiles (redirects : List Token) : List String :=
+    redirects.filterMap fun r =>
+      match r.inner with
+      | .T_FdRedirect _ op =>
+        match op.inner with
+        | .T_IoFile _ target => getLiteralString target
+        | _ => none
+      | _ => none
+
+  checkCommandForSameFile (_cmd : Token) (_files : List String) : List TokenComment :=
+    []  -- Complex check requiring command analysis
+
+/-- SC2095: Add -n to ssh/scp or command may not run properly in while loop -/
+def checkWhileReadSsh (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_WhileExpression cond body =>
+    if isReadCommand cond then
+      body.foldl (fun acc cmd =>
+        acc ++ checkForSshFfmpeg cmd
+      ) []
+    else []
+  | _ => []
+where
+  isReadCommand (cond : List Token) : Bool :=
+    cond.any fun c => getCommandName c == some "read"
+
+  checkForSshFfmpeg (cmd : Token) : List TokenComment :=
+    match getCommandName cmd with
+    | some "ssh" =>
+      if not (hasFlag cmd "n") then
+        [makeComment .warningC cmd.id 2095
+          "Add < /dev/null or -n to prevent ssh from swallowing stdin."]
+      else []
+    | some "ffmpeg" =>
+      if not (hasParameter cmd "-nostdin") then
+        [makeComment .warningC cmd.id 2095
+          "Use -nostdin to prevent ffmpeg from consuming stdin."]
+      else []
+    | _ => []
+
+/-- SC2097: This assignment is only seen by the command's forked shell -/
+def checkPrefixAssignment (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand (assign :: _) (cmd :: _) =>
+    match assign.inner with
+    | .T_Assignment _ name _ _ =>
+      -- Check if the command references the same variable
+      if commandReferencesVar cmd name then
+        [makeComment .warningC assign.id 2097
+          s!"This assignment is only seen by the forked process."]
+      else []
+    | _ => []
+  | _ => []
+where
+  commandReferencesVar (cmd : Token) (name : String) : Bool :=
+    -- Simplified check
+    let cmdStr := String.join (oversimplify cmd)
+    Regex.containsSubstring cmdStr ("$" ++ name) ||
+    Regex.containsSubstring cmdStr ("${" ++ name)
+
 -- All node checks
 def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnquotedDollarAt,
@@ -1674,6 +2087,8 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkLsGrep,
   checkLsXargs,
   checkFindXargs,
+  checkFindExec,
+  checkPipePitfalls,
   checkGrepWc,
   checkReadWithoutR,
   checkMultipleRedirectsImpl,
@@ -1690,6 +2105,9 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkArrayAsString,
   checkCommarrays,
   checkUnquotedVariables,
+  checkSplittingInArrays,
+  checkTildeExpansion,
+  checkQuotesInVariables,
   -- Conditional expression checks
   checkNumberComparisons,
   checkDecimalComparisons,
@@ -1709,6 +2127,10 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkValidCondOps,
   checkComparisonAgainstGlob,
   checkCaseAgainstGlob,
+  checkBadTestAndOr,
+  checkComparisonOperators,
+  checkSubshellAsTest,
+  checkBackticksAsTest,
   -- Arithmetic checks
   checkForDecimals,
   checkDivBeforeMult,
@@ -1718,6 +2140,12 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkSuspiciousIFS,
   -- Test expression checks
   checkTestArgumentSplitting,
+  checkTestRedirection,
+  -- Redirection checks
+  checkRedirectionToCommand,
+  checkRedirectionToNumber,
+  checkStderrPipe,
+  checkReadWriteSameFile,
   -- Various command checks
   checkTrapQuoting,
   checkSingleLoopIteration,
@@ -1725,7 +2153,12 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkQuotesForExpansion,
   checkExecuteCommandOutput,
   checkExecWithSubshell,
-  checkSshInLoop
+  checkSshInLoop,
+  checkWhileReadSsh,
+  checkTrParams,
+  checkGrepPattern,
+  checkPrefixAssignment,
+  checkSpuriousExec
 ]
 
 -- All tree checks

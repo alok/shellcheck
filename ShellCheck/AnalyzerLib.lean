@@ -319,12 +319,54 @@ where
     let children := getTokenChildren t
     children.foldl (fun acc child => go child acc) m'
 
-/-- Check if token is in a quote-free context -/
-def isQuoteFreeNode (_strict : Bool) (_shell : Shell) (_tree : Std.HashMap Id Token) (t : Token) : Bool :=
+/-- Get the path from token to root via parent map -/
+partial def getPath (tree : Std.HashMap Id Token) (t : Token) : List Token :=
+  go t [t]
+where
+  go (current : Token) (acc : List Token) : List Token :=
+    match tree.get? current.id with
+    | some parent => go parent (parent :: acc)
+    | none => acc.reverse
+
+/-- Check if token is self-quoting (assignment context) -/
+def isQuoteFreeElement (t : Token) : Bool :=
   match t.inner with
   | .T_Assignment _ _ _ _ => true
   | .T_FdRedirect _ _ => true
-  | _ => false  -- Simplified
+  | _ => false
+
+/-- Check if a parent context is quote-free -/
+def isQuoteFreeContext (strict : Bool) (t : Token) : Option Bool :=
+  match t.inner with
+  | .TC_Nullary .doubleBracket _ => some true
+  | .TC_Unary .doubleBracket _ _ => some true
+  | .TC_Binary .doubleBracket _ _ _ => some true
+  | .TA_Sequence _ => some true
+  | .T_Arithmetic _ => some true
+  | .T_Assignment _ _ _ _ => some true
+  | .T_Redirecting _ _ => some false  -- Need to check further up
+  | .T_DoubleQuoted _ => some true
+  | .T_DollarDoubleQuoted _ => some true
+  | .T_CaseExpression _ _ => some true
+  | .T_HereDoc _ _ _ _ => some true
+  | .T_DollarBraced _ _ => some true
+  -- When non-strict, pragmatically assume it's desirable to split here
+  | .T_ForIn _ _ _ => some (not strict)
+  | .T_SelectIn _ _ _ => some (not strict)
+  | _ => none
+
+/-- Check if token is in a quote-free context by walking up parent tree -/
+def isQuoteFreeNode (strict : Bool) (_shell : Shell) (tree : Std.HashMap Id Token) (t : Token) : Bool :=
+  isQuoteFreeElement t ||
+  checkParents (getPath tree t)
+where
+  checkParents : List Token → Bool
+    | [] => false
+    | p :: rest =>
+      match isQuoteFreeContext strict p with
+      | some true => true
+      | some false => false
+      | none => checkParents rest
 
 /-- Check strictly quote free -/
 def isStrictlyQuoteFree (shell : Shell) (tree : Std.HashMap Id Token) (t : Token) : Bool :=
@@ -974,6 +1016,49 @@ def defaultSpec (pr : ParseResult) : AnalysisSpec :=
       asOptionalChecks := []
     }
   | none => default
+
+/-- Do variable flow analysis with read/write callbacks -/
+def doVariableFlowAnalysis
+    (readF : Token → Token → String → StateM σ (List α))
+    (writeF : Token → Token → String → DataType → StateM σ (List α))
+    (init : σ)
+    (flow : List StackData) : List α :=
+  let (results, _) := go flow init []
+  results
+where
+  go : List StackData → σ → List α → List α × σ
+    | [], s, acc => (acc, s)
+    | .Reference (base, token, name) :: rest, s, acc =>
+      let (comments, s') := (readF base token name).run s
+      go rest s' (acc ++ comments)
+    | .Assignment (base, token, name, values) :: rest, s, acc =>
+      let (comments, s') := (writeF base token name values).run s
+      go rest s' (acc ++ comments)
+    | _ :: rest, s, acc => go rest s acc
+
+/-- Check if default assignment pattern ${var:-default} -/
+def isDefaultAssignment (tree : Std.HashMap Id Token) (t : Token) : Bool :=
+  match t.inner with
+  | .T_DollarBraced _ content =>
+    let s := String.join (oversimplify content)
+    let modifier := getBracedModifier s
+    modifier.startsWith ":-" || modifier.startsWith "-"
+  | _ => false
+
+/-- Check if quotes may conflict with SC2281 ($foo=bar -> foo=bar correction) -/
+def quotesMayConflictWithSC2281 (params : Parameters) (t : Token) : Bool :=
+  let path := getPath params.parentMap t
+  match path with
+  | _ :: parent :: grandparent :: _ =>
+    match parent.inner with
+    | .T_NormalWord (first :: ⟨_, .T_Literal eqPart⟩ :: _) =>
+      if eqPart.startsWith "=" then
+        match grandparent.inner with
+        | .T_SimpleCommand _ (cmd :: _) => first.id == t.id && parent.id == cmd.id
+        | _ => false
+      else false
+    | _ => false
+  | _ => false
 
 /-- Make parameters from analysis spec -/
 def makeParameters (spec : AnalysisSpec) : Parameters :=

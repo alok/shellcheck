@@ -354,6 +354,104 @@ def escapeForMessage (s : String) : String :=
 /-- Short alias for escapeForMessage -/
 abbrev e4m := escapeForMessage
 
+/-- Is this a counting reference ${#var}? -/
+def isCountingReference (t : Token) : Bool :=
+  match t.inner with
+  | .T_DollarBraced _ content =>
+    let s := String.join (oversimplify content)
+    s.startsWith "#"
+  | _ => false
+
+/-- Is this a quoted alternative reference like ${var:+value}? -/
+def isQuotedAlternativeReference (t : Token) : Bool :=
+  match t.inner with
+  | .T_DollarBraced _ content =>
+    let s := String.join (oversimplify content)
+    let modifier := getBracedModifier s
+    -- Check for :+ or ]+ patterns
+    Regex.containsSubstring modifier ":+" || Regex.containsSubstring modifier "]+"
+  | _ => false
+
+/-- Get flags until predicate is true -/
+partial def getFlagsUntil (stop : String → Bool) (t : Token) : List (Token × String) :=
+  match getCommand t with
+  | some cmd =>
+    match cmd.inner with
+    | .T_SimpleCommand _ args => extractFlags stop args
+    | _ => []
+  | none => []
+where
+  extractFlags (stop : String → Bool) : List Token → List (Token × String)
+    | [] => []
+    | arg :: rest =>
+      match getLiteralString arg with
+      | some s =>
+        if stop s then []
+        else if s.startsWith "--" && s.length > 2 then
+          -- Long flag like --flag
+          let flagName := s.drop 2
+          (arg, flagName) :: extractFlags stop rest
+        else if s.startsWith "-" && s.length > 1 then
+          -- Short flags like -abc -> ["a", "b", "c"]
+          let chars := (s.drop 1).toList
+          chars.map (fun c => (arg, String.singleton c)) ++ extractFlags stop rest
+        else
+          extractFlags stop rest
+      | none => extractFlags stop rest
+
+/-- Get all flags from a command token (returns list of (token, flag_char) pairs) -/
+partial def getAllFlags (t : Token) : List (Token × String) :=
+  getFlagsUntil (· == "--") t
+
+/-- Check if a command has a specific flag -/
+def hasFlag (t : Token) (flag : String) : Bool :=
+  (getAllFlags t).any (fun (_, f) => f == flag)
+
+/-- Check if a command has a short parameter (single char) -/
+def hasShortParameter (t : Token) (c : Char) : Bool :=
+  (getAllFlags t).any (fun (_, f) => f == String.singleton c)
+
+/-- Check if a command has a parameter (by name) -/
+def hasParameter (t : Token) (param : String) : Bool :=
+  match getCommand t with
+  | some cmd =>
+    match cmd.inner with
+    | .T_SimpleCommand _ args =>
+      args.any fun arg =>
+        match getLiteralString arg with
+        | some s => s == param || s == ("--" ++ param) || s == ("-" ++ param)
+        | none => false
+    | _ => false
+  | none => false
+
+/-- Get command arguments (all words after command name) -/
+def getCommandArgv (t : Token) : Option (List Token) :=
+  match getCommand t with
+  | some cmd =>
+    match cmd.inner with
+    | .T_SimpleCommand _ args@(_::_) => some args
+    | _ => none
+  | none => none
+
+/-- Get leading unquoted string from token -/
+partial def getLeadingUnquotedString (t : Token) : Option String :=
+  match t.inner with
+  | .T_NormalWord parts =>
+    match parts with
+    | first :: _ =>
+      match first.inner with
+      | .T_Literal s => some s
+      | _ => none
+    | [] => some ""
+  | .T_Literal s => some s
+  | _ => none
+
+/-- Is this an unquoted flag (- not quoted)? -/
+def isUnquotedFlag (t : Token) : Bool :=
+  match getLeadingUnquotedString t with
+  | some s => s.startsWith "-"
+  | none => false
+
 -- Theorems (stubs)
 
 theorem isLoop_while (id : Id) (cond body : List Token) :
