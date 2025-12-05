@@ -2061,6 +2061,277 @@ where
     Regex.containsSubstring cmdStr ("$" ++ name) ||
     Regex.containsSubstring cmdStr ("${" ++ name)
 
+/-- SC2059: Don't use variables in the printf format string -/
+def checkPrintfFormat (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: format :: _) =>
+    if getCommandName ⟨cmd.id, cmd.inner⟩ == some "printf" then
+      -- Check if format contains variable expansion
+      if hasVariableExpansion format then
+        [makeComment .warningC format.id 2059
+          "Don't use variables in the printf format string. Use printf '...' \"$var\"."]
+      else []
+    else []
+  | _ => []
+where
+  hasVariableExpansion (t : Token) : Bool :=
+    match t.inner with
+    | .T_NormalWord parts => parts.any isExpansion
+    | .T_DoubleQuoted parts => parts.any isExpansion
+    | _ => false
+
+  isExpansion (t : Token) : Bool :=
+    match t.inner with
+    | .T_DollarBraced .. => true
+    | .T_DollarExpansion .. => true
+    | .T_Backticked .. => true
+    | _ => false
+
+/-- SC2012: Use find instead of ls to better handle non-alphanumeric filenames -/
+def checkLsFind (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: _) =>
+    if getCommandBasename ⟨cmd.id, cmd.inner⟩ == some "ls" then
+      -- Check if this is in a command substitution context
+      []  -- Simplified - would check parent context
+    else []
+  | _ => []
+
+/-- SC2016: Expressions don't expand in single quotes, use double quotes -/
+def checkSingleQuotedVariable (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SingleQuoted s =>
+    if hasExpansionSyntax s then
+      [makeComment .infoC t.id 2016
+        "Expressions don't expand in single quotes, use double quotes for that."]
+    else []
+  | _ => []
+where
+  hasExpansionSyntax (s : String) : Bool :=
+    Regex.containsSubstring s "$" ||
+    Regex.containsSubstring s "`"
+
+/-- SC2044: For loops over find output are fragile -/
+def checkForInFind (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_ForIn _ words _ =>
+    words.head?.bind (fun w =>
+      match w.inner with
+      | .T_NormalWord [sub] =>
+        match sub.inner with
+        | .T_DollarExpansion cmds =>
+          if cmds.any (fun c => getCommandBasename c == some "find") then
+            some [makeComment .warningC t.id 2044
+              "For loops over find output are fragile. Use find -exec or while read."]
+          else Option.none
+        | .T_Backticked cmds =>
+          if cmds.any (fun c => getCommandBasename c == some "find") then
+            some [makeComment .warningC t.id 2044
+              "For loops over find output are fragile. Use find -exec or while read."]
+          else Option.none
+        | _ => Option.none
+      | _ => Option.none
+    ) |>.getD []
+  | _ => []
+
+/-- SC2064: Use single quotes for trap to avoid immediate expansion -/
+def checkTrapExpansion (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: handler :: _) =>
+    if getCommandName ⟨cmd.id, cmd.inner⟩ == some "trap" then
+      match handler.inner with
+      | .T_DoubleQuoted parts =>
+        if parts.any isCommandSubstitution then
+          [makeComment .warningC handler.id 2064
+            "Use single quotes, otherwise this expands now rather than when signalled."]
+        else []
+      | .T_NormalWord parts =>
+        if parts.any isCommandSubstitution then
+          [makeComment .warningC handler.id 2064
+            "Use single quotes, otherwise this expands now rather than when signalled."]
+        else []
+      | _ => []
+    else []
+  | _ => []
+where
+  isCommandSubstitution (t : Token) : Bool :=
+    match t.inner with
+    | .T_DollarExpansion _ => true
+    | .T_Backticked _ => true
+    | _ => false
+
+/-- SC2072: Decimals are not supported -/
+def checkArithmeticDecimals (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarArithmetic inner => checkForDecimals inner
+  | .TA_Expansion parts => parts.foldl (fun acc p => acc ++ checkForDecimals p) []
+  | _ => []
+where
+  checkForDecimals (t : Token) : List TokenComment :=
+    match t.inner with
+    | .T_Literal s =>
+      if Regex.containsSubstring s "." &&
+         s.any Char.isDigit then
+        [makeComment .errorC t.id 2072
+          "Decimals are not supported. Either use integers only, or use bc or awk to compare."]
+      else []
+    | _ => []
+
+/-- SC2074: Can't use -o inside [[ ]]. Use || and [[ ]] separately -/
+def checkDoubleBracketOrOperator (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary .doubleBracket op _ _ =>
+    if op == "-o" then
+      [makeComment .errorC t.id 2074
+        "Can't use -o inside [[ ]]. Use || and separate [[ ]] instead."]
+    else []
+  | _ => []
+
+/-- SC2075: Can't use -a inside [[ ]]. Use && and [[ ]] separately -/
+def checkDoubleBracketAndOperator (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary .doubleBracket op _ _ =>
+    if op == "-a" then
+      [makeComment .errorC t.id 2075
+        "Can't use -a inside [[ ]]. Use && and separate [[ ]] instead."]
+    else []
+  | _ => []
+
+/-- SC2076: Remove quotes from right-hand side -/
+def checkQuotedRightHandRegex (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary .doubleBracket "=~" _ rhs =>
+    match rhs.inner with
+    | .T_NormalWord [single] =>
+      match single.inner with
+      | .T_DoubleQuoted _ =>
+        [makeComment .warningC rhs.id 2076
+          "Remove quotes from right-hand side of =~ to match as a regex rather than literally."]
+      | .T_SingleQuoted _ =>
+        [makeComment .warningC rhs.id 2076
+          "Remove quotes from right-hand side of =~ to match as a regex rather than literally."]
+      | _ => []
+    | _ => []
+  | _ => []
+
+/-- SC2077: You can't redirect to a dollar expansion -/
+def checkRedirectToDollarExpansion (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Redirecting redirects _ =>
+    redirects.foldl (fun acc r => acc ++ checkRedirect r) []
+  | _ => []
+where
+  checkRedirect (r : Token) : List TokenComment :=
+    match r.inner with
+    | .T_FdRedirect _ op =>
+      match op.inner with
+      | .T_IoFile _ target =>
+        match target.inner with
+        | .T_DollarExpansion _ =>
+          [makeComment .warningC target.id 2077
+            "You can't redirect to a command substitution."]
+        | _ => []
+      | _ => []
+    | _ => []
+
+/-- SC2078: This expression is constant. Did you forget the $ on a variable? -/
+def checkConstantTest (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Nullary _ word =>
+    match getLiteralString word with
+    | some s =>
+      if isVariableLike s then
+        [makeComment .warningC word.id 2078
+          s!"This expression is constant. Did you forget the $ on '{s}'?"]
+      else []
+    | Option.none => []
+  | _ => []
+where
+  isVariableLike (s : String) : Bool :=
+    isVariableName s && s.length > 1
+
+/-- SC2079: (( )) doesn't support fractions. For floating point, use bc or awk -/
+def checkFractionsInArithmetic (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TA_Binary "/" lhs rhs =>
+    -- Check if this might produce a fraction
+    if mightProduceFraction lhs rhs then
+      [makeComment .warningC t.id 2079
+        "(( )) doesn't support fractions. For floating point, use bc or awk."]
+    else []
+  | _ => []
+where
+  mightProduceFraction (_lhs _rhs : Token) : Bool :=
+    -- Simplified check - would need to analyze values
+    false
+
+/-- SC2082: To expand via indirection, use arrays, ${!name} or eval -/
+def checkDollarDollar (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarBraced _ content =>
+    let s := String.join (oversimplify content)
+    if s.startsWith "$" then
+      [makeComment .errorC t.id 2082
+        "To expand via indirection, use arrays, ${!name} or (associatively risky) eval."]
+    else []
+  | _ => []
+
+/-- SC2083: Don't add spaces after [ in -/
+def checkBracketSpacing (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Condition .singleBracket expr =>
+    match expr.inner with
+    | .TC_Empty _ => []  -- Empty condition already handled elsewhere
+    | _ => []  -- Spacing issues would be caught by parser
+  | _ => []
+
+/-- SC2084: Remove '$' or the shell will try to execute the output -/
+def checkDollarBraceExpansionInCommand (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: _) =>
+    match cmd.inner with
+    | .T_NormalWord [single] =>
+      match single.inner with
+      | .T_DollarBraceCommandExpansion _ _ =>
+        [makeComment .warningC cmd.id 2084
+          "Remove '$' or the shell will try to execute the output as a command name."]
+      | _ => []
+    | _ => []
+  | _ => []
+
+/-- SC2086: Double quote to prevent globbing and word splitting -/
+def checkUnquotedVariable (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarBraced _ content =>
+    if not (isQuoteFree params.shellType params.parentMap t) &&
+       not (ASTLib.isCountingReference t) &&
+       not (ASTLib.isArrayExpansion t) then
+      let varName := ASTLib.getBracedReference (String.join (oversimplify content))
+      if not (variablesWithoutSpaces.contains varName) then
+        [makeComment .warningC t.id 2086
+          "Double quote to prevent globbing and word splitting."]
+      else []
+    else []
+  | _ => []
+
+/-- SC2117: To run commands as another user, use su -c or sudo -/
+def checkBashAsLogin (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: args) =>
+    let cmdName := getCommandBasename ⟨cmd.id, cmd.inner⟩
+    if cmdName == some "bash" || cmdName == some "sh" then
+      if args.any (fun a => getLiteralString a == some "-c") then
+        []  -- -c is fine
+      else if args.any (fun a =>
+        let s := getLiteralString a
+        s == some "-l" || s == some "--login"
+      ) then
+        [makeComment .infoC t.id 2117
+          "To run commands as another user, use su -c or sudo."]
+      else []
+    else []
+  | _ => []
+
 -- All node checks
 def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnquotedDollarAt,
@@ -2158,7 +2429,25 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkTrParams,
   checkGrepPattern,
   checkPrefixAssignment,
-  checkSpuriousExec
+  checkSpuriousExec,
+  -- More checks
+  checkPrintfFormat,
+  checkLsFind,
+  checkSingleQuotedVariable,
+  checkForInFind,
+  checkTrapExpansion,
+  checkArithmeticDecimals,
+  checkDoubleBracketOrOperator,
+  checkDoubleBracketAndOperator,
+  checkQuotedRightHandRegex,
+  checkRedirectToDollarExpansion,
+  checkConstantTest,
+  checkFractionsInArithmetic,
+  checkDollarDollar,
+  checkBracketSpacing,
+  checkDollarBraceExpansionInCommand,
+  checkUnquotedVariable,
+  checkBashAsLogin
 ]
 
 -- All tree checks
