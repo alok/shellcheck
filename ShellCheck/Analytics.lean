@@ -1410,6 +1410,244 @@ where
       | _ => false
     | Option.none => false
 
+/-- SC2123: PATH is the shell search path. Use another name -/
+def checkOverridingPath (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand assigns [] =>
+    assigns.flatMap fun assign =>
+      match assign.inner with
+      | .T_Assignment _ "PATH" _ word =>
+        let str := oversimplify word |>.foldl (· ++ ·) ""
+        -- Warn if setting PATH without /bin or /sbin
+        if not (Regex.containsSubstring str "/bin" || Regex.containsSubstring str "/sbin") then
+          if str.any (· == '/') && not (str.any (· == ':')) then
+            [makeComment .warningC assign.id 2123
+              "PATH is the shell search path. Use another name."]
+          else []
+        else []
+      | _ => []
+  | _ => []
+
+/-- SC2147: Literal tilde in PATH works poorly across programs -/
+def checkTildeInPath (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand assigns _ =>
+    assigns.flatMap fun assign =>
+      match assign.inner with
+      | .T_Assignment _ "PATH" _ word =>
+        match word.inner with
+        | .T_NormalWord parts =>
+          if parts.any hasTildeInQuotes then
+            [makeComment .warningC assign.id 2147
+              "Literal tilde in PATH works poorly across programs."]
+          else []
+        | _ => []
+      | _ => []
+  | _ => []
+where
+  hasTildeInQuotes (t : Token) : Bool :=
+    match t.inner with
+    | .T_DoubleQuoted parts =>
+      parts.any fun p =>
+        match getLiteralString p with
+        | some s => s.any (· == '~')
+        | Option.none => false
+    | .T_SingleQuoted s => s.any (· == '~')
+    | _ => false
+
+/-- SC2141: This IFS value contains a literal backslash -/
+def checkSuspiciousIFS (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Assignment _ "IFS" _ value =>
+    match getLiteralString value with
+    | some s =>
+      let hasDollarSingle := params.shellType == Shell.Bash || params.shellType == Shell.Ksh
+      let suggestN := if hasDollarSingle then "$'\\n'" else "'<literal linefeed here>'"
+      let suggestT := if hasDollarSingle then "$'\\t'" else "\"$(printf '\\t')\""
+      if s == "\\n" then
+        [makeComment .warningC value.id 2141
+          s!"This backslash is literal. Did you mean IFS={suggestN} ?"]
+      else if s == "\\t" then
+        [makeComment .warningC value.id 2141
+          s!"This backslash is literal. Did you mean IFS={suggestT} ?"]
+      else if s.any (· == '\\') then
+        [makeComment .warningC value.id 2141
+          "This IFS value contains a literal backslash. For tabs/linefeeds/escapes, use $'..' or printf."]
+      else []
+    | Option.none => []
+  | _ => []
+
+/-- SC2144: -e doesn't work with globs. Use a for loop -/
+def checkTestArgumentSplitting (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Unary condType op token =>
+    if op == "-v" then
+      if condType == .singleBracket && isGlob token then
+        [makeComment .errorC token.id 2208
+          "Use [[ ]] or quote arguments to -v to avoid glob expansion."]
+      else []
+    else if isGlob token then
+      [makeComment .errorC token.id 2144 s!"{op} doesn't work with globs. Use a for loop."]
+    else []
+  | .TC_Nullary condType token =>
+    if isGlob token then
+      [makeComment .errorC token.id 2144 "This test always fails. Globs don't work in test expressions."]
+    else if condType == .doubleBracket && isArrayExpansion token then
+      [makeComment .errorC token.id 2198 "[[ $array ]] always true. Use [[ ${array[0]} ]] or [[ ${array[@]} ]]."]
+    else []
+  | _ => []
+
+/-- SC2064: Use single quotes, otherwise this expands now rather than when signalled -/
+def checkTrapQuoting (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ words =>
+    if isCommand t "trap" then
+      let args := words.drop 1 |>.filter (not ∘ isFlag)
+      match args.head? with
+      | some trapArg =>
+        if hasExpansionInDoubleQuotes trapArg then
+          [makeComment .warningC trapArg.id 2064
+            "Use single quotes, otherwise this expands now rather than when signalled."]
+        else []
+      | Option.none => []
+    else []
+  | _ => []
+where
+  hasExpansionInDoubleQuotes (t : Token) : Bool :=
+    match t.inner with
+    | .T_NormalWord [part] =>
+      match part.inner with
+      | .T_DoubleQuoted parts =>
+        parts.any fun p =>
+          match p.inner with
+          | .T_DollarBraced _ _ => true
+          | .T_DollarExpansion _ => true
+          | .T_Backticked _ => true
+          | _ => false
+      | _ => false
+    | _ => false
+
+/-- SC2066: Since you double quoted this, it will not word split, and the loop will only run once -/
+def checkSingleLoopIteration (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_ForIn _ words _ =>
+    match words with
+    | [word] =>
+      match word.inner with
+      | .T_NormalWord [part] =>
+        match part.inner with
+        | .T_DoubleQuoted _ =>
+          if hasArrayOrAtExpansion part then []  -- Arrays in quotes are OK
+          else
+            [makeComment .errorC word.id 2066
+              "Since you double quoted this, it will not word split, and the loop will only run once."]
+        | _ => []
+      | _ => []
+    | _ => []
+  | _ => []
+where
+  hasArrayOrAtExpansion (t : Token) : Bool :=
+    match t.inner with
+    | .T_DoubleQuoted parts =>
+      parts.any fun p =>
+        isArrayExpansion p ||
+        match p.inner with
+        | .T_DollarBraced _ content =>
+          let s := oversimplify content |>.foldl (· ++ ·) ""
+          s == "@" || s.startsWith "@"
+        | _ => false
+    | _ => false
+
+/-- SC2088: Tilde does not expand in quotes. Use $HOME -/
+def checkTildeInQuotes (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_NormalWord parts =>
+    parts.flatMap fun part =>
+      match part.inner with
+      | .T_DoubleQuoted inner =>
+        inner.flatMap fun elem =>
+          match elem.inner with
+          | .T_Literal s =>
+            if s.startsWith "~" then
+              [makeComment .warningC elem.id 2088
+                "Tilde does not expand in quotes. Use $HOME."]
+            else []
+          | _ => []
+      | .T_SingleQuoted s =>
+        if s.startsWith "~" then
+          [makeComment .warningC part.id 2088
+            "Tilde does not expand in quotes. Use $HOME."]
+        else []
+      | _ => []
+  | _ => []
+
+/-- SC2089/SC2090: Quotes/backslashes will be treated literally -/
+def checkQuotesForExpansion (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Assignment _ _ _ word =>
+    if hasQuotesInValue word then
+      [makeComment .warningC t.id 2089
+        "Quotes/backslashes will be treated literally. Use an array."]
+    else []
+  | _ => []
+where
+  hasQuotesInValue (t : Token) : Bool :=
+    match getLiteralString t with
+    | some s =>
+      (s.any (· == '"') || s.any (· == '\'') || Regex.containsSubstring s "\\ ")
+      && not (s.startsWith "-")  -- Skip flags
+    | Option.none => false
+
+/-- SC2091: Remove surrounding $() to avoid executing output -/
+def checkExecuteCommandOutput (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ [cmdWord] =>
+    match cmdWord.inner with
+    | .T_NormalWord [part] =>
+      match part.inner with
+      | .T_DollarExpansion cmds =>
+        if cmds.any (fun c => getCommandBasename c |>.isSome) then
+          [makeComment .warningC t.id 2091
+            "Remove surrounding $() to avoid executing output (or use eval if intentional)."]
+        else []
+      | .T_Backticked cmds =>
+        if cmds.any (fun c => getCommandBasename c |>.isSome) then
+          [makeComment .warningC t.id 2091
+            "Remove surrounding $() to avoid executing output (or use eval if intentional)."]
+        else []
+      | _ => []
+    | _ => []
+  | _ => []
+
+/-- SC2093: Remove \"exec \" if script should continue after this command -/
+def checkExecWithSubshell (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ words =>
+    if isCommand t "exec" then
+      let args := words.drop 1
+      if args.any isCommandSubstitution then
+        [makeComment .infoC t.id 2093
+          "Remove \"exec \" if script should continue after this command."]
+      else []
+    else []
+  | _ => []
+
+/-- SC2095: Add < /dev/null to prevent ssh from swallowing stdin -/
+def checkSshInLoop (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_WhileExpression _ body =>
+    checkBodyForSsh params body
+  | .T_ForIn _ _ body =>
+    checkBodyForSsh params body
+  | _ => []
+where
+  checkBodyForSsh (_params : Parameters) (body : List Token) : List TokenComment :=
+    body.flatMap fun cmd =>
+      if isCommand cmd "ssh" || isCommand cmd "ffmpeg" then
+        [makeComment .infoC cmd.id 2095
+          "Add < /dev/null to prevent this command from swallowing stdin."]
+      else []
+
 -- All node checks
 def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnquotedDollarAt,
@@ -1473,7 +1711,21 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkCaseAgainstGlob,
   -- Arithmetic checks
   checkForDecimals,
-  checkDivBeforeMult
+  checkDivBeforeMult,
+  -- Path and IFS checks
+  checkOverridingPath,
+  checkTildeInPath,
+  checkSuspiciousIFS,
+  -- Test expression checks
+  checkTestArgumentSplitting,
+  -- Various command checks
+  checkTrapQuoting,
+  checkSingleLoopIteration,
+  checkTildeInQuotes,
+  checkQuotesForExpansion,
+  checkExecuteCommandOutput,
+  checkExecWithSubshell,
+  checkSshInLoop
 ]
 
 -- All tree checks
