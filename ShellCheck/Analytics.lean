@@ -1148,6 +1148,268 @@ where
   hasArrayExpansion (t : Token) : Bool :=
     getWordParts t |>.any isArrayExpansion
 
+/-- SC2054: Use spaces, not commas, to separate array elements -/
+def checkCommarrays (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Array elements =>
+    if elements.any isCommaSeparated then
+      [makeComment .warningC t.id 2054 "Use spaces, not commas, to separate array elements."]
+    else []
+  | _ => []
+where
+  isCommaSeparated (t : Token) : Bool :=
+    let lit := getLiteralLiteralHelper t
+    lit.any (· == ',')
+  getLiteralLiteralHelper (t : Token) : String :=
+    match t.inner with
+    | .T_IndexedElement _ v =>
+      match v.inner with
+      | .T_NormalWord parts => String.join (parts.map getLiteralPart)
+      | .T_Literal s => s
+      | _ => ""
+    | .T_NormalWord parts => String.join (parts.map getLiteralPart)
+    | .T_Literal s => s
+    | _ => ""
+  getLiteralPart (t : Token) : String :=
+    match t.inner with
+    | .T_Literal s => s
+    | _ => ""
+
+/-- SC2055: You probably wanted -a here, otherwise it's always true -/
+def checkOrNeq (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Or condType op lhs rhs =>
+    match lhs.inner, rhs.inner with
+    | .TC_Binary _ op1 lhs1 rhs1, .TC_Binary _ op2 lhs2 rhs2 =>
+      if (op1 == "-ne" || op1 == "!=") && op1 == op2 then
+        let lhs1Str := oversimplify lhs1 |>.foldl (· ++ ·) ""
+        let lhs2Str := oversimplify lhs2 |>.foldl (· ++ ·) ""
+        let rhs1Str := oversimplify rhs1 |>.foldl (· ++ ·) ""
+        let rhs2Str := oversimplify rhs2 |>.foldl (· ++ ·) ""
+        if lhs1Str == lhs2Str && rhs1Str != rhs2Str && not (isGlob rhs1) && not (isGlob rhs2) then
+          let suggestion := if condType == .singleBracket then "-a" else "&&"
+          [makeComment .warningC t.id 2055
+            s!"You probably wanted {suggestion} here, otherwise it's always true."]
+        else []
+      else []
+    | _, _ => []
+  | .TA_Binary "||" lhs rhs =>
+    match lhs.inner, rhs.inner with
+    | .TA_Binary "!=" word1 _, .TA_Binary "!=" word2 _ =>
+      let w1 := oversimplify word1 |>.foldl (· ++ ·) ""
+      let w2 := oversimplify word2 |>.foldl (· ++ ·) ""
+      if w1 == w2 then
+        [makeComment .warningC t.id 2056 "You probably wanted && here, otherwise it's always true."]
+      else []
+    | _, _ => []
+  | _ => []
+
+/-- SC2333: You probably wanted || here, otherwise it's always false -/
+def checkAndEq (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_And condType _ lhs rhs =>
+    match lhs.inner, rhs.inner with
+    | .TC_Binary _ op1 lhs1 rhs1, .TC_Binary _ op2 lhs2 rhs2 =>
+      if op1 == op2 && (op1 == "=" || op1 == "==" || op1 == "-eq") then
+        let lhs1Str := oversimplify lhs1 |>.foldl (· ++ ·) ""
+        let lhs2Str := oversimplify lhs2 |>.foldl (· ++ ·) ""
+        let rhs1Str := oversimplify rhs1 |>.foldl (· ++ ·) ""
+        let rhs2Str := oversimplify rhs2 |>.foldl (· ++ ·) ""
+        if lhs1Str == lhs2Str && rhs1Str != rhs2Str && isLiteral rhs1 && isLiteral rhs2 then
+          let suggestion := if condType == .singleBracket then "-o" else "||"
+          [makeComment .warningC t.id 2333
+            s!"You probably wanted {suggestion} here, otherwise it's always false."]
+        else []
+      else []
+    | _, _ => []
+  | .TA_Binary "&&" lhs rhs =>
+    match lhs.inner, rhs.inner with
+    | .TA_Binary "==" lhs1 rhs1, .TA_Binary "==" lhs2 rhs2 =>
+      let l1 := oversimplify lhs1 |>.foldl (· ++ ·) ""
+      let l2 := oversimplify lhs2 |>.foldl (· ++ ·) ""
+      if l1 == l2 && isLiteral rhs1 && isLiteral rhs2 then
+        [makeComment .warningC t.id 2334 "You probably wanted || here, otherwise it's always false."]
+      else []
+    | _, _ => []
+  | _ => []
+
+/-- SC2057/SC2058: Unknown test operator -/
+def checkValidCondOps (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary _ op _ _ =>
+    if not (op ∈ binaryTestOps) then
+      [makeComment .warningC t.id 2057 "Unknown binary operator."]
+    else []
+  | .TC_Unary _ op _ =>
+    if not (op ∈ unaryTestOps) then
+      [makeComment .warningC t.id 2058 "Unknown unary operator."]
+    else []
+  | _ => []
+where
+  binaryTestOps := ["-nt", "-ot", "-ef", "-eq", "-ne", "-lt", "-le", "-gt", "-ge",
+    "=", "==", "!=", "=~", "<", ">", "<=", ">=", "\\<", "\\>",
+    "-a", "-o"]
+  unaryTestOps := ["-z", "-n", "-o", "-v", "-R",
+    "-b", "-c", "-d", "-e", "-f", "-g", "-h", "-k", "-p", "-r", "-s", "-t", "-u", "-w", "-x",
+    "-L", "-N", "-O", "-G", "-S",
+    "!"]
+
+/-- SC2116: Useless echo? Instead of 'cmd $(echo foo)', use 'cmd foo' -/
+def checkUuoeVar (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarExpansion [cmd] =>
+    checkEchoCmd t.id cmd
+  | .T_Backticked [cmd] =>
+    checkEchoCmd t.id cmd
+  | _ => []
+where
+  checkEchoCmd (id : Id) (cmd : Token) : List TokenComment :=
+    match cmd.inner with
+    | .T_Pipeline _ [redirecting] =>
+      match redirecting.inner with
+      | .T_Redirecting _ inner =>
+        match inner.inner with
+        | .T_SimpleCommand _ (cmdWord :: args) =>
+          if getCommandBasename (⟨cmd.id, .T_SimpleCommand [] (cmdWord :: args)⟩) == some "echo" then
+            if args.length > 0 && not (hasGlobOrBrace args) then
+              [makeComment .styleC id 2116
+                "Useless echo? Instead of 'cmd $(echo foo)', just use 'cmd foo'."]
+            else []
+          else []
+        | _ => []
+      | _ => []
+    | _ => []
+
+  hasGlobOrBrace (args : List Token) : Bool :=
+    args.any fun arg =>
+      getWordParts arg |>.any fun part =>
+        match part.inner with
+        | .T_Glob _ => true
+        | .T_Extglob _ _ => true
+        | .T_BraceExpansion _ => true
+        | _ => false
+
+/-- SC2081: [ .. ] can't match globs. Use [[ .. ]] or case statement -/
+def checkComparisonAgainstGlob (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary condType op _ word =>
+    if op ∈ ["=", "==", "!="] && isGlob word then
+      if condType == .singleBracket then
+        let msg := if params.shellType == Shell.Bash || params.shellType == Shell.Ksh
+          then "[ .. ] can't match globs. Use [[ .. ]] or case statement."
+          else "[ .. ] can't match globs. Use a case statement."
+        [makeComment .errorC word.id 2081 msg]
+      else if condType == .doubleBracket && params.shellType == Shell.BusyboxSh then
+        [makeComment .errorC word.id 2330
+          "BusyBox [[ .. ]] does not support glob matching. Use a case statement."]
+      else []
+    else []
+  | _ => []
+
+/-- SC2254: Quote expansions in case patterns to match literally -/
+def checkCaseAgainstGlob (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_CaseExpression _ cases =>
+    cases.flatMap fun (_, patterns, _) =>
+      patterns.flatMap fun pattern =>
+        if not (isGlob pattern) && hasQuoteableExpansion pattern then
+          [makeComment .warningC pattern.id 2254
+            "Quote expansions in case patterns to match literally rather than as a glob."]
+        else []
+  | _ => []
+where
+  hasQuoteableExpansion (t : Token) : Bool :=
+    getWordParts t |>.any isQuoteableExpansion
+
+/-- SC2115: Use "${var:?}" to ensure not empty, or check before rm -/
+def checkRmWithRoot (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ words =>
+    if isCommand t "rm" then
+      let args := words.drop 1
+      if args.any hasSlashVarExpansion then
+        [makeComment .warningC t.id 2115
+          "Use \"${var:?}\" to ensure this never expands to / ."]
+      else []
+    else []
+  | _ => []
+where
+  hasSlashVarExpansion (t : Token) : Bool :=
+    match getLiteralString t with
+    | some s =>
+      -- Check for patterns like /$var or $var/ that could become /
+      s.startsWith "/" || s.endsWith "/"
+    | Option.none =>
+      match t.inner with
+      | .T_NormalWord (⟨_, .T_Literal "/"⟩ :: _) => true
+      | .T_NormalWord parts =>
+        parts.any fun p =>
+          match p.inner with
+          | .T_DollarBraced _ _ => true
+          | _ => false
+      | _ => false
+
+/-- SC2059: Don't use variables in printf format string -/
+def checkPrintfVar (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ words =>
+    if isCommand t "printf" then
+      let args := words.drop 1 |>.filter (not ∘ isFlag)
+      match args.head? with
+      | some formatArg =>
+        if hasVariableInFormat formatArg then
+          [makeComment .warningC formatArg.id 2059
+            "Don't use variables in the printf format string. Use printf '...' \"$var\"."]
+        else []
+      | Option.none => []
+    else []
+  | _ => []
+where
+  hasVariableInFormat (t : Token) : Bool :=
+    getWordParts t |>.any fun part =>
+      match part.inner with
+      | .T_DollarBraced _ _ => true
+      | .T_DollarExpansion _ => true
+      | .T_Backticked _ => true
+      | _ => false
+
+/-- SC2086: Double quote to prevent globbing and word splitting -/
+-- This is a simplified version of checkSpacefulnessCfg
+def checkUnquotedVariables (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarBraced _ content =>
+    let str := oversimplify content |>.foldl (· ++ ·) ""
+    let name := ASTLib.getBracedReference str
+    -- Skip special variables that don't need quoting
+    if name ∈ specialVarsNoQuote then []
+    else if isArrayExpansion t then []  -- Covered by SC2068
+    else if isCountingReference t then []
+    else if isQuoteFree params t then []
+    else [makeComment .infoC t.id 2086
+        "Double quote to prevent globbing and word splitting."]
+  | _ => []
+where
+  specialVarsNoQuote := ["?", "#", "-", "$", "!", "_", "PPID", "BASHPID",
+    "UID", "EUID", "RANDOM", "LINENO", "SECONDS", "SHLVL", "HISTCMD",
+    "BASH_SUBSHELL", "COLUMNS", "LINES"]
+  isCountingReference (t : Token) : Bool :=
+    match t.inner with
+    | .T_DollarBraced _ content =>
+      let str := oversimplify content |>.foldl (· ++ ·) ""
+      str.startsWith "#"
+    | _ => false
+  isQuoteFree (params : Parameters) (t : Token) : Bool :=
+    -- Simplified - check if we're in a quote-free context
+    match params.parentMap.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .T_Assignment .. => true
+      | .T_Condition .. => true
+      | .T_DollarArithmetic .. => true
+      | .T_Arithmetic .. => true
+      | _ => false
+    | Option.none => false
+
 -- All node checks
 def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnquotedDollarAt,
@@ -1180,11 +1442,16 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkGlobAsCommand,
   checkForInCat,
   checkRedirectToSame,
+  checkUuoeVar,
+  checkPrintfVar,
+  checkRmWithRoot,
   -- Quoting and expansion checks
   checkDollarStar,
   checkConcatenatedDollarAt,
   checkUnquotedExpansions,
   checkArrayAsString,
+  checkCommarrays,
+  checkUnquotedVariables,
   -- Conditional expression checks
   checkNumberComparisons,
   checkDecimalComparisons,
@@ -1199,6 +1466,11 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnquotedN,
   checkLiteralBreakingTest,
   checkEscapedComparisons,
+  checkOrNeq,
+  checkAndEq,
+  checkValidCondOps,
+  checkComparisonAgainstGlob,
+  checkCaseAgainstGlob,
   -- Arithmetic checks
   checkForDecimals,
   checkDivBeforeMult
