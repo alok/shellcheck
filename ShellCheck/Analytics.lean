@@ -795,6 +795,359 @@ where
     | .T_Extglob _ _ => true
     | _ => false
 
+/-- SC2013: To read lines rather than words, pipe/redirect to a 'while read' loop -/
+def checkForInCat (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_ForIn _ words _ =>
+    words.flatMap fun word =>
+      match word.inner with
+      | .T_NormalWord parts =>
+        parts.flatMap fun part =>
+          match part.inner with
+          | .T_DollarExpansion cmds =>
+            cmds.flatMap fun cmd =>
+              if getCommandBasename cmd == some "cat" then
+                [makeComment .warningC part.id 2013
+                  "To read lines rather than words, pipe/redirect to a 'while read' loop."]
+              else []
+          | .T_Backticked cmds =>
+            cmds.flatMap fun cmd =>
+              if getCommandBasename cmd == some "cat" then
+                [makeComment .warningC part.id 2013
+                  "To read lines rather than words, pipe/redirect to a 'while read' loop."]
+              else []
+          | _ => []
+      | _ => []
+  | _ => []
+
+/-- SC2048: Use "$@" (with quotes) to prevent whitespace problems -/
+def checkDollarStar (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_NormalWord [part] =>
+    match part.inner with
+    | .T_DollarBraced _ content =>
+      let str := oversimplify content |>.foldl (· ++ ·) ""
+      let isQuoteFree := isStrictlyQuoteFree params.shellType params.parentMap t
+      let modifier := getBracedModifier str
+      if str.startsWith "*" && not isQuoteFree then
+        [makeComment .warningC part.id 2048
+          "Use \"$@\" (with quotes) to prevent whitespace problems."]
+      else if modifier.startsWith "[*]" && not (str.startsWith "#") then
+        [makeComment .warningC part.id 2048
+          "Use \"${array[@]}\" (with quotes) to prevent whitespace problems."]
+      else []
+    | _ => []
+  | _ => []
+where
+  isStrictlyQuoteFree (_shell : Shell) (_parents : Std.HashMap Id Token) (_t : Token) : Bool :=
+    -- Simplified - would need proper parent context analysis
+    false
+
+/-- SC2145: Argument mixes string and array. Use * or separate argument -/
+def checkConcatenatedDollarAt (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_NormalWord parts =>
+    let hasArray := parts.any isArrayExpansion
+    let hasOther := parts.any fun p =>
+      match p.inner with
+      | .T_Literal s => not s.isEmpty
+      | .T_SingleQuoted _ => true
+      | .T_DoubleQuoted _ => true
+      | _ => false
+    if hasArray && hasOther && parts.length > 1 then
+      [makeComment .warningC t.id 2145
+        "Argument mixes string and array. Use * or separate argument."]
+    else []
+  | _ => []
+
+/-- SC2050: This expression is constant. Did you forget the $ on a variable? -/
+def checkConstantIfs (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary _ op lhs rhs =>
+    if op ∈ ["-nt", "-ot", "-ef"] then []  -- File tests aren't constant
+    else if isConstant lhs && isConstant rhs then
+      [makeComment .warningC t.id 2050
+        "This expression is constant. Did you forget the $ on a variable?"]
+    else if op ∈ ["=", "==", "!="] && not (wordsCanBeEqual lhs rhs) then
+      [makeComment .warningC t.id 2193
+        "The arguments to this comparison can never be equal. Make sure your syntax is correct."]
+    else []
+  | _ => []
+
+/-- SC2076: Remove quotes from right-hand side of =~ to match as regex -/
+def checkQuotedCondRegex (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary _ "=~" _ rhs =>
+    match rhs.inner with
+    | .T_NormalWord [part] =>
+      match part.inner with
+      | .T_DoubleQuoted _ =>
+        if hasRegexMetachars rhs then
+          [makeComment .warningC rhs.id 2076
+            "Remove quotes from right-hand side of =~ to match as a regex rather than literally."]
+        else []
+      | .T_SingleQuoted _ =>
+        if hasRegexMetachars rhs then
+          [makeComment .warningC rhs.id 2076
+            "Remove quotes from right-hand side of =~ to match as a regex rather than literally."]
+        else []
+      | _ => []
+    | _ => []
+  | _ => []
+where
+  hasRegexMetachars (t : Token) : Bool :=
+    match getLiteralString t with
+    | some s => s.any fun c => c ∈ ['[', ']', '*', '.', '+', '(', ')', '|']
+    | Option.none => false
+
+/-- SC2049: =~ is for regex, but this looks like a glob. Use = instead -/
+def checkGlobbedRegex (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary condType "=~" _ rhs =>
+    if condType == .doubleBracket then
+      let str := oversimplify rhs |>.foldl (· ++ ·) ""
+      if isConfusedGlobRegex str then
+        [makeComment .warningC rhs.id 2049
+          "=~ is for regex, but this looks like a glob. Use = instead."]
+      else []
+    else []
+  | _ => []
+where
+  isConfusedGlobRegex (s : String) : Bool :=
+    -- Starts with * or ? without being escaped or in a regex group
+    (s.startsWith "*" || s.startsWith "?") &&
+    not (s.startsWith "^") && not (s.startsWith "(")
+
+/-- SC2107/SC2108/SC2109/SC2110: Conditional operators in wrong bracket type -/
+def checkConditionalAndOrs (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_And condType "&&" _ _ =>
+    if condType == .singleBracket then
+      [makeComment .errorC t.id 2107 "Instead of [ a && b ], use [ a ] && [ b ]."]
+    else []
+  | .TC_And condType "-a" _ _ =>
+    if condType == .doubleBracket then
+      [makeComment .errorC t.id 2108 "In [[..]], use && instead of -a."]
+    else
+      [makeComment .warningC t.id 2166 "Prefer [ p ] && [ q ] as [ p -a q ] is not well defined."]
+  | .TC_Or condType "||" _ _ =>
+    if condType == .singleBracket then
+      [makeComment .errorC t.id 2109 "Instead of [ a || b ], use [ a ] || [ b ]."]
+    else []
+  | .TC_Or condType "-o" _ _ =>
+    if condType == .doubleBracket then
+      [makeComment .errorC t.id 2110 "In [[..]], use || instead of -o."]
+    else
+      [makeComment .warningC t.id 2166 "Prefer [ p ] || [ q ] as [ p -o q ] is not well defined."]
+  | _ => []
+
+/-- SC2074: Can't use =~ in [ ]. Use [[..]] instead -/
+def checkSingleBracketOperators (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary condType "=~" _ _ =>
+    let isBashOrKsh := params.shellType == Shell.Bash || params.shellType == Shell.Ksh
+    if condType == .singleBracket && isBashOrKsh then
+      [makeComment .errorC t.id 2074 "Can't use =~ in [ ]. Use [[..]] instead."]
+    else []
+  | _ => []
+
+/-- SC2075: Escaping < or > is required in [..], but invalid in [[..]] -/
+def checkDoubleBracketOperators (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary condType op _ _ =>
+    if condType == .doubleBracket && op ∈ ["\\<", "\\>"] then
+      [makeComment .errorC t.id 2075
+        s!"Escaping {op} is required in [..], but invalid in [[..]]"]
+    else []
+  | _ => []
+
+/-- SC2078/SC2158-2161: Constant nullary test expressions -/
+def checkConstantNullary (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Nullary _ inner =>
+    if isConstant inner then
+      let str := onlyLiteralString inner
+      match str with
+      | "false" => [makeComment .errorC inner.id 2158 "[ false ] is true. Remove the brackets."]
+      | "0" => [makeComment .errorC inner.id 2159 "[ 0 ] is true. Use 'false' instead."]
+      | "true" => [makeComment .styleC inner.id 2160 "Instead of '[ true ]', just use 'true'."]
+      | "1" => [makeComment .styleC inner.id 2161 "Instead of '[ 1 ]', use 'true'."]
+      | _ => [makeComment .errorC inner.id 2078
+          "This expression is constant. Did you forget a $ somewhere?"]
+    else []
+  | _ => []
+
+/-- SC2079: (( )) doesn't support decimals. Use bc or awk -/
+def checkForDecimals (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TA_Expansion _ =>
+    if not (hasFloatingPoint params) then
+      match getLiteralString t with
+      | some s =>
+        if s.any Char.isDigit && s.any (· == '.') then
+          [makeComment .errorC t.id 2079 "(( )) doesn't support decimals. Use bc or awk."]
+        else []
+      | Option.none => []
+    else []
+  | _ => []
+where
+  hasFloatingPoint (_params : Parameters) : Bool := false  -- Shell arithmetic doesn't support floats
+
+/-- SC2017: Increase precision by replacing a/b*c with a*c/b -/
+def checkDivBeforeMult (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TA_Binary "*" lhs _ =>
+    match lhs.inner with
+    | .TA_Binary "/" _ _ =>
+      [makeComment .infoC t.id 2017 "Increase precision by replacing a/b*c with a*c/b."]
+    | _ => []
+  | _ => []
+
+/-- SC2070: -n doesn't work with unquoted arguments -/
+def checkUnquotedN (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Unary condType "-n" inner =>
+    if condType == .singleBracket && willSplit inner then
+      if not (getWordParts inner |>.any isArrayExpansion) then
+        [makeComment .errorC inner.id 2070
+          "-n doesn't work with unquoted arguments. Quote or use [[ ]]."]
+      else []
+    else []
+  | _ => []
+
+/-- SC2077/SC2157: Literal strings breaking tests -/
+def checkLiteralBreakingTest (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Nullary _ word =>
+    if not (isConstant word) then
+      let parts := getWordParts word
+      -- Check for unspaced comparison operators
+      if parts.any hasEquals then
+        [makeComment .errorC t.id 2077 "You need spaces around the comparison operator."]
+      else if parts.any isNonEmptyLiteral then
+        [makeComment .errorC t.id 2157
+          "Argument to implicit -n is always true due to literal strings."]
+      else []
+    else []
+  | .TC_Unary _ op word =>
+    if op == "-n" && not (isConstant word) then
+      if getWordParts word |>.any isNonEmptyLiteral then
+        [makeComment .errorC t.id 2157 "Argument to -n is always true due to literal strings."]
+      else []
+    else if op == "-z" && not (isConstant word) then
+      if getWordParts word |>.any isNonEmptyLiteral then
+        [makeComment .errorC t.id 2157 "Argument to -z is always false due to literal strings."]
+      else []
+    else []
+  | _ => []
+where
+  hasEquals (t : Token) : Bool :=
+    match getLiteralString t with
+    | some s => s.any (· == '=')
+    | Option.none => false
+  isNonEmptyLiteral (t : Token) : Bool :=
+    match getLiteralString t with
+    | some s => not s.isEmpty
+    | Option.none => false
+
+/-- SC2073: Escape < or > to prevent redirection -/
+def checkEscapedComparisons (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary condType op _ _ =>
+    if condType == .singleBracket && op ∈ ["<", ">"] then
+      match params.shellType with
+      | .Sh => []  -- Unsupported in sh
+      | .Dash => [makeComment .errorC t.id 2073 s!"Escape \\{op} to prevent it redirecting."]
+      | .BusyboxSh => [makeComment .errorC t.id 2073 s!"Escape \\{op} to prevent it redirecting."]
+      | _ => [makeComment .errorC t.id 2073
+          s!"Escape \\{op} to prevent it redirecting (or switch to [[ .. ]])."]
+    else []
+  | _ => []
+
+/-- SC2094: Make sure not to read and write the same file in the same pipeline -/
+def checkRedirectToSame (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+    let allRedirs := cmds.flatMap getRedirFiles
+    findDuplicateRedirs params allRedirs
+  | _ => []
+where
+  getRedirFiles (cmd : Token) : List (Token × Bool) :=  -- (file, isInput)
+    match cmd.inner with
+    | .T_Redirecting redirects _ =>
+      redirects.flatMap fun r =>
+        match r.inner with
+        | .T_FdRedirect _ op =>
+          match op.inner with
+          | .T_IoFile opTok file =>
+            match getLiteralString opTok with
+            | some "<" => [(file, true)]
+            | some ">" => [(file, false)]
+            | some ">>" => [(file, false)]
+            | _ => []
+          | _ => []
+        | _ => []
+    | _ => []
+
+  findDuplicateRedirs (_params : Parameters) (redirs : List (Token × Bool)) : List TokenComment :=
+    let inputFiles := redirs.filter (·.2) |>.map (·.1)
+    let outputFiles := redirs.filter (not ·.2) |>.map (·.1)
+    inputFiles.flatMap fun inFile =>
+      outputFiles.flatMap fun outFile =>
+        let inStr := oversimplify inFile |>.foldl (· ++ ·) ""
+        let outStr := oversimplify outFile |>.foldl (· ++ ·) ""
+        if inStr == outStr && not (inStr.startsWith "/dev/") then
+          [makeComment .infoC outFile.id 2094
+            "Make sure not to read and write the same file in the same pipeline."]
+        else []
+
+/-- SC2046: Quote this to prevent word splitting -/
+def checkUnquotedExpansions (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarExpansion cmds =>
+    if cmds.isEmpty then []
+    else if shouldBeSplit t then []
+    else if isQuoteFreeContext params t then []
+    else [makeComment .warningC t.id 2046 "Quote this to prevent word splitting."]
+  | .T_Backticked cmds =>
+    if cmds.isEmpty then []
+    else if shouldBeSplit t then []
+    else if isQuoteFreeContext params t then []
+    else [makeComment .warningC t.id 2046 "Quote this to prevent word splitting."]
+  | _ => []
+where
+  shouldBeSplit (t : Token) : Bool :=
+    -- Some commands like seq and pgrep are typically used for word splitting
+    match t.inner with
+    | .T_DollarExpansion cmds =>
+      cmds.any fun c => getCommandBasename c ∈ [some "seq", some "pgrep"]
+    | .T_Backticked cmds =>
+      cmds.any fun c => getCommandBasename c ∈ [some "seq", some "pgrep"]
+    | _ => false
+
+  isQuoteFreeContext (params : Parameters) (t : Token) : Bool :=
+    -- Simplified check - would need parent context
+    match params.parentMap.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .T_Assignment .. => true
+      | .T_Condition .. => true
+      | _ => false
+    | Option.none => false
+
+/-- SC2124: Assigning an array to a string -/
+def checkArrayAsString (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Assignment _ _ _ word =>
+    if hasArrayExpansion word then
+      [makeComment .warningC t.id 2124
+        "Assigning an array to a string! Assign as array, or use * instead of @ to concatenate."]
+    else []
+  | _ => []
+where
+  hasArrayExpansion (t : Token) : Bool :=
+    getWordParts t |>.any isArrayExpansion
+
 -- All node checks
 def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnquotedDollarAt,
@@ -811,7 +1164,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkMultipleRedirects,
   checkSingleQuotedExpansion,
   checkSpuriousExpansion,
-  -- New checks
+  -- Pipeline and command checks
   checkEchoWc,
   checkPipedAssignment,
   checkAssignAteCommand,
@@ -824,10 +1177,31 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkGrepWc,
   checkReadWithoutR,
   checkMultipleRedirectsImpl,
+  checkGlobAsCommand,
+  checkForInCat,
+  checkRedirectToSame,
+  -- Quoting and expansion checks
+  checkDollarStar,
+  checkConcatenatedDollarAt,
+  checkUnquotedExpansions,
+  checkArrayAsString,
+  -- Conditional expression checks
   checkNumberComparisons,
   checkDecimalComparisons,
   checkGrepQ,
-  checkGlobAsCommand
+  checkConstantIfs,
+  checkQuotedCondRegex,
+  checkGlobbedRegex,
+  checkConditionalAndOrs,
+  checkSingleBracketOperators,
+  checkDoubleBracketOperators,
+  checkConstantNullary,
+  checkUnquotedN,
+  checkLiteralBreakingTest,
+  checkEscapedComparisons,
+  -- Arithmetic checks
+  checkForDecimals,
+  checkDivBeforeMult
 ]
 
 -- All tree checks
