@@ -88,6 +88,9 @@ def checkFile (filename : String) (debug : Bool := false) : IO UInt32 := do
         | .T_Backticked _ => "T_Backticked"
         | .T_DoubleQuoted _ => "T_DoubleQuoted"
         | .T_SingleQuoted s => s!"T_SingleQuoted({s.take 10})"
+        | .T_Function _ _ name _ => s!"T_Function({name})"
+        | .T_BraceGroup _ => "T_BraceGroup"
+        | .T_Redirecting _ _ => "T_Redirecting"
         | _ => "other"
       let tokenTypes := match root.inner with
         | .T_Script _ cs =>

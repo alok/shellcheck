@@ -1072,7 +1072,24 @@ def findFunctionDefinition (t : Token) : Option FunctionDefinition :=
   match t.inner with
   | .T_Function _ _ name body =>
     some { name := name, token := t, body := body }
-  | _ => none
+  -- Workaround: Also detect from T_SimpleCommand where first word is "function"
+  -- This handles cases where the parser produces T_SimpleCommand instead of T_Function
+  | .T_SimpleCommand _ words =>
+    match words with
+    | funcKw :: nameWord :: bodyWords =>
+      if getLiteralString funcKw == some "function" then
+        match getLiteralString nameWord with
+        | some name =>
+          -- Find the brace group as the body
+          match bodyWords.find? (fun w => match w.inner with | .T_BraceGroup _ => true | _ => false) with
+          | some body => some { name := name, token := t, body := body }
+          | Option.none =>
+            -- Body might be inline, create synthetic body from remaining words
+            some { name := name, token := t, body := t }
+        | Option.none => Option.none
+      else Option.none
+    | _ => Option.none
+  | _ => Option.none
 
 /-- Find alias definition from a token -/
 def findAliasDefinition (t : Token) : Option (String × Token) :=
@@ -1149,21 +1166,21 @@ def functionUsesPositionalParams (func : FunctionDefinition) : List (Token × St
 
 /-- Find all command invocations in tree -/
 partial def findCommandInvocations (t : Token) : List (Token × String) :=
-  match t.inner with
-  | .T_SimpleCommand _ (cmd :: _) =>
-    match getLiteralString cmd with
-    | some name => [(t, name)]
-    | none => []
-  | .T_Redirecting _ inner =>
-    match inner.inner with
+  let self := match t.inner with
     | .T_SimpleCommand _ (cmd :: _) =>
       match getLiteralString cmd with
       | some name => [(t, name)]
-      | none => []
+      | Option.none => []
+    | .T_Redirecting _ inner =>
+      match inner.inner with
+      | .T_SimpleCommand _ (cmd :: _) =>
+        match getLiteralString cmd with
+        | some name => [(t, name)]
+        | Option.none => []
+      | _ => []
     | _ => []
-  | _ =>
-    let children := getTokenChildren t
-    children.flatMap findCommandInvocations
+  let children := getTokenChildren t
+  self ++ children.flatMap findCommandInvocations
 
 /-- Get token ID range for post-dominator analysis -/
 def getTokenIdRange (t : Token) : (Id × Id) :=
