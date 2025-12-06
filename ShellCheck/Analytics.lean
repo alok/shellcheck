@@ -690,14 +690,18 @@ where
     | _ => false
 
 /-- SC2128: Expanding an array without an index gives the first element -/
-def checkArrayWithoutIndex (_params : Parameters) (t : Token) : List TokenComment :=
+def checkArrayWithoutIndex (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_DollarBraced _ content =>
     let str := oversimplify content |>.foldl (· ++ ·) ""
+    let varName := ASTLib.getBracedReference str
     -- Check if it's an array variable without [@] or [*] or [n]
-    if isVariableName str && not (str.any (· == '[')) then
-      -- This is simplified - would need to track which vars are arrays
-      []
+    if isVariableName varName && not (str.any (· == '[')) then
+      -- Check if variable is known to be an array
+      if isArrayVariable params varName then
+        [makeComment .warningC t.id 2128
+          "Expanding an array without an index only gives the first element."]
+      else []
     else []
   | _ => []
 where
@@ -705,6 +709,11 @@ where
     match s.toList with
     | c :: _ => c.isAlpha || c == '_'
     | [] => false
+  isArrayVariable (params : Parameters) (name : String) : Bool :=
+    -- Check variable flow for array assignments
+    params.variableFlow.any fun
+      | .Assignment (_, _, n, .DataArray _) => n == name
+      | _ => false
 
 /-- SC2071: > is for string comparisons. Use -gt instead -/
 def checkNumberComparisons (_params : Parameters) (t : Token) : List TokenComment :=
@@ -1849,6 +1858,29 @@ where
     | some name => name ∈ ["echo", "printf", ":", "true"]  -- These usually succeed
     | Option.none => true
 
+/-- SC2166: Prefer [ p ] || [ q ] as [ p -o q ] is not well defined -/
+def checkTestAndOr (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ words =>
+    -- Check if this is a [ ] test command
+    match (words.head?, words.getLast?) with
+    | (some first, some last) =>
+      if getLiteralString first == some "[" && getLiteralString last == some "]" then
+        -- Look for -o or -a in the middle words
+        words.foldl (fun acc word =>
+          match getLiteralString word with
+          | some "-o" =>
+            (makeComment .warningC word.id 2166
+              "Prefer [ p ] || [ q ] as [ p -o q ] is not well defined.") :: acc
+          | some "-a" =>
+            (makeComment .warningC word.id 2166
+              "Prefer [ p ] && [ q ] as [ p -a q ] is not well defined.") :: acc
+          | _ => acc
+        ) []
+      else []
+    | _ => []
+  | _ => []
+
 /-- SC2060: Quote parameters to tr to prevent glob expansion -/
 def checkTrParams (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -2517,6 +2549,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkConcatenatedDollarAt,
   checkUnquotedExpansions,
   checkArrayAsString,
+  checkArrayWithoutIndex,  -- SC2128
   checkCommarrays,
   checkUnquotedVariables,
   checkSplittingInArrays,
@@ -2542,6 +2575,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkComparisonAgainstGlob,
   checkCaseAgainstGlob,
   checkBadTestAndOr,
+  checkTestAndOr,  -- SC2166
   checkComparisonOperators,
   checkSubshellAsTest,
   checkBackticksAsTest,

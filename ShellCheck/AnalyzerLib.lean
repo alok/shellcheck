@@ -504,14 +504,20 @@ partial def getModifiedVariablesImpl (t : Token) : List (Token × Token × Strin
     assigns.filterMap fun assign =>
       match assign.inner with
       | .T_Assignment _ name _ word =>
-        some (assign, assign, name, .DataString (.SourceFrom [word]))
+        let dataType := match word.inner with
+          | .T_Array _ => DataType.DataArray (.SourceFrom [word])
+          | _ => DataType.DataString (.SourceFrom [word])
+        some (assign, assign, name, dataType)
       | _ => none
   | .T_SimpleCommand assigns words =>
     -- Check for assignments in assigns list
     let assignVars := assigns.filterMap fun assign =>
       match assign.inner with
       | .T_Assignment _ name _ word =>
-        some (assign, assign, name, .DataString (.SourceFrom [word]))
+        let dataType := match word.inner with
+          | .T_Array _ => DataType.DataArray (.SourceFrom [word])
+          | _ => DataType.DataString (.SourceFrom [word])
+        some (assign, assign, name, dataType)
       | _ => none
     -- Also check for assignments in words list (simplified parser puts them there)
     let wordAssignVars := words.filterMap fun word =>
@@ -1239,6 +1245,7 @@ def couldBeFunctionReference (funcMap : Std.HashMap String Token) (t : Token) : 
 def makeParameters (spec : AnalysisSpec) : Parameters :=
   let root := spec.asScript
   let shell := spec.asShellType.getD (determineShell spec.asFallbackShell root)
+  let parentTree := getParentTree root
   let params : Parameters := {
     rootNode := root
     shellType := shell
@@ -1260,12 +1267,14 @@ def makeParameters (spec : AnalysisSpec) : Parameters :=
       | _ => false
     shellTypeSpecified := spec.asShellType.isSome || spec.asFallbackShell.isSome
     idMap := getTokenMap root
-    parentMap := getParentTree root
-    variableFlow := []  -- Would compute with getVariableFlow
+    parentMap := parentTree
+    variableFlow := []  -- Placeholder, computed below
     tokenPositions := spec.asTokenPositions
     cfgAnalysis := Option.none  -- Would compute if extended analysis enabled
   }
-  params
+  -- Now compute variable flow with the partial params (it only needs parentMap)
+  let flow := getVariableFlow params root
+  { params with variableFlow := flow }
 
 -- Theorems (stubs)
 

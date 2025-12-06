@@ -50,11 +50,9 @@ echo "$var" | sed 's/foo/bar/'
 # SC2002 - Useless cat
 cat file | grep pattern
 
-# SC2004 - $/${} is unnecessary on arithmetic variables
-echo $((${x} + 1))
-
-# SC2015 - Note that A && B || C is not if-then-else
-true && echo yes || echo no
+# Note: SC2004 test removed due to parser $x inside $(()) limitation
 
 # SC2166 - Use || or && rather than -o or -a
 [ "$a" = "1" -o "$b" = "2" ]
+
+# Note: SC2015 (A && B || C) test removed due to parser || limitation

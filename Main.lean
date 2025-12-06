@@ -108,9 +108,18 @@ def checkFile (filename : String) (debug : Bool := false) : IO UInt32 := do
           cs.take 10 |>.map fun cmd =>
             let cmdType := showToken cmd
             match cmd.inner with
-            | .T_SimpleCommand _ ws =>
+            | .T_SimpleCommand assigns ws =>
+              let assignStrs := assigns.map fun (a : ShellCheck.AST.Token) =>
+                match a.inner with
+                | .T_Assignment _ name _ val =>
+                  let valType := match val.inner with
+                    | .T_Array _ => "Array"
+                    | .T_Literal s => s!"Lit({s.take 10})"
+                    | _ => "other"
+                  s!"{name}={valType}"
+                | _ => "?"
               let wordStrs := ws.map showTokenFull
-              s!"{cmdType}[{String.intercalate ", " wordStrs}]"
+              s!"{cmdType}[assigns:{assignStrs}, words:{String.intercalate ", " wordStrs}]"
             | _ => cmdType
         | _ => ["not a script"]
       IO.eprintln s!"[DEBUG] Commands: {tokenTypes}"
