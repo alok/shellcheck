@@ -619,9 +619,10 @@ partial def checkShebangImpl (params : Parameters) (t : Token) : List TokenComme
   | .T_Script shebang _ =>
     match shebang.inner with
     | .T_Literal sb =>
+      -- Use shebang token's id for proper line 1 position
       let comments1 :=
         if sb.isEmpty && not params.shellTypeSpecified then
-          [makeComment .errorC t.id 2148
+          [makeComment .errorC shebang.id 2148
             "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive."]
         else []
       let comments2 :=

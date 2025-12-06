@@ -1270,29 +1270,179 @@ def isReservedKeyword : FullParser Bool := fun s =>
       else false
     .ok isReserved s
 
-/-- Read a simple command (assignments + words) -/
+/-- Read an array value: (elem1 elem2 ...) -/
+partial def readArrayFull : FullParser Token := do
+  let _ ← charFull '('
+  let elems ← readArrayElements []
+  let _ ← charFull ')'
+  mkTokenFull (.T_Array elems)
+where
+  readArrayElements (acc : List Token) : FullParser (List Token) := do
+    skipHSpaceFull
+    match ← peekFull with
+    | none => pure acc.reverse
+    | some ')' => pure acc.reverse
+    | some _ =>
+        let elem ← readWordFull
+        readArrayElements (elem :: acc)
+
+/-- Read an assignment: VAR=value or VAR=(array) or VAR+=value -/
+partial def readAssignmentFull : FullParser Token := do
+  -- Read variable name
+  let varName ← takeWhile1Full (fun c => variableChar c || c == '_')
+  -- Check for += or =
+  let isAppend ← match ← peekFull with
+    | some '+' =>
+        let _ ← charFull '+'
+        let _ ← charFull '='
+        pure true
+    | some '=' =>
+        let _ ← charFull '='
+        pure false
+    | _ => failure
+  -- Check if array assignment
+  let value ← match ← peekFull with
+    | some '(' => readArrayFull
+    | _ =>
+        -- Read value word (may be empty)
+        match ← optionalFull readWordFull with
+        | some v => pure v
+        | none => mkTokenFull (.T_Literal "")
+  let mode := if isAppend then AST.AssignmentMode.append else .assign
+  mkTokenFull (.T_Assignment mode varName [] value)
+
+/-- Read a simple command (assignments + words), with redirects -/
 partial def readSimpleCommandFull : FullParser Token := do
   skipHSpaceFull
   -- Don't parse reserved keywords as commands
   let reserved ← isReservedKeyword
   if reserved then failure
-  let words ← readWordsUntilSep []
-  if words.isEmpty then failure
-  else mkTokenFull (.T_SimpleCommand [] words)
+  let (assigns, words, redirects) ← readAssignsWordsAndRedirects [] [] []
+  if assigns.isEmpty && words.isEmpty && redirects.isEmpty then failure
+  else
+    let cmd ← mkTokenFull (.T_SimpleCommand assigns words)
+    if redirects.isEmpty then
+      pure cmd
+    else
+      mkTokenFull (.T_Redirecting redirects cmd)
 where
-  readWordsUntilSep (acc : List Token) : FullParser (List Token) := do
+  -- First read assignments, then words and redirects
+  readAssignsWordsAndRedirects (assignAcc : List Token) (wordAcc : List Token) (redirAcc : List Token)
+      : FullParser (List Token × List Token × List Token) := do
     skipHSpaceFull
     match ← peekFull with
-    | none => pure acc.reverse
+    | none => pure (assignAcc.reverse, wordAcc.reverse, redirAcc.reverse)
     | some c =>
+        -- Check for command terminators
         if c == '\n' || c == ';' || c == '&' || c == '|' || c == ')' || c == '}' then
-          pure acc.reverse
+          pure (assignAcc.reverse, wordAcc.reverse, redirAcc.reverse)
         else if c == '#' then
           let _ ← takeWhileFull (· != '\n')
-          pure acc.reverse
+          pure (assignAcc.reverse, wordAcc.reverse, redirAcc.reverse)
+        -- Check for redirects: >, >>, <, <<, etc.
+        else if c == '>' || c == '<' then
+          let redir ← readRedirectFull
+          readAssignsWordsAndRedirects assignAcc wordAcc (redir :: redirAcc)
+        -- Check for fd redirect like 2>, 1>&2
+        else if c.isDigit then
+          match ← optionalFull (attemptFull readFdRedirectFull) with
+          | some redir => readAssignsWordsAndRedirects assignAcc wordAcc (redir :: redirAcc)
+          | none =>
+              -- Not a fd redirect, could be assignment or word
+              if wordAcc.isEmpty then
+                -- Still in assignment phase, try reading an assignment
+                match ← optionalFull (attemptFull readAssignmentFull) with
+                | some assign => readAssignsWordsAndRedirects (assign :: assignAcc) wordAcc redirAcc
+                | none =>
+                    let word ← readWordFull
+                    readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
+              else
+                let word ← readWordFull
+                readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
         else
-          let word ← readWordFull
-          readWordsUntilSep (word :: acc)
+          -- Could be an assignment or a word
+          if wordAcc.isEmpty then
+            -- Still in assignment phase, try reading an assignment
+            match ← optionalFull (attemptFull readAssignmentFull) with
+            | some assign => readAssignsWordsAndRedirects (assign :: assignAcc) wordAcc redirAcc
+            | none =>
+                let word ← readWordFull
+                readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
+          else
+            let word ← readWordFull
+            readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
+
+  /-- Read a redirect operator and its target -/
+  readRedirectFull : FullParser Token := do
+    let opStart ← peekFull
+    let op ← match opStart with
+      | some '>' =>
+          let _ ← charFull '>'
+          match ← peekFull with
+          | some '>' =>
+              let _ ← charFull '>'
+              pure ">>"
+          | some '&' =>
+              let _ ← charFull '&'
+              pure ">&"
+          | some '|' =>
+              let _ ← charFull '|'
+              pure ">|"
+          | _ => pure ">"
+      | some '<' =>
+          let _ ← charFull '<'
+          match ← peekFull with
+          | some '<' =>
+              let _ ← charFull '<'
+              match ← peekFull with
+              | some '-' =>
+                  let _ ← charFull '-'
+                  pure "<<-"
+              | _ => pure "<<"
+          | some '>' =>
+              let _ ← charFull '>'
+              pure "<>"
+          | some '&' =>
+              let _ ← charFull '&'
+              pure "<&"
+          | _ => pure "<"
+      | _ => failure
+    let opTok ← mkTokenFull (.T_Literal op)
+    skipHSpaceFull
+    -- Handle here-doc specially
+    if op == "<<" || op == "<<-" then
+      -- For here-doc, just read the delimiter word for now
+      let target ← readWordFull
+      mkTokenFull (.T_IoFile opTok target)
+    else
+      -- For file redirects, read the target
+      match ← peekFull with
+      | some '-' =>
+          -- Close fd: >&- or <&-
+          let _ ← charFull '-'
+          let target ← mkTokenFull (.T_Literal "-")
+          mkTokenFull (.T_IoFile opTok target)
+      | some c =>
+          if c.isDigit && (op == ">&" || op == "<&") then
+            -- Dup fd: >&2, <&0
+            let fd ← takeWhile1Full Char.isDigit
+            let target ← mkTokenFull (.T_Literal fd)
+            mkTokenFull (.T_IoDuplicate opTok fd)
+          else
+            let target ← readWordFull
+            mkTokenFull (.T_IoFile opTok target)
+      | none => failure
+
+  /-- Read a fd redirect like 2>, 2>>, 2>&1 -/
+  readFdRedirectFull : FullParser Token := do
+    let fd ← takeWhile1Full Char.isDigit
+    let opStart ← peekFull
+    if opStart != some '>' && opStart != some '<' then failure
+    let fdTok ← mkTokenFull (.T_Literal fd)
+    let redir ← readRedirectFull
+    -- The redir is already a T_IoFile, we need to incorporate the fd
+    -- For simplicity, just return the redirect (fd prefix is informational)
+    pure redir
 
 /-- Read a pipe sequence: cmd | cmd | cmd -/
 partial def readPipeSequenceFull : FullParser Token := do
@@ -2117,16 +2267,23 @@ partial def readCommandFull : FullParser Token := do
 
 /-- Read a complete script -/
 def readScriptFull : FullParser Token := do
-  skipAllSpaceFull
+  -- Don't skip whitespace first - shebang must be at very start
   -- Check for shebang
-  let shebang ← match ← peekFull with
+  let firstChar ← peekFull
+  let shebang ← match firstChar with
     | some '#' =>
-        match ← optionalFull (stringFull "#!") with
-        | some _ =>
+        let secondChar ← do
+          let _ ← anyCharFull  -- consume #
+          peekFull
+        match secondChar with
+        | some '!' =>
+            let _ ← anyCharFull  -- consume !
             let line ← takeWhileFull (· != '\n')
+            let _ ← optionalFull (charFull '\n')
             mkTokenFull (.T_Literal ("#!" ++ line))
-        | none =>
-            let _ ← takeWhileFull (· != '\n')
+        | _ =>
+            -- Just a comment, not a shebang - but we already consumed #
+            let line ← takeWhileFull (· != '\n')
             let _ ← optionalFull (charFull '\n')
             mkTokenFull (.T_Literal "")
     | _ =>

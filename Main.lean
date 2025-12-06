@@ -70,7 +70,7 @@ def checkFile (filename : String) (debug : Bool := false) : IO UInt32 := do
       psIgnoreRC := true
       psShellTypeOverride := none
     }
-    let parseResult ← ShellCheck.Parser.parseScript ioSystemInterface parseSpec
+    let parseResult ← ShellCheck.Parser.parseScriptFull ioSystemInterface parseSpec
     IO.eprintln s!"[DEBUG] Parse result has root: {parseResult.prRoot.isSome}"
     IO.eprintln s!"[DEBUG] Token positions count: {parseResult.prTokenPositions.size}"
     -- Dump first few tokens
@@ -92,13 +92,24 @@ def checkFile (filename : String) (debug : Bool := false) : IO UInt32 := do
         | .T_BraceGroup _ => "T_BraceGroup"
         | .T_Redirecting _ _ => "T_Redirecting"
         | _ => "other"
+      -- Helper to show token with nested structure (non-recursive for simplicity)
+      let showTokenFull (t : ShellCheck.AST.Token) : String :=
+        match t.inner with
+        | .T_NormalWord parts => s!"T_NormalWord({parts.length} parts)"
+        | .T_DollarBraced _ inner =>
+            match inner.inner with
+            | .T_Literal s => s!"T_DollarBraced({s.take 20})"
+            | _ => "T_DollarBraced(?)"
+        | .T_Literal s => s!"T_Literal({s.take 20})"
+        | .T_DoubleQuoted parts => s!"T_DoubleQuoted({parts.length} parts)"
+        | _ => showToken t
       let tokenTypes := match root.inner with
         | .T_Script _ cs =>
           cs.take 10 |>.map fun cmd =>
             let cmdType := showToken cmd
             match cmd.inner with
             | .T_SimpleCommand _ ws =>
-              let wordStrs := ws.map showToken
+              let wordStrs := ws.map showTokenFull
               s!"{cmdType}[{String.intercalate ", " wordStrs}]"
             | _ => cmdType
         | _ => ["not a script"]
