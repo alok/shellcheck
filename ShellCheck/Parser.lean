@@ -14,6 +14,7 @@ import ShellCheck.Parser.Ext
 import ShellCheck.Parser.Core
 import ShellCheck.Parser.Lexer
 import ShellCheck.Parser.Word
+import ShellCheck.Parser.Arithmetic
 
 namespace ShellCheck.Parser
 
@@ -674,7 +675,10 @@ partial def readDollarExpr (mkTok : InnerToken Token → Nat → Nat → TokenBu
           let _ ← charM '('
           let content ← takeUntilM "))"
           let _ ← stringM "))"
-          let inner ← mkTok (.T_Literal content) line col
+          -- Parse arithmetic expression properly
+          let inner := match Arithmetic.parse content with
+            | some arithToken => arithToken
+            | none => ⟨⟨0⟩, .T_Literal content⟩  -- Fallback to literal
           mkTok (.T_DollarArithmetic inner) line col
       | _ =>
           -- $( command )
@@ -887,6 +891,21 @@ def optionalFull (p : FullParser α) : FullParser (Option α) := fun s =>
   | .ok a s' => .ok (some a) s'
   | .error _ _ => .ok none s
 
+/-- Lookahead: run parser but don't consume input -/
+def lookAheadFull (p : FullParser α) : FullParser (Option α) := fun s =>
+  match p s with
+  | .ok a _ => .ok (some a) s  -- Return original state
+  | .error _ _ => .ok none s
+
+/-- Peek at the next n characters without consuming -/
+def peekStringFull (n : Nat) : FullParser String := fun s =>
+  let (result, _) := (List.range n).foldl (fun (acc, pos) _ =>
+    if pos < s.input.rawEndPos then
+      (acc.push (pos.get s.input), pos.next s.input)
+    else (acc, pos)
+  ) ("", s.pos)
+  .ok result s
+
 /-- Create a token with current position -/
 def mkTokenFull (inner : InnerToken Token) : FullParser Token := do
   let (line, col) ← currentPos
@@ -1001,7 +1020,10 @@ where
             let _ ← charFull '('
             let content ← readUntilStr "))"
             let _ ← stringFull "))"
-            let inner ← mkTokenFull (.T_Literal content)
+            -- Parse arithmetic expression properly
+            let inner := match Arithmetic.parse content with
+              | some arithToken => arithToken
+              | none => ⟨⟨0⟩, .T_Literal content⟩  -- Fallback to literal on parse error
             mkTokenFull (.T_DollarArithmetic inner)
         | _ =>
             let content ← readUntilStr ")"
@@ -1108,7 +1130,10 @@ where
             let _ ← charFull '('
             let content ← readArithContent
             let _ ← stringFull "))"
-            let inner ← mkTokenFull (.T_Literal content)
+            -- Parse arithmetic expression properly
+            let inner := match Arithmetic.parse content with
+              | some arithToken => arithToken
+              | none => ⟨⟨0⟩, .T_Literal content⟩  -- Fallback to literal
             mkTokenFull (.T_DollarArithmetic inner)
         | _ =>
             let content ← readSubshellContent
@@ -1151,11 +1176,13 @@ where
       | none => pure (String.ofList acc.reverse)
       | some ')' =>
           if depth == 0 then
-            match ← optionalFull (stringFull "))") with
-            | some _ => pure (String.ofList acc.reverse)
-            | none =>
-                let _ ← anyCharFull
-                go (')' :: acc) depth
+            -- Peek ahead to check for )) without consuming
+            let next2 ← peekStringFull 2
+            if next2 == "))" then
+              pure (String.ofList acc.reverse)  -- Stop without consuming ))
+            else
+              let _ ← anyCharFull
+              go (')' :: acc) depth
           else
             let _ ← anyCharFull
             go (')' :: acc) (depth - 1)
@@ -1824,14 +1851,16 @@ where
     skipHSpaceFull
     match ← peekFull with
     | some '|' =>
-        match ← optionalFull (stringFull "||") with
-        | some _ => pure (seps.reverse, cmds.reverse)  -- This is || not |
-        | none =>
-            let pipeStr ← readPipeOpInPipe
-            let sepTok ← mkTokenFull (.T_Pipe pipeStr)
-            skipAllSpaceFull
-            let cmd ← readPipeCommandFull
-            readPipeContinuationInPipe (sepTok :: seps) (cmd :: cmds)
+        -- Use lookahead to check for || without consuming it
+        let next2 ← peekStringFull 2
+        if next2 == "||" then
+          pure (seps.reverse, cmds.reverse)  -- This is || not |, don't consume
+        else
+          let pipeStr ← readPipeOpInPipe
+          let sepTok ← mkTokenFull (.T_Pipe pipeStr)
+          skipAllSpaceFull
+          let cmd ← readPipeCommandFull
+          readPipeContinuationInPipe (sepTok :: seps) (cmd :: cmds)
     | _ => pure (seps.reverse, cmds.reverse)
 
   readPipeOpInPipe : FullParser String := do
@@ -1846,14 +1875,16 @@ where
     skipHSpaceFull
     match ← peekFull with
     | some '|' =>
-        match ← optionalFull (stringFull "||") with
-        | some _ => pure (seps.reverse, cmds.reverse)  -- This is || not |
-        | none =>
-            let pipeStr ← readPipeOpFull
-            let sepTok ← mkTokenFull (.T_Pipe pipeStr)
-            skipAllSpaceFull
-            let cmd ← readPipeCommandFull
-            readPipeContinuation (sepTok :: seps) (cmd :: cmds)
+        -- Use lookahead to check for || without consuming it
+        let next2 ← peekStringFull 2
+        if next2 == "||" then
+          pure (seps.reverse, cmds.reverse)  -- This is || not |, don't consume
+        else
+          let pipeStr ← readPipeOpFull
+          let sepTok ← mkTokenFull (.T_Pipe pipeStr)
+          skipAllSpaceFull
+          let cmd ← readPipeCommandFull
+          readPipeContinuation (sepTok :: seps) (cmd :: cmds)
     | _ => pure (seps.reverse, cmds.reverse)
 
   readPipeOpFull : FullParser String := do
@@ -1889,7 +1920,8 @@ where
             let right ← readPipelineFull
             let combined ← mkTokenFull (.T_AndIf left right)
             readAndOrContinuation combined
-        | none => pure left
+        | none =>
+            pure left
     | some '|' =>
         match ← optionalFull (stringFull "||") with
         | some _ =>
@@ -1897,8 +1929,10 @@ where
             let right ← readPipelineFull
             let combined ← mkTokenFull (.T_OrIf left right)
             readAndOrContinuation combined
-        | none => pure left
-    | _ => pure left
+        | none =>
+            pure left
+    | _ =>
+        pure left
 
 /-- Read a term: and-or ((;|&|newline) and-or)* -/
 partial def readTermFull : FullParser (List Token) := do
