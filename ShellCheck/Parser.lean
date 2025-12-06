@@ -1288,6 +1288,8 @@ where
 
 /-- Read an assignment: VAR=value or VAR=(array) or VAR+=value -/
 partial def readAssignmentFull : FullParser Token := do
+  -- Capture position at the START of the assignment
+  let (startLine, startCol) ← currentPos
   -- Read variable name
   let varName ← takeWhile1Full (fun c => variableChar c || c == '_')
   -- Check for += or =
@@ -1309,7 +1311,10 @@ partial def readAssignmentFull : FullParser Token := do
         | some v => pure v
         | none => mkTokenFull (.T_Literal "")
   let mode := if isAppend then AST.AssignmentMode.append else .assign
-  mkTokenFull (.T_Assignment mode varName [] value)
+  -- Create token at the START position
+  let id ← freshIdFull
+  recordPosition id startLine startCol startLine startCol
+  return ⟨id, .T_Assignment mode varName [] value⟩
 
 /-- Read a simple command (assignments + words), with redirects -/
 partial def readSimpleCommandFull : FullParser Token := do

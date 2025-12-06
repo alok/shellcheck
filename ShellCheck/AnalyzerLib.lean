@@ -353,6 +353,14 @@ def isQuoteFreeContext (strict : Bool) (t : Token) : Option Bool :=
   -- When non-strict, pragmatically assume it's desirable to split here
   | .T_ForIn _ _ _ => some (not strict)
   | .T_SelectIn _ _ _ => some (not strict)
+  -- Handle [[ ]] that was parsed as T_SimpleCommand (workaround for parser limitation)
+  | .T_SimpleCommand _ words =>
+    match words.head? with
+    | some firstWord =>
+      match firstWord.inner with
+      | .T_Literal s => if s == "[[" then some true else none
+      | _ => none
+    | none => none
   | _ => none
 
 /-- Check if token is in a quote-free context by walking up parent tree -/

@@ -222,15 +222,19 @@ def checkUnusedAssignments (params : Parameters) (t : Token) : List TokenComment
   let flow := getVariableFlow params t
   let assigned := getAssignedVariables flow
   let referenced := getReferencedVariables flow
+  -- Get the last assignment for each variable (only report on last assignment)
+  -- Using foldr so later assignments overwrite earlier ones
+  let lastAssignments := assigned.foldr (fun (tok, name, dt) acc =>
+    acc.insert name (tok, dt)) ({} : Std.HashMap String (Token × DataType))
   -- Find variables that are assigned but never referenced
-  assigned.filterMap fun (token, name, dataType) =>
+  lastAssignments.fold (init := []) fun acc name (token, dataType) =>
     -- Skip special variables and exports
     if isSpecialVar name || not (isTrueAssignmentSource dataType) then
-      Option.none
+      acc
     else if not (referenced.any fun (_, n) => n == name) then
-      some (makeComment .warningC token.id 2034
-        s!"{name} appears unused. Verify use (or export if used externally).")
-    else Option.none
+      (makeComment .warningC token.id 2034
+        s!"{name} appears unused. Verify use (or export if used externally).") :: acc
+    else acc
 where
   getAssignedVariables (flow : List StackData) : List (Token × String × DataType) :=
     flow.filterMap fun s =>
