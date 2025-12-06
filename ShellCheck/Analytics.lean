@@ -208,12 +208,12 @@ def checkArithmeticDeref (_params : Parameters) (t : Token) : List TokenComment 
 /-- SC2006: Use $(...) notation instead of legacy backticked `...` -/
 def checkBackticks (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_Backticked _ => [makeComment .styleC t.id 2006
+  | .T_Backticked _ => [makeComment .infoC t.id 2006
       "Use $(...) notation instead of legacy backticked `...`."]
   | .T_Literal s =>
       -- Also check for backticks in literal strings (simplified parser puts them there)
       if s.any (· == '`') then
-        [makeComment .styleC t.id 2006 "Use $(...) notation instead of legacy backticked `...`."]
+        [makeComment .infoC t.id 2006 "Use $(...) notation instead of legacy backticked `...`."]
       else []
   | _ => []
 
@@ -344,20 +344,25 @@ def checkArrayExpansions (_params : Parameters) (t : Token) : List TokenComment 
   | .T_DollarBraced _ content =>
     let str := oversimplify content |>.foldl (· ++ ·) ""
     if str.endsWith "[@]" || str.endsWith "[*]" then
-      [makeComment .warningC t.id 2068 "Double quote array expansions to avoid re-splitting elements."]
+      [makeComment .errorC t.id 2068 "Double quote array expansions to avoid re-splitting elements."]
     else []
   | _ => []
 
-/-- SC2115: Use "${var:?}" to ensure this never expands to /* -/
+/-- SC2115: Use "${var:?}" to ensure this never expands to /*
+    NOTE: This check requires parser fix - currently parser drops text after
+    variable expansion in words (e.g., $dir/ becomes just $dir) -/
 def checkRmGlob (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_SimpleCommand _ words =>
     if isCommand t "rm" then
       words.filterMap fun word =>
-        let str := getLiteralString word |>.getD ""
-        if str.endsWith "/$" || str.endsWith "/*" then
+        -- Oversimplify to see the pattern: $dir/ becomes ${VAR}/
+        let simplified := String.join (oversimplify word)
+        -- Check for patterns like ${VAR}/ or ${VAR}/*
+        -- TODO: Parser bug - text after variable expansion is lost
+        if Regex.containsSubstring simplified "${VAR}/" then
           some (makeComment .warningC word.id 2115
-            "Use \"${var:?}\" to ensure this never expands to /* .")
+            "Use \"${var:?}\" to ensure this never expands to / .")
         else none
     else []
   | _ => []
@@ -650,7 +655,7 @@ def checkReadWithoutR (_params : Parameters) (t : Token) : List TokenComment :=
     if isCommand t "read" then
       let args := words.flatMap oversimplify
       if not (args.any fun s => s == "-r" || (s.startsWith "-" && s.any (· == 'r'))) then
-        [makeComment .warningC t.id 2162 "read without -r will mangle backslashes."]
+        [makeComment .infoC t.id 2162 "read without -r will mangle backslashes."]
       else []
     else []
   | _ => []
@@ -2467,7 +2472,7 @@ def checkSpacefulnessCfg (params : Parameters) (t : Token) : List TokenComment :
 
 -- All node checks
 def nodeChecks : List (Parameters → Token → List TokenComment) := [
-  checkUnquotedDollarAt,
+  -- Note: checkUnquotedDollarAt removed to avoid duplicate SC2086 (covered by checkUnquotedVariables)
   checkForInQuoted,
   checkForInLs,
   checkShorthandIf,
@@ -2579,7 +2584,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkDollarDollar,
   checkBracketSpacing,
   checkDollarBraceExpansionInCommand,
-  checkUnquotedVariable,
+  -- Note: checkUnquotedVariable removed to avoid duplicate SC2086 (covered by checkUnquotedVariables)
   checkBashAsLogin,
   -- CFG-aware checks
   checkSpacefulnessCfg
