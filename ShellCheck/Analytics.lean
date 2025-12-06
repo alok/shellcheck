@@ -750,7 +750,8 @@ where
 def checkDecimalComparisons (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .TC_Binary _ op lhs rhs =>
-    if op ∈ ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"] then
+    -- Check both numeric comparison ops and string comparison ops (< > in [[]])
+    if op ∈ ["-eq", "-ne", "-lt", "-le", "-gt", "-ge", "<", ">", "<=", ">="] then
       let lhsDecimal := hasDecimal lhs
       let rhsDecimal := hasDecimal rhs
       if lhsDecimal || rhsDecimal then
