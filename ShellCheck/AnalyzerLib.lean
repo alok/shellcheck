@@ -356,6 +356,10 @@ def isQuoteFreeContext (strict : Bool) (t : Token) : Option Bool :=
   | .T_CaseExpression _ _ => some true
   | .T_HereDoc _ _ _ _ => some true
   | .T_DollarBraced _ _ => some true
+  -- Command substitutions create a new context that is NOT quote-free
+  -- Even if the substitution is inside an assignment, variables inside it need quoting
+  | .T_DollarExpansion _ => some false
+  | .T_Backticked _ => some false
   -- When non-strict, pragmatically assume it's desirable to split here
   | .T_ForIn _ _ _ => some (not strict)
   | .T_SelectIn _ _ _ => some (not strict)

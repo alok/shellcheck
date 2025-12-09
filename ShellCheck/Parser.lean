@@ -2361,6 +2361,104 @@ def readScriptFull : FullParser Token := do
   skipAllSpaceFull
   mkTokenFull (.T_Script shebang commands)
 
+/-- Parse a string as commands (for subshell content) -/
+def parseSubshellContent (content : String) (filename : String) (startId : Nat) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
+  let initState : FullParserState := {
+    input := content
+    pos := 0
+    line := 1
+    column := 1
+    nextId := startId
+    positions := {}
+    filename := filename
+    errors := []
+  }
+  match readTermFull initState with
+  | .ok tokens s => (tokens, s.nextId, s.positions)
+  | .error _ s =>
+      -- On parse error, return a literal token
+      let litTok : Token := ⟨⟨startId⟩, .T_Literal content⟩
+      ([litTok], startId + 1, s.positions)
+
+/-- Post-process to recursively parse $() content -/
+partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat) : (Token × Nat × Std.HashMap Id (Position × Position)) :=
+  match t.inner with
+  | .T_DollarExpansion children =>
+      -- Check if children are just a literal that needs reparsing
+      match children with
+      | [child] =>
+          match child.inner with
+          | .T_Literal content =>
+              -- This is unparsed content - parse it now
+              let (parsedCmds, newNextId, newPositions) := parseSubshellContent content filename nextId
+              -- Recursively expand any nested $() in the parsed commands
+              let (expandedCmds, finalNextId, allPositions) := parsedCmds.foldl (init := ([], newNextId, newPositions))
+                fun (acc, nid, pos) cmd =>
+                  let (expCmd, newNid, newPos) := expandDollarExpansions cmd filename nid
+                  (acc ++ [expCmd], newNid, pos.fold (init := newPos) fun m k v => m.insert k v)
+              (⟨t.id, .T_DollarExpansion expandedCmds⟩, finalNextId, allPositions)
+          | _ =>
+              -- Already parsed, just recurse into children
+              let (expanded, newNextId, positions) := expandChildren children filename nextId
+              (⟨t.id, .T_DollarExpansion expanded⟩, newNextId, positions)
+      | _ =>
+          -- Multiple children, already parsed, just recurse
+          let (expanded, newNextId, positions) := expandChildren children filename nextId
+          (⟨t.id, .T_DollarExpansion expanded⟩, newNextId, positions)
+  | .T_Script shebang cmds =>
+      let (expanded, newNextId, positions) := expandChildren cmds filename nextId
+      (⟨t.id, .T_Script shebang expanded⟩, newNextId, positions)
+  | .T_Pipeline seps cmds =>
+      let (expandedSeps, nid1, pos1) := expandChildren seps filename nextId
+      let (expandedCmds, nid2, pos2) := expandChildren cmds filename nid1
+      (⟨t.id, .T_Pipeline expandedSeps expandedCmds⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
+  | .T_Redirecting redirs cmd =>
+      let (expandedRedirs, nid1, pos1) := expandChildren redirs filename nextId
+      let (expandedCmd, nid2, pos2) := expandDollarExpansions cmd filename nid1
+      (⟨t.id, .T_Redirecting expandedRedirs expandedCmd⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
+  | .T_SimpleCommand assigns words =>
+      let (expandedAssigns, nid1, pos1) := expandChildren assigns filename nextId
+      let (expandedWords, nid2, pos2) := expandChildren words filename nid1
+      (⟨t.id, .T_SimpleCommand expandedAssigns expandedWords⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
+  | .T_NormalWord parts =>
+      let (expanded, newNextId, positions) := expandChildren parts filename nextId
+      (⟨t.id, .T_NormalWord expanded⟩, newNextId, positions)
+  | .T_DoubleQuoted parts =>
+      let (expanded, newNextId, positions) := expandChildren parts filename nextId
+      (⟨t.id, .T_DoubleQuoted expanded⟩, newNextId, positions)
+  | .T_Assignment mode name indices val =>
+      let (expandedVal, newNextId, positions) := expandDollarExpansions val filename nextId
+      (⟨t.id, .T_Assignment mode name indices expandedVal⟩, newNextId, positions)
+  | .T_BraceGroup cmds =>
+      let (expanded, newNextId, positions) := expandChildren cmds filename nextId
+      (⟨t.id, .T_BraceGroup expanded⟩, newNextId, positions)
+  | .T_Subshell cmds =>
+      let (expanded, newNextId, positions) := expandChildren cmds filename nextId
+      (⟨t.id, .T_Subshell expanded⟩, newNextId, positions)
+  | .T_AndIf t1 t2 =>
+      let (exp1, nid1, pos1) := expandDollarExpansions t1 filename nextId
+      let (exp2, nid2, pos2) := expandDollarExpansions t2 filename nid1
+      (⟨t.id, .T_AndIf exp1 exp2⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
+  | .T_OrIf t1 t2 =>
+      let (exp1, nid1, pos1) := expandDollarExpansions t1 filename nextId
+      let (exp2, nid2, pos2) := expandDollarExpansions t2 filename nid1
+      (⟨t.id, .T_OrIf exp1 exp2⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
+  | .T_Backgrounded inner =>
+      let (expanded, newNextId, positions) := expandDollarExpansions inner filename nextId
+      (⟨t.id, .T_Backgrounded expanded⟩, newNextId, positions)
+  | .T_Function kw parens name body =>
+      let (expanded, newNextId, positions) := expandDollarExpansions body filename nextId
+      (⟨t.id, .T_Function kw parens name expanded⟩, newNextId, positions)
+  | .T_Backticked cmds =>
+      let (expanded, newNextId, positions) := expandChildren cmds filename nextId
+      (⟨t.id, .T_Backticked expanded⟩, newNextId, positions)
+  | _ => (t, nextId, {})
+where
+  expandChildren (children : List Token) (filename : String) (nextId : Nat) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
+    children.foldl (init := ([], nextId, {})) fun (acc, nid, pos) child =>
+      let (expanded, newNid, newPos) := expandDollarExpansions child filename nid
+      (acc ++ [expanded], newNid, pos.fold (init := newPos) fun m k v => m.insert k v)
+
 /-- Run the full parser on a script -/
 def runFullParser (script : String) (filename : String := "<stdin>") : (Option Token × Std.HashMap Id (Position × Position) × List String) :=
   let initState : FullParserState := {
@@ -2374,7 +2472,12 @@ def runFullParser (script : String) (filename : String := "<stdin>") : (Option T
     errors := []
   }
   match readScriptFull initState with
-  | .ok tok s => (some tok, s.positions, s.errors)
+  | .ok tok s =>
+      -- Post-process to expand $() content
+      let (expanded, _finalId, extraPositions) := expandDollarExpansions tok filename s.nextId
+      -- Merge extra positions (from sub-parsing) into original positions
+      let allPositions := extraPositions.fold (init := s.positions) fun m k v => m.insert k v
+      (some expanded, allPositions, s.errors)
   | .error msg s => (none, s.positions, msg :: s.errors)
 
 /-- Enhanced parseScript using full parser -/
