@@ -1511,7 +1511,20 @@ where
                 else
                   let isFunction ← peekKeyword "function"
                   if isFunction then readFunctionInPipe
-                  else readSimpleCommandFull
+                  else
+                    -- Try POSIX function syntax: name() { body }
+                    match ← optionalFull (attemptFull readPosixFunctionInPipe) with
+                    | some func => pure func
+                    | none => readSimpleCommandFull
+
+  /-- Read a POSIX function definition in pipe context: name() { body } -/
+  readPosixFunctionInPipe : FullParser Token := do
+    let name ← takeWhile1Full (fun c => variableChar c || c == '-' || c == '.')
+    skipHSpaceFull
+    let _ ← stringFull "()"
+    skipAllSpaceFull
+    let body ← readBraceGroupInPipe
+    mkTokenFull (.T_Function ⟨false⟩ ⟨true⟩ name body)
 
   -- Forward declarations for compound commands in pipe
   readBraceGroupInPipe : FullParser Token := do
@@ -1718,7 +1731,7 @@ where
     | _ => pure (pat :: acc).reverse
 
   readCaseBodyInPipe (acc : List Token) (termType : CaseType) : FullParser (List Token × CaseType) := do
-    skipHSpaceFull
+    skipAllSpaceFull  -- Skip newlines and spaces
     match ← peekFull with
     | none => pure (acc.reverse, termType)
     | some ';' =>
@@ -2185,7 +2198,7 @@ where
     | _ => pure (pat :: acc).reverse
 
   readCaseBody (acc : List Token) (termType : CaseType) : FullParser (List Token × CaseType) := do
-    skipHSpaceFull
+    skipAllSpaceFull  -- Skip newlines and spaces
     match ← peekFull with
     | none => pure (acc.reverse, termType)
     | some ';' =>
@@ -2268,6 +2281,17 @@ partial def readFunctionFull : FullParser Token := do
     mkTokenFull (.T_Function ⟨true⟩ ⟨false⟩ name body)
   else failure
 
+/-- Read a POSIX function definition: name() { body } -/
+partial def readPosixFunctionFull : FullParser Token := do
+  -- Read function name (must be valid identifier)
+  let name ← takeWhile1Full (fun c => variableChar c || c == '-' || c == '.')
+  -- Must be followed by ()
+  skipHSpaceFull
+  let _ ← stringFull "()"
+  skipAllSpaceFull
+  let body ← readBraceGroupFull
+  mkTokenFull (.T_Function ⟨false⟩ ⟨true⟩ name body)
+
 /-- Read any command (compound or simple) -/
 partial def readCommandFull : FullParser Token := do
   skipHSpaceFull
@@ -2302,7 +2326,11 @@ partial def readCommandFull : FullParser Token := do
                 else
                   let isFunction ← peekKeyword "function"
                   if isFunction then readFunctionFull
-                  else readSimpleCommandFull
+                  else
+                    -- Try POSIX function syntax: name() { body }
+                    match ← optionalFull (attemptFull readPosixFunctionFull) with
+                    | some func => pure func
+                    | none => readSimpleCommandFull
 
 /-- Read a complete script -/
 def readScriptFull : FullParser Token := do

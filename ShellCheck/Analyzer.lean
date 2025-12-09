@@ -50,9 +50,8 @@ def runAnalysis (a : Analysis) (params : Parameters) : List TokenComment :=
 def analyzeScript (spec : AnalysisSpec) : AnalysisResult :=
   let params := makeParameters spec
   let checker := checkers spec params
-  -- Run the checker and collect comments
-  let root : Root := ⟨spec.asScript⟩
-  let comments := runAnalysis (checker.perScript root) params
+  -- Run the checker on ALL tokens using runChecker for full AST traversal
+  let comments := runChecker params checker
   -- Filter by annotations
   let filtered := filterByAnnotation spec params comments
   { newAnalysisResult with arComments := filtered }
