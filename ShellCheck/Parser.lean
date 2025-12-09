@@ -913,6 +913,13 @@ def mkTokenFull (inner : InnerToken Token) : FullParser Token := do
   recordPosition id line col line col
   return ⟨id, inner⟩
 
+/-- Create a token with explicit start position -/
+def mkTokenFullAt (inner : InnerToken Token) (startLine startCol : Nat) : FullParser Token := do
+  let (endLine, endCol) ← currentPos
+  let id ← freshIdFull
+  recordPosition id startLine startCol endLine endCol
+  return ⟨id, inner⟩
+
 /-- Skip horizontal whitespace in full parser -/
 partial def skipHSpaceFull : FullParser Unit := do
   let _ ← takeWhileFull (fun c => c == ' ' || c == '\t')
@@ -992,8 +999,9 @@ where
             readDQParts (tok :: acc)
         | none => pure acc.reverse
     | some '$' =>
+        let (startLine, startCol) ← currentPos
         let _ ← anyCharFull
-        let tok ← readDollarInDQ
+        let tok ← readDollarInDQ startLine startCol
         readDQParts (tok :: acc)
     | some '`' =>
         let tok ← readBacktickFull
@@ -1005,14 +1013,14 @@ where
           let tok ← mkTokenFull (.T_Literal lit)
           readDQParts (tok :: acc)
 
-  readDollarInDQ : FullParser Token := do
+  readDollarInDQ (startLine startCol : Nat) : FullParser Token := do
     match ← peekFull with
     | some '{' =>
         let _ ← charFull '{'
         let content ← takeWhileFull (· != '}')
         let _ ← charFull '}'
         let inner ← mkTokenFull (.T_Literal content)
-        mkTokenFull (.T_DollarBraced true inner)
+        mkTokenFullAt (.T_DollarBraced true inner) startLine startCol
     | some '(' =>
         let _ ← charFull '('
         match ← peekFull with
@@ -1024,25 +1032,25 @@ where
             let inner := match Arithmetic.parse content with
               | some arithToken => arithToken
               | none => ⟨⟨0⟩, .T_Literal content⟩  -- Fallback to literal on parse error
-            mkTokenFull (.T_DollarArithmetic inner)
+            mkTokenFullAt (.T_DollarArithmetic inner) startLine startCol
         | _ =>
             let content ← readUntilStr ")"
             let _ ← charFull ')'
             let inner ← mkTokenFull (.T_Literal content)
-            mkTokenFull (.T_DollarExpansion [inner])
+            mkTokenFullAt (.T_DollarExpansion [inner]) startLine startCol
     | some c =>
         if variableStartChar c then
           let name ← takeWhile1Full variableChar
           let inner ← mkTokenFull (.T_Literal name)
-          mkTokenFull (.T_DollarBraced false inner)
+          mkTokenFullAt (.T_DollarBraced false inner) startLine startCol
         else if specialVariableChars.toList.contains c then
           let _ ← anyCharFull
           let inner ← mkTokenFull (.T_Literal (String.ofList [c]))
-          mkTokenFull (.T_DollarBraced false inner)
+          mkTokenFullAt (.T_DollarBraced false inner) startLine startCol
         else
-          mkTokenFull (.T_Literal "$")
+          mkTokenFullAt (.T_Literal "$") startLine startCol
     | none =>
-        mkTokenFull (.T_Literal "$")
+        mkTokenFullAt (.T_Literal "$") startLine startCol
 
   readUntilStr (terminator : String) : FullParser String := do
     let rec go (acc : List Char) (depth : Nat) : FullParser String := do
@@ -1095,8 +1103,10 @@ where
           let tok ← readBacktickFull
           readWordParts (tok :: acc)
         else if c == '$' then
+          -- Record position BEFORE consuming $
+          let (startLine, startCol) ← currentPos
           let _ ← anyCharFull
-          let tok ← readDollarFull
+          let tok ← readDollarFull startLine startCol
           readWordParts (tok :: acc)
         else if c == '\\' then
           let _ ← anyCharFull
@@ -1115,14 +1125,14 @@ where
           let tok ← readLiteralFull
           readWordParts (tok :: acc)
 
-  readDollarFull : FullParser Token := do
+  readDollarFull (startLine startCol : Nat) : FullParser Token := do
     match ← peekFull with
     | some '{' =>
         let _ ← charFull '{'
         let content ← readBracedContent
         let _ ← charFull '}'
         let inner ← mkTokenFull (.T_Literal content)
-        mkTokenFull (.T_DollarBraced true inner)
+        mkTokenFullAt (.T_DollarBraced true inner) startLine startCol
     | some '(' =>
         let _ ← charFull '('
         match ← peekFull with
@@ -1134,38 +1144,38 @@ where
             let inner := match Arithmetic.parse content with
               | some arithToken => arithToken
               | none => ⟨⟨0⟩, .T_Literal content⟩  -- Fallback to literal
-            mkTokenFull (.T_DollarArithmetic inner)
+            mkTokenFullAt (.T_DollarArithmetic inner) startLine startCol
         | _ =>
             let content ← readSubshellContent
             let _ ← charFull ')'
             let inner ← mkTokenFull (.T_Literal content)
-            mkTokenFull (.T_DollarExpansion [inner])
+            mkTokenFullAt (.T_DollarExpansion [inner]) startLine startCol
     | some '\'' =>
         -- $'...' ANSI-C quoting
         let _ ← charFull '\''
         let content ← takeWhileFull (· != '\'')
         let _ ← charFull '\''
-        mkTokenFull (.T_DollarSingleQuoted content)
+        mkTokenFullAt (.T_DollarSingleQuoted content) startLine startCol
     | some '"' =>
         -- $"..." locale-specific
         let _ ← charFull '"'
         let content ← takeWhileFull (· != '"')  -- Simplified
         let _ ← charFull '"'
         let inner ← mkTokenFull (.T_Literal content)
-        mkTokenFull (.T_DollarDoubleQuoted [inner])
+        mkTokenFullAt (.T_DollarDoubleQuoted [inner]) startLine startCol
     | some c =>
         if variableStartChar c then
           let name ← takeWhile1Full variableChar
           let inner ← mkTokenFull (.T_Literal name)
-          mkTokenFull (.T_DollarBraced false inner)
+          mkTokenFullAt (.T_DollarBraced false inner) startLine startCol
         else if specialVariableChars.toList.contains c then
           let _ ← anyCharFull
           let inner ← mkTokenFull (.T_Literal (String.ofList [c]))
-          mkTokenFull (.T_DollarBraced false inner)
+          mkTokenFullAt (.T_DollarBraced false inner) startLine startCol
         else
-          mkTokenFull (.T_Literal "$")
+          mkTokenFullAt (.T_Literal "$") startLine startCol
     | none =>
-        mkTokenFull (.T_Literal "$")
+        mkTokenFullAt (.T_Literal "$") startLine startCol
 
   readBracedContent : FullParser String := do
     takeWhileFull (· != '}')  -- Simplified - should handle nested braces
@@ -2361,8 +2371,8 @@ def readScriptFull : FullParser Token := do
   skipAllSpaceFull
   mkTokenFull (.T_Script shebang commands)
 
-/-- Parse a string as commands (for subshell content) -/
-def parseSubshellContent (content : String) (filename : String) (startId : Nat) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
+/-- Parse a string as commands (for subshell content), with position offset -/
+def parseSubshellContent (content : String) (filename : String) (startId : Nat) (offsetLine : Nat) (offsetCol : Nat) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
   let initState : FullParserState := {
     input := content
     pos := 0
@@ -2374,14 +2384,32 @@ def parseSubshellContent (content : String) (filename : String) (startId : Nat) 
     errors := []
   }
   match readTermFull initState with
-  | .ok tokens s => (tokens, s.nextId, s.positions)
+  | .ok tokens s =>
+      -- Offset all positions by the original $() location
+      let offsetPositions := s.positions.fold (init := {}) fun m k (startPos, endPos) =>
+        let newStart : Position := {
+          posFile := startPos.posFile
+          posLine := startPos.posLine + offsetLine - 1  -- -1 because sub-parse starts at line 1
+          posColumn := if startPos.posLine == 1
+                       then startPos.posColumn + offsetCol - 1  -- Only offset column on first line
+                       else startPos.posColumn
+        }
+        let newEnd : Position := {
+          posFile := endPos.posFile
+          posLine := endPos.posLine + offsetLine - 1
+          posColumn := if endPos.posLine == 1
+                       then endPos.posColumn + offsetCol - 1
+                       else endPos.posColumn
+        }
+        m.insert k (newStart, newEnd)
+      (tokens, s.nextId, offsetPositions)
   | .error _ s =>
       -- On parse error, return a literal token
       let litTok : Token := ⟨⟨startId⟩, .T_Literal content⟩
       ([litTok], startId + 1, s.positions)
 
 /-- Post-process to recursively parse $() content -/
-partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat) : (Token × Nat × Std.HashMap Id (Position × Position)) :=
+partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat) (origPositions : Std.HashMap Id (Position × Position)) : (Token × Nat × Std.HashMap Id (Position × Position)) :=
   match t.inner with
   | .T_DollarExpansion children =>
       -- Check if children are just a literal that needs reparsing
@@ -2390,73 +2418,115 @@ partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat
           match child.inner with
           | .T_Literal content =>
               -- This is unparsed content - parse it now
-              let (parsedCmds, newNextId, newPositions) := parseSubshellContent content filename nextId
+              -- Look up the original position of this T_DollarExpansion to get offset
+              let (offsetLine, offsetCol) := match origPositions.get? t.id with
+                | some (startPos, _) => (startPos.posLine, startPos.posColumn + 2)  -- +2 for "$("
+                | none => (1, 1)  -- Fallback
+              let (parsedCmds, newNextId, newPositions) := parseSubshellContent content filename nextId offsetLine offsetCol
               -- Recursively expand any nested $() in the parsed commands
               let (expandedCmds, finalNextId, allPositions) := parsedCmds.foldl (init := ([], newNextId, newPositions))
                 fun (acc, nid, pos) cmd =>
-                  let (expCmd, newNid, newPos) := expandDollarExpansions cmd filename nid
+                  let (expCmd, newNid, newPos) := expandDollarExpansions cmd filename nid origPositions
                   (acc ++ [expCmd], newNid, pos.fold (init := newPos) fun m k v => m.insert k v)
               (⟨t.id, .T_DollarExpansion expandedCmds⟩, finalNextId, allPositions)
           | _ =>
               -- Already parsed, just recurse into children
-              let (expanded, newNextId, positions) := expandChildren children filename nextId
+              let (expanded, newNextId, positions) := expandChildren children filename nextId origPositions
               (⟨t.id, .T_DollarExpansion expanded⟩, newNextId, positions)
       | _ =>
           -- Multiple children, already parsed, just recurse
-          let (expanded, newNextId, positions) := expandChildren children filename nextId
+          let (expanded, newNextId, positions) := expandChildren children filename nextId origPositions
           (⟨t.id, .T_DollarExpansion expanded⟩, newNextId, positions)
   | .T_Script shebang cmds =>
-      let (expanded, newNextId, positions) := expandChildren cmds filename nextId
+      let (expanded, newNextId, positions) := expandChildren cmds filename nextId origPositions
       (⟨t.id, .T_Script shebang expanded⟩, newNextId, positions)
   | .T_Pipeline seps cmds =>
-      let (expandedSeps, nid1, pos1) := expandChildren seps filename nextId
-      let (expandedCmds, nid2, pos2) := expandChildren cmds filename nid1
+      let (expandedSeps, nid1, pos1) := expandChildren seps filename nextId origPositions
+      let (expandedCmds, nid2, pos2) := expandChildren cmds filename nid1 origPositions
       (⟨t.id, .T_Pipeline expandedSeps expandedCmds⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
   | .T_Redirecting redirs cmd =>
-      let (expandedRedirs, nid1, pos1) := expandChildren redirs filename nextId
-      let (expandedCmd, nid2, pos2) := expandDollarExpansions cmd filename nid1
+      let (expandedRedirs, nid1, pos1) := expandChildren redirs filename nextId origPositions
+      let (expandedCmd, nid2, pos2) := expandDollarExpansions cmd filename nid1 origPositions
       (⟨t.id, .T_Redirecting expandedRedirs expandedCmd⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
   | .T_SimpleCommand assigns words =>
-      let (expandedAssigns, nid1, pos1) := expandChildren assigns filename nextId
-      let (expandedWords, nid2, pos2) := expandChildren words filename nid1
+      let (expandedAssigns, nid1, pos1) := expandChildren assigns filename nextId origPositions
+      let (expandedWords, nid2, pos2) := expandChildren words filename nid1 origPositions
       (⟨t.id, .T_SimpleCommand expandedAssigns expandedWords⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
   | .T_NormalWord parts =>
-      let (expanded, newNextId, positions) := expandChildren parts filename nextId
+      let (expanded, newNextId, positions) := expandChildren parts filename nextId origPositions
       (⟨t.id, .T_NormalWord expanded⟩, newNextId, positions)
   | .T_DoubleQuoted parts =>
-      let (expanded, newNextId, positions) := expandChildren parts filename nextId
+      let (expanded, newNextId, positions) := expandChildren parts filename nextId origPositions
       (⟨t.id, .T_DoubleQuoted expanded⟩, newNextId, positions)
   | .T_Assignment mode name indices val =>
-      let (expandedVal, newNextId, positions) := expandDollarExpansions val filename nextId
+      let (expandedVal, newNextId, positions) := expandDollarExpansions val filename nextId origPositions
       (⟨t.id, .T_Assignment mode name indices expandedVal⟩, newNextId, positions)
   | .T_BraceGroup cmds =>
-      let (expanded, newNextId, positions) := expandChildren cmds filename nextId
+      let (expanded, newNextId, positions) := expandChildren cmds filename nextId origPositions
       (⟨t.id, .T_BraceGroup expanded⟩, newNextId, positions)
   | .T_Subshell cmds =>
-      let (expanded, newNextId, positions) := expandChildren cmds filename nextId
+      let (expanded, newNextId, positions) := expandChildren cmds filename nextId origPositions
       (⟨t.id, .T_Subshell expanded⟩, newNextId, positions)
   | .T_AndIf t1 t2 =>
-      let (exp1, nid1, pos1) := expandDollarExpansions t1 filename nextId
-      let (exp2, nid2, pos2) := expandDollarExpansions t2 filename nid1
+      let (exp1, nid1, pos1) := expandDollarExpansions t1 filename nextId origPositions
+      let (exp2, nid2, pos2) := expandDollarExpansions t2 filename nid1 origPositions
       (⟨t.id, .T_AndIf exp1 exp2⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
   | .T_OrIf t1 t2 =>
-      let (exp1, nid1, pos1) := expandDollarExpansions t1 filename nextId
-      let (exp2, nid2, pos2) := expandDollarExpansions t2 filename nid1
+      let (exp1, nid1, pos1) := expandDollarExpansions t1 filename nextId origPositions
+      let (exp2, nid2, pos2) := expandDollarExpansions t2 filename nid1 origPositions
       (⟨t.id, .T_OrIf exp1 exp2⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
   | .T_Backgrounded inner =>
-      let (expanded, newNextId, positions) := expandDollarExpansions inner filename nextId
+      let (expanded, newNextId, positions) := expandDollarExpansions inner filename nextId origPositions
       (⟨t.id, .T_Backgrounded expanded⟩, newNextId, positions)
   | .T_Function kw parens name body =>
-      let (expanded, newNextId, positions) := expandDollarExpansions body filename nextId
+      let (expanded, newNextId, positions) := expandDollarExpansions body filename nextId origPositions
       (⟨t.id, .T_Function kw parens name expanded⟩, newNextId, positions)
   | .T_Backticked cmds =>
-      let (expanded, newNextId, positions) := expandChildren cmds filename nextId
+      let (expanded, newNextId, positions) := expandChildren cmds filename nextId origPositions
       (⟨t.id, .T_Backticked expanded⟩, newNextId, positions)
+  | .T_IfExpression conditions elseBody =>
+      -- Each condition is (condList, bodyList)
+      let init : List (List Token × List Token) × Nat × Std.HashMap Id (Position × Position) := ([], nextId, {})
+      let (expandedConds, nid1, pos1) := conditions.foldl (init := init)
+        fun (acc, nid, pos) (condList, bodyList) =>
+          let (expCond, nid', pos') := expandChildren condList filename nid origPositions
+          let (expBody, nid'', pos'') := expandChildren bodyList filename nid' origPositions
+          let merged := pos.fold (init := pos'') fun m k v => pos'.fold (init := m.insert k v) fun m' k' v' => m'.insert k' v'
+          (acc ++ [(expCond, expBody)], nid'', merged)
+      let (expandedElse, nid2, pos2) := expandChildren elseBody filename nid1 origPositions
+      (⟨t.id, .T_IfExpression expandedConds expandedElse⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
+  | .T_WhileExpression cond body =>
+      let (expandedCond, nid1, pos1) := expandChildren cond filename nextId origPositions
+      let (expandedBody, nid2, pos2) := expandChildren body filename nid1 origPositions
+      (⟨t.id, .T_WhileExpression expandedCond expandedBody⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
+  | .T_ForIn var words body =>
+      let (expandedWords, nid1, pos1) := expandChildren words filename nextId origPositions
+      let (expandedBody, nid2, pos2) := expandChildren body filename nid1 origPositions
+      (⟨t.id, .T_ForIn var expandedWords expandedBody⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
+  | .T_ForArithmetic init cond incr body =>
+      let (expInit, nid1, pos1) := expandDollarExpansions init filename nextId origPositions
+      let (expCond, nid2, pos2) := expandDollarExpansions cond filename nid1 origPositions
+      let (expIncr, nid3, pos3) := expandDollarExpansions incr filename nid2 origPositions
+      let (expBody, nid4, pos4) := expandChildren body filename nid3 origPositions
+      let allPos := pos1.fold (init := pos4) fun m k v =>
+        pos2.fold (init := m.insert k v) fun m' k' v' =>
+          pos3.fold (init := m'.insert k' v') fun m'' k'' v'' => m''.insert k'' v''
+      (⟨t.id, .T_ForArithmetic expInit expCond expIncr expBody⟩, nid4, allPos)
+  | .T_CaseExpression word cases =>
+      let (expWord, nid1, pos1) := expandDollarExpansions word filename nextId origPositions
+      let caseInit : List (CaseType × List Token × List Token) × Nat × Std.HashMap Id (Position × Position) := ([], nid1, {})
+      let (expCases, nid2, pos2) := cases.foldl (init := caseInit)
+        fun (acc, nid, pos) (ctype, patterns, body) =>
+          let (expPatterns, nid', pos') := expandChildren patterns filename nid origPositions
+          let (expBody, nid'', pos'') := expandChildren body filename nid' origPositions
+          let merged := pos.fold (init := pos'') fun m k v => pos'.fold (init := m.insert k v) fun m' k' v' => m'.insert k' v'
+          (acc ++ [(ctype, expPatterns, expBody)], nid'', merged)
+      (⟨t.id, .T_CaseExpression expWord expCases⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
   | _ => (t, nextId, {})
 where
-  expandChildren (children : List Token) (filename : String) (nextId : Nat) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
+  expandChildren (children : List Token) (filename : String) (nextId : Nat) (origPos : Std.HashMap Id (Position × Position)) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
     children.foldl (init := ([], nextId, {})) fun (acc, nid, pos) child =>
-      let (expanded, newNid, newPos) := expandDollarExpansions child filename nid
+      let (expanded, newNid, newPos) := expandDollarExpansions child filename nid origPos
       (acc ++ [expanded], newNid, pos.fold (init := newPos) fun m k v => m.insert k v)
 
 /-- Run the full parser on a script -/
@@ -2473,8 +2543,8 @@ def runFullParser (script : String) (filename : String := "<stdin>") : (Option T
   }
   match readScriptFull initState with
   | .ok tok s =>
-      -- Post-process to expand $() content
-      let (expanded, _finalId, extraPositions) := expandDollarExpansions tok filename s.nextId
+      -- Post-process to expand $() content, passing original positions for offset calculation
+      let (expanded, _finalId, extraPositions) := expandDollarExpansions tok filename s.nextId s.positions
       -- Merge extra positions (from sub-parsing) into original positions
       let allPositions := extraPositions.fold (init := s.positions) fun m k v => m.insert k v
       (some expanded, allPositions, s.errors)
