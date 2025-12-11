@@ -1209,9 +1209,9 @@ where
             let inner ← mkTokenFull (.T_Literal content)
             mkTokenFullAt (.T_DollarExpansion [inner]) startLine startCol
     | some '\'' =>
-        -- $'...' ANSI-C quoting
+        -- $'...' ANSI-C quoting - must handle escape sequences like \'
         let _ ← charFull '\''
-        let content ← takeWhileFull (· != '\'')
+        let content ← readAnsiCContent
         let _ ← charFull '\''
         mkTokenFullAt (.T_DollarSingleQuoted content) startLine startCol
     | some '"' =>
@@ -1237,6 +1237,25 @@ where
 
   readBracedContent : FullParser String := do
     takeWhileFull (· != '}')  -- Simplified - should handle nested braces
+
+  -- Read ANSI-C quoted content, handling escape sequences like \'
+  readAnsiCContent : FullParser String := do
+    let rec go (acc : List Char) : FullParser String := do
+      match ← peekFull with
+      | none => pure (String.ofList acc.reverse)  -- EOF, return what we have
+      | some '\'' => pure (String.ofList acc.reverse)  -- End of string
+      | some '\\' =>
+          -- Escape sequence - consume both backslash and next char
+          let _ ← anyCharFull  -- consume backslash
+          match ← peekFull with
+          | some c =>
+              let _ ← anyCharFull  -- consume escaped char
+              go (c :: '\\' :: acc)  -- Keep both in output
+          | none => pure (String.ofList ('\\' :: acc).reverse)
+      | some c =>
+          let _ ← anyCharFull
+          go (c :: acc)
+    go []
 
   readArithContent : FullParser String := do
     let rec go (acc : List Char) (depth : Nat) : FullParser String := do
