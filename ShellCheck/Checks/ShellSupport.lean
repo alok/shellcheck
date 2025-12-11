@@ -282,6 +282,8 @@ def checkWordSplitting : ForShell := {
 }
 
 /-- All shell support checks -/
+-- Note: checkWordSplitting removed - SC2046 is handled by checkUnquotedExpansions in Analytics.lean
+-- which properly checks for quote-free contexts (assignments, double-quoted strings, etc.)
 def checks : List ForShell := [
   checkForDecimals,
   checkBashisms,
@@ -294,8 +296,7 @@ def checks : List ForShell := [
   checkNegatedUnaryOps,
   checkTildeInQuotes,
   checkQuotesInAssignment,
-  checkExpressionsInSingleQuotes,
-  checkWordSplitting
+  checkExpressionsInSingleQuotes
 ]
 
 /-- Main checker -/

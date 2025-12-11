@@ -175,7 +175,9 @@ def getTokenChildren (t : Token) : List Token :=
   | .TC_Unary _ _ inner => [inner]
   | .TC_Nullary _ inner => [inner]
   | .T_Annotation _ cmd => [cmd]
-  | .T_HereDoc _ _ _ content => content  -- content : List t
+  -- For quoted heredocs (<<'EOF'), don't analyze content - it's literal text
+  | .T_HereDoc _ .quoted _ _ => []
+  | .T_HereDoc _ .unquoted _ content => content
   | .T_HereString inner => [inner]
   | .T_FdRedirect _ op => [op]
   | .T_Array list => list

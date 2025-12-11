@@ -151,21 +151,16 @@ where
     | c :: _ => c.isAlpha || c == '_'
     | [] => false
 
-/-- SC2046: Quote this to prevent word splitting -/
+/-- SC2046: Quote this to prevent word splitting (for-in specific) -/
 def checkForInQuoted (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_ForIn _ words _ =>
     words.filterMap fun word =>
       match word.inner with
-      | .T_DollarExpansion _ => some (makeComment .warningC word.id 2046
-          "Quote this to prevent word splitting.")
+      | .T_DollarExpansion _ =>
+          some (makeComment .warningC word.id 2046
+            "Quote this to prevent word splitting.")
       | _ => none
-  | .T_Literal s =>
-      -- Check for $(...) command substitution in literals (simplified parser)
-      let hasCommandSub := "$(".isPrefixOf s || (s.splitOn "$(").length > 1
-      if hasCommandSub then
-        [makeComment .warningC t.id 2046 "Quote this to prevent word splitting."]
-      else []
   | _ => []
 
 /-- SC2012: Use find instead of ls to better handle non-alphanumeric filenames -/
@@ -1125,18 +1120,48 @@ where
             "Make sure not to read and write the same file in the same pipeline."]
         else []
 
+/-- Check if in quote-free context for SC2046.
+    Returns true when the expansion is in a context where word splitting doesn't apply:
+    - Inside assignments (x=$(cmd))
+    - Inside double quotes ("$(cmd)")
+    - Inside [[ conditions, arithmetic, etc. -/
+partial def isQuoteFreeForExpansion (parentMap : Std.HashMap Id Token) (t : Token) : Bool :=
+  go t
+where
+  go (current : Token) : Bool :=
+    match parentMap.get? current.id with
+    | Option.none => false
+    | some parent =>
+        match parent.inner with
+        | .T_Assignment .. => true
+        | .T_DoubleQuoted .. => true
+        | .T_Condition .. => true
+        | .T_Arithmetic .. => true
+        | .TC_Nullary .doubleBracket .. => true
+        | .TC_Unary .doubleBracket .. => true
+        | .TC_Binary .doubleBracket .. => true
+        | .T_DollarBraced .. => true
+        | .T_HereDoc .. => true
+        | .T_CaseExpression .. => true
+        -- Keep searching for these wrapper types
+        | .T_NormalWord .. => go parent
+        | .T_Redirecting .. => go parent
+        | .T_SimpleCommand .. => go parent
+        | .T_Script .. => false  -- Reached top
+        | _ => go parent  -- Keep looking
+
 /-- SC2046: Quote this to prevent word splitting -/
 def checkUnquotedExpansions (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_DollarExpansion cmds =>
     if cmds.isEmpty then []
     else if shouldBeSplit t then []
-    else if isQuoteFreeContext params t then []
+    else if isQuoteFreeForExpansion params.parentMap t then []
     else [makeComment .warningC t.id 2046 "Quote this to prevent word splitting."]
   | .T_Backticked cmds =>
     if cmds.isEmpty then []
     else if shouldBeSplit t then []
-    else if isQuoteFreeContext params t then []
+    else if isQuoteFreeForExpansion params.parentMap t then []
     else [makeComment .warningC t.id 2046 "Quote this to prevent word splitting."]
   | _ => []
 where
@@ -1148,16 +1173,6 @@ where
     | .T_Backticked cmds =>
       cmds.any fun c => getCommandBasename c ∈ [some "seq", some "pgrep"]
     | _ => false
-
-  isQuoteFreeContext (params : Parameters) (t : Token) : Bool :=
-    -- Simplified check - would need parent context
-    match params.parentMap.get? t.id with
-    | some parent =>
-      match parent.inner with
-      | .T_Assignment .. => true
-      | .T_Condition .. => true
-      | _ => false
-    | Option.none => false
 
 /-- SC2124: Assigning an array to a string -/
 def checkArrayAsString (_params : Parameters) (t : Token) : List TokenComment :=

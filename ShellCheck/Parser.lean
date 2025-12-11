@@ -947,6 +947,64 @@ partial def skipAllSpaceFull : FullParser Unit := do
       | none => pure ()
   | _ => pure ()
 
+/-- Parse a shellcheck directive from comment text.
+    Returns annotations for "# shellcheck disable=SC2001,SC2046" etc. -/
+def parseShellCheckDirective (comment : String) : List Annotation :=
+  let trimmed := comment.trim
+  -- Check if it starts with "shellcheck "
+  if !trimmed.startsWith "shellcheck " then []
+  else
+    let rest := (trimmed.drop 11).trim  -- drop "shellcheck "
+    -- Parse key=value pairs
+    parseDirectives (rest.splitOn " ")
+where
+  parseDirectives : List String → List Annotation
+    | [] => []
+    | part :: rest =>
+        let annotations := if part.startsWith "disable=" then
+          -- Parse comma-separated SC codes
+          let codes := (part.drop 8).splitOn ","  -- drop "disable="
+          codes.filterMap parseCode
+        else if part.startsWith "enable=" then
+          -- For now just track that something is enabled
+          let names := (part.drop 7).splitOn ","
+          names.map Annotation.enableComment
+        else if part.startsWith "source=" then
+          [Annotation.sourceOverride (part.drop 7)]
+        else if part.startsWith "shell=" then
+          [Annotation.shellOverride (part.drop 6)]
+        else if part.startsWith "source-path=" then
+          [Annotation.sourcePath (part.drop 12)]
+        else if part.startsWith "external-sources=" then
+          let val := part.drop 17
+          [Annotation.externalSources (val == "true")]
+        else
+          []
+        annotations ++ parseDirectives rest
+
+  parseCode (s : String) : Option Annotation :=
+    -- Parse SCnnnn format
+    let stripped := if s.startsWith "SC" then s.drop 2 else s
+    match stripped.toNat? with
+    | some code => some (Annotation.disableComment (Int.ofNat code) (Int.ofNat code + 1))
+    | none => none
+
+/-- Skip whitespace and comments, collecting shellcheck annotations -/
+partial def skipAllSpaceCollectAnnotations : FullParser (List Annotation) := do
+  let _ ← takeWhileFull (fun c => c.isWhitespace)
+  match ← peekFull with
+  | some '#' =>
+      let _ ← charFull '#'
+      let commentText ← takeWhileFull (· != '\n')
+      let annots := parseShellCheckDirective commentText
+      let moreAnnots ← skipAllSpaceCollectAnnotations
+      pure (annots ++ moreAnnots)
+  | some '\\' =>
+      match ← optionalFull (stringFull "\\\n") with
+      | some _ => skipAllSpaceCollectAnnotations
+      | none => pure []
+  | _ => pure []
+
 /-!
 ### Word Parsing in Full Parser
 -/
@@ -1363,11 +1421,54 @@ partial def readSimpleCommandFull : FullParser Token := do
   if assigns.isEmpty && words.isEmpty && redirects.isEmpty then failure
   else
     let cmd ← mkTokenFull (.T_SimpleCommand assigns words)
-    if redirects.isEmpty then
+    let result ← if redirects.isEmpty then
       pure cmd
     else
       mkTokenFull (.T_Redirecting redirects cmd)
+    -- Check if there are heredocs in redirects and consume their content
+    let heredocDelims := redirects.filterMap getHereDocDelimiter
+    for (delim, dashed) in heredocDelims do
+      consumeHereDocContent delim dashed
+    pure result
 where
+  /-- Extract heredoc delimiter from a T_HereDoc token -/
+  getHereDocDelimiter (t : Token) : Option (String × Dashed) :=
+    match t.inner with
+    | .T_HereDoc dashed _ delim _ => some (delim, dashed)
+    | _ => none
+
+  /-- Consume heredoc content until we find the delimiter line -/
+  consumeHereDocContent (delim : String) (dashed : Dashed) : FullParser Unit := do
+    -- First skip to end of current line if not already there
+    let _ ← takeWhileFull (· != '\n')
+    -- Consume the newline
+    match ← peekFull with
+    | some '\n' => let _ ← charFull '\n'; pure ()
+    | _ => pure ()
+    -- Now consume lines until we hit the delimiter
+    let rec consumeLines : FullParser Unit := do
+      match ← peekFull with
+      | none => pure ()  -- EOF
+      | some _ =>
+          -- Read current line
+          let line ← takeWhileFull (· != '\n')
+          -- Check if this line matches the delimiter
+          let lineToCheck := match dashed with
+            | .dashed => line.dropWhile (· == '\t')
+            | .undashed => line
+          if lineToCheck == delim then
+            -- Found delimiter, consume the newline and we're done
+            match ← peekFull with
+            | some '\n' => let _ ← charFull '\n'; pure ()
+            | _ => pure ()
+          else
+            -- Not the delimiter, consume newline and continue
+            match ← peekFull with
+            | some '\n' =>
+                let _ ← charFull '\n'
+                consumeLines
+            | _ => pure ()  -- EOF without delimiter
+    consumeLines
   -- First read assignments, then words and redirects
   readAssignsWordsAndRedirects (assignAcc : List Token) (wordAcc : List Token) (redirAcc : List Token)
       : FullParser (List Token × List Token × List Token) := do
@@ -1414,6 +1515,32 @@ where
             let word ← readWordFull
             readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
 
+  /-- Read a heredoc delimiter, returning (delimiter_string, is_quoted) -/
+  readHereDocDelimiter : FullParser (String × Bool) := do
+    skipHSpaceFull
+    match ← peekFull with
+    | some '\'' =>
+        -- Single-quoted: 'DELIM'
+        let _ ← charFull '\''
+        let delim ← takeWhileFull (· != '\'')
+        let _ ← charFull '\''
+        pure (delim, true)
+    | some '"' =>
+        -- Double-quoted: "DELIM"
+        let _ ← charFull '"'
+        let delim ← takeWhileFull (· != '"')
+        let _ ← charFull '"'
+        pure (delim, true)
+    | some '\\' =>
+        -- Escaped: \DELIM (makes it quoted)
+        let _ ← charFull '\\'
+        let delim ← takeWhileFull (fun c => !c.isWhitespace && c != '\n')
+        pure (delim, true)
+    | _ =>
+        -- Unquoted delimiter
+        let delim ← takeWhileFull (fun c => !c.isWhitespace && c != '\n' && c != ';' && c != '&' && c != '|')
+        pure (delim, false)
+
   /-- Read a redirect operator and its target -/
   readRedirectFull : FullParser Token := do
     let opStart ← peekFull
@@ -1453,9 +1580,16 @@ where
     skipHSpaceFull
     -- Handle here-doc specially
     if op == "<<" || op == "<<-" then
-      -- For here-doc, just read the delimiter word for now
-      let target ← readWordFull
-      mkTokenFull (.T_IoFile opTok target)
+      -- Read the delimiter and determine if it's quoted
+      let (delimStr, isQuoted) ← readHereDocDelimiter
+      -- After reading the command line, we need to consume the heredoc content
+      -- For now, register it to be consumed after the current line
+      -- Mark whether content should be analyzed (unquoted) or not (quoted)
+      let delimTok ← mkTokenFull (.T_Literal delimStr)
+      let dashed := if op == "<<-" then Dashed.dashed else Dashed.undashed
+      let quoted := if isQuoted then Quoted.quoted else Quoted.unquoted
+      -- Create T_HereDoc with empty content for now - actual content consumed later
+      mkTokenFull (.T_HereDoc dashed quoted delimStr [delimTok])
     else
       -- For file redirects, read the target
       match ← peekFull with
@@ -1957,8 +2091,18 @@ where
     | _ =>
         pure left
 
+/-- Read an and-or with any preceding shellcheck annotations -/
+partial def readAndOrWithAnnotations : FullParser Token := do
+  let annotations ← skipAllSpaceCollectAnnotations
+  let cmd ← readAndOrFull
+  if annotations.isEmpty then
+    pure cmd
+  else
+    mkTokenFull (.T_Annotation annotations cmd)
+
 /-- Read a term: and-or ((;|&|newline) and-or)* -/
 partial def readTermFull : FullParser (List Token) := do
+  -- The caller should have already skipped initial space
   let first ← readAndOrFull
   readTermContinuation [first]
 where
@@ -1970,8 +2114,7 @@ where
         match ← peekFull with
         | some ';' => pure acc.reverse  -- This is ;; not ;
         | _ =>
-            skipAllSpaceFull
-            match ← optionalFull readAndOrFull with
+            match ← optionalFull readAndOrWithAnnotations with
             | some next => readTermContinuation (next :: acc)
             | none => pure acc.reverse
     | some '&' =>
@@ -1983,21 +2126,21 @@ where
             let last := acc.head!
             let rest := acc.tail!
             let bgLast ← mkTokenFull (.T_Backgrounded last)
-            skipAllSpaceFull
-            match ← optionalFull readAndOrFull with
+            match ← optionalFull readAndOrWithAnnotations with
             | some next => readTermContinuation (next :: bgLast :: rest)
             | none => pure (bgLast :: rest).reverse
     | some '\n' =>
         let _ ← charFull '\n'
-        skipAllSpaceFull
-        match ← peekFull with
-        | none => pure acc.reverse
-        | some ')' => pure acc.reverse  -- End of subshell
-        | some '}' => pure acc.reverse  -- End of brace group
-        | _ =>
-            match ← optionalFull readAndOrFull with
-            | some next => readTermContinuation (next :: acc)
+        match ← optionalFull readAndOrWithAnnotations with
+        | some next => readTermContinuation (next :: acc)
+        | none =>
+            -- Check for end markers
+            skipAllSpaceFull
+            match ← peekFull with
             | none => pure acc.reverse
+            | some ')' => pure acc.reverse  -- End of subshell
+            | some '}' => pure acc.reverse  -- End of brace group
+            | _ => pure acc.reverse
     | _ => pure acc.reverse
 
 /-!
