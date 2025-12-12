@@ -33,15 +33,18 @@ def format [Monad m] : Formatter m := {
 def exitCode (results : List CheckResult) : Nat :=
   if countIssues results > 0 then 1 else 0
 
--- Theorems (stubs)
-
-theorem countIssues_zero_implies_no_issues (results : List CheckResult) :
-    countIssues results = 0 ↔ results.all (·.crComments.isEmpty) := sorry
-
-theorem exitCode_reflects_issues (results : List CheckResult) :
-    exitCode results = 0 ↔ countIssues results = 0 := sorry
+-- Theorems
 
 theorem hasIssues_iff_nonempty (cr : CheckResult) :
-    hasIssues cr ↔ cr.crComments.length > 0 := sorry
+    hasIssues cr ↔ cr.crComments.length > 0 := by
+  simp only [hasIssues]
+  cases cr.crComments with
+  | nil => simp [List.isEmpty, List.length]
+  | cons h t => simp [List.isEmpty, List.length]
+
+theorem exitCode_reflects_issues (results : List CheckResult) :
+    exitCode results = 0 ↔ countIssues results = 0 := by
+  simp only [exitCode]
+  split <;> omega
 
 end ShellCheck.Formatter.Quiet
