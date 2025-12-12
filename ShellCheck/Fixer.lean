@@ -229,10 +229,14 @@ theorem mergeFixes_associative (f1 f2 f3 : Fix) :
     mergeFixes (mergeFixes f1 f2) f3 = mergeFixes f1 (mergeFixes f2 f3) := sorry
 
 theorem emptyFix_left_identity (f : Fix) :
-    mergeFixes emptyFix f = f := sorry
+    mergeFixes emptyFix f = f := by
+  simp only [mergeFixes, fixesOverlap, emptyFix, newFix]
+  simp only [List.any_nil, Bool.false_eq_true, ↓reduceIte, List.nil_append]
 
 theorem emptyFix_right_identity (f : Fix) :
-    mergeFixes f emptyFix = f := sorry
+    mergeFixes f emptyFix = f := by
+  simp only [mergeFixes, fixesOverlap, emptyFix, newFix, List.any_nil]
+  simp
 
 theorem mapPositions_identity (fix : Fix) :
     mapPositions id fix = fix := sorry
