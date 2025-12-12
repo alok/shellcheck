@@ -244,6 +244,8 @@ theorem mapPositions_identity (fix : Fix) :
 theorem mapPositions_composition (f g : Position → Position) (fix : Fix) :
     mapPositions f (mapPositions g fix) = mapPositions (f ∘ g) fix := sorry
 
+-- getPrefixSum and addPSValue are partial defs, so proving properties
+-- requires more elaborate machinery (fuel-based reasoning)
 theorem getPrefixSum_empty (target : Int) :
     getPrefixSum target newPSTree = 0 := sorry
 
