@@ -81,6 +81,125 @@ def ShellParser (α : Type) := ShellState → BaseParser (α × ShellState)
 instance : MonadLift BaseParser ShellParser
 ```
 
+## MonadLift Explained
+
+`MonadLift` is Lean's typeclass for lifting computations from one monad into another. It's defined in `Init.Prelude`:
+
+```lean
+class MonadLift (m : Type u → Type v) (n : Type u → Type w) where
+  monadLift : {α : Type u} → m α → n α
+```
+
+### Why We Need It
+
+We have two parser monads:
+1. **BaseParser** (`Std.Internal.Parsec PosIterator`) - Standard library parsec with our position-tracking iterator
+2. **ShellParser** - Wraps BaseParser with extra state (token IDs, positions map, errors)
+
+Without MonadLift, you'd have to manually convert:
+```lean
+-- Tedious: manually wrapping every Parsec call
+def anyChar : ShellParser Char := fun st it =>
+  match Std.Internal.Parsec.any it with
+  | .success it' c => .success it' (c, st)
+  | .error it' err => .error it' err
+```
+
+With MonadLift:
+```lean
+-- Clean: automatic lifting
+def anyChar : ShellParser Char := liftBase Std.Internal.Parsec.any
+
+-- Or even cleaner with the instance, just use `do` notation:
+def myParser : ShellParser String := do
+  let c ← (Std.Internal.Parsec.any : BaseParser Char)  -- auto-lifted!
+  pure c.toString
+```
+
+### Our Implementation
+
+```lean
+/-- Lift base parser into shell parser -/
+@[inline]
+def liftBase (p : BaseParser α) : ShellParser α := fun st it =>
+  match p it with
+  | .success it' a => .success it' (a, st)  -- pass state through unchanged
+  | .error it' err => .error it' err
+
+instance : MonadLift BaseParser ShellParser where
+  monadLift := liftBase
+```
+
+The key insight: `liftBase` runs the BaseParser and threads the ShellState through unchanged. Position tracking happens automatically because `PosIterator` carries line/column.
+
+### Using MonadLift in Practice
+
+**Explicit lifting with `liftBase`:**
+```lean
+def isEof : ShellParser Bool := liftBase Std.Internal.Parsec.isEof
+def satisfy (p : Char → Bool) : ShellParser Char := liftBase (Std.Internal.Parsec.satisfy p)
+```
+
+**Combining lifted and stateful operations:**
+```lean
+def mkToken (inner : InnerToken Token) : ShellParser Token := do
+  let (line, col) ← getPos          -- ShellParser operation (reads PosIterator)
+  let id ← freshId                   -- ShellParser operation (modifies ShellState)
+  recordPosition id line col line col -- ShellParser operation (modifies ShellState)
+  pure ⟨id, inner⟩
+
+def readWord : ShellParser Token := do
+  let (startLine, startCol) ← getPos
+  let content ← takeWhile1 isWordChar  -- Uses liftBase internally
+  mkTokenAt (.T_Literal content) startLine startCol
+```
+
+**The `do` notation auto-lifts when types align:**
+```lean
+def example : ShellParser Char := do
+  let _ ← ws                                    -- ShellParser Unit
+  let c ← (Std.Internal.Parsec.any : BaseParser Char)  -- Auto-lifted!
+  pure c
+```
+
+### Migration Strategy
+
+To migrate `FullParser` code to `ShellParser`:
+
+1. **Replace state access patterns:**
+   ```lean
+   -- Old (FullParser)
+   fun s => .ok s.line s
+
+   -- New (ShellParser)
+   getPos  -- returns (line, column) from PosIterator
+   ```
+
+2. **Replace manual character reading:**
+   ```lean
+   -- Old (FullParser)
+   if s.pos < s.input.rawEndPos then
+     let c := s.pos.get s.input
+     .ok c { s with pos := s.pos.next s.input, ... }
+
+   -- New (ShellParser)
+   liftBase Std.Internal.Parsec.any  -- PosIterator handles position update
+   ```
+
+3. **Keep state operations explicit:**
+   ```lean
+   -- These stay as ShellParser operations
+   freshId        -- generates token ID
+   recordPosition -- stores position in HashMap
+   modifyState    -- general state modification
+   ```
+
+4. **Combinators work the same:**
+   ```lean
+   -- These are already defined in Parser/Parsec.lean
+   many, many1, optional, attempt, pchar, pstring, takeWhile, takeWhile1
+   ```
+
 ## Running the Tool
 
 ```bash
