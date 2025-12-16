@@ -96,13 +96,13 @@ def isEof : ArithParser Bool := fun s =>
 /-- Peek at current character -/
 def peek : ArithParser (Option Char) := fun s =>
   if s.pos >= s.input.length then .ok none s
-  else .ok (some (s.input.get ⟨s.pos⟩)) s
+  else .ok (some ((String.Pos.Raw.mk s.pos).get s.input)) s
 
 /-- Consume a character satisfying predicate -/
 def satisfy (p : Char → Bool) : ArithParser Char := fun s =>
   if s.pos >= s.input.length then .error "unexpected end" s
   else
-    let c := s.input.get ⟨s.pos⟩
+    let c := (String.Pos.Raw.mk s.pos).get s.input
     if p c then .ok c { s with pos := s.pos + 1 }
     else .error s!"unexpected '{c}'" s
 
@@ -133,7 +133,7 @@ partial def takeWhile (p : Char → Bool) : ArithParser String := fun s =>
   let rec go (pos : Nat) (acc : List Char) : (Nat × List Char) :=
     if pos >= s.input.length then (pos, acc)
     else
-      let c := s.input.get ⟨pos⟩
+      let c := (String.Pos.Raw.mk pos).get s.input
       if p c then go (pos + 1) (c :: acc)
       else (pos, acc)
   let (newPos, chars) := go s.pos []

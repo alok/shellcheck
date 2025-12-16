@@ -73,7 +73,7 @@ partial def skipHSpaceFull : FullParser Unit := do
   let _ ← takeWhileFull (fun c => c == ' ' || c == '\t')
   match ← peekFull with
   | some '\\' =>
-      match ← optionalFull (stringFull "\\\n") with
+      match ← optionalFull (attemptFull (stringFull "\\\n")) with
       | some _ => skipHSpaceFull
       | none => pure ()
   | some '#' =>
@@ -89,7 +89,7 @@ partial def skipAllSpaceFull : FullParser Unit := do
       let _ ← takeWhileFull (· != '\n')
       skipAllSpaceFull
   | some '\\' =>
-      match ← optionalFull (stringFull "\\\n") with
+      match ← optionalFull (attemptFull (stringFull "\\\n")) with
       | some _ => skipAllSpaceFull
       | none => pure ()
   | _ => pure ()
@@ -97,23 +97,18 @@ partial def skipAllSpaceFull : FullParser Unit := do
 /-! ## Keyword Parsers -/
 
 /-- Check if next token is a specific keyword (without consuming) -/
-partial def peekKeyword (kw : String) : FullParser Bool := fun s =>
-  let startPos := s.pos
-  -- Check if we have the keyword followed by word terminator or EOF
-  let rec checkChars (i : String.Pos.Raw) (pos : String.Pos.Raw) : Bool :=
-    if i >= kw.rawEndPos then
-      -- Keyword matched, check terminator
-      pos >= s.input.rawEndPos || isWordTerminator (pos.get s.input)
-    else if pos >= s.input.rawEndPos then
-      false
-    else
-      let expected := i.get kw
-      let actual := pos.get s.input
-      if expected == actual then
-        checkChars (i.next kw) (pos.next s.input)
-      else
-        false
-  .ok (checkChars 0 startPos) s
+partial def peekKeyword (kw : String) : FullParser Bool := fun st it =>
+  let remaining := it.str.drop it.pos.byteIdx
+  if remaining.startsWith kw then
+    let afterKw := remaining.drop kw.length
+    let isTerminated :=
+      afterKw.isEmpty ||
+        match (0 : String.Pos.Raw).get? afterKw with
+        | some c => isWordTerminator c || c == ';'
+        | none => true
+    .success it (isTerminated, st)
+  else
+    .success it (false, st)
 
 /-- Consume a keyword -/
 partial def consumeKeyword (kw : String) : FullParser Unit := do

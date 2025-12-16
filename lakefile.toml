@@ -21,3 +21,7 @@ srcDir = "."
 [[lean_exe]]
 name = "shellcheck4"
 root = "Main"
+
+[[lean_exe]]
+name = "shellcheck4_tests"
+root = "ShellCheck.Tests.Main"

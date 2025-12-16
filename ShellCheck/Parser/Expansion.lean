@@ -75,17 +75,17 @@ def isEnd : ExpParser Bool := fun s =>
 /-- Peek at current character -/
 def peek : ExpParser (Option Char) := fun s =>
   if s.pos >= s.input.length then .ok none s
-  else .ok (some (s.input.get ⟨s.pos⟩)) s
+  else .ok (some ((String.Pos.Raw.mk s.pos).get s.input)) s
 
 /-- Consume current character -/
 def anyChar : ExpParser Char := fun s =>
   if s.pos >= s.input.length then .error "unexpected end" s
-  else .ok (s.input.get ⟨s.pos⟩) { s with pos := s.pos + 1 }
+  else .ok ((String.Pos.Raw.mk s.pos).get s.input) { s with pos := s.pos + 1 }
 
 /-- Consume specific character -/
 def char (c : Char) : ExpParser Char := fun s =>
   if s.pos >= s.input.length then .error s!"expected '{c}'" s
-  else if s.input.get ⟨s.pos⟩ == c then .ok c { s with pos := s.pos + 1 }
+  else if (String.Pos.Raw.mk s.pos).get s.input == c then .ok c { s with pos := s.pos + 1 }
   else .error s!"expected '{c}'" s
 
 /-- Consume specific string -/
@@ -112,7 +112,7 @@ partial def takeWhile (p : Char → Bool) : ExpParser String := fun s =>
   let rec go (pos : Nat) (acc : List Char) : (Nat × List Char) :=
     if pos >= s.input.length then (pos, acc)
     else
-      let c := s.input.get ⟨pos⟩
+      let c := (String.Pos.Raw.mk pos).get s.input
       if p c then go (pos + 1) (c :: acc)
       else (pos, acc)
   let (newPos, chars) := go s.pos []
@@ -123,7 +123,7 @@ partial def takeUntil (stop : Char) : ExpParser String := fun s =>
   let rec go (pos : Nat) (acc : List Char) (depth : Nat) : (Nat × List Char) :=
     if pos >= s.input.length then (pos, acc)
     else
-      let c := s.input.get ⟨pos⟩
+      let c := (String.Pos.Raw.mk pos).get s.input
       if c == stop && depth == 0 then (pos, acc)
       else if c == '{' then go (pos + 1) (c :: acc) (depth + 1)
       else if c == '}' && depth > 0 then go (pos + 1) (c :: acc) (depth - 1)
@@ -250,24 +250,31 @@ partial def parseModifier (base : ParsedExpansion) : ExpParser ParsedExpansion :
           pure { base with op := .removeSuffix, isDoubled := false, arg1 := some pattern }
   | some '/' =>
       let _ ← anyChar
-      let doubled ← match ← optionalP (char '/') with
-        | some _ => pure true
-        | none =>
-            match ← peek with
-            | some '#' =>
-                let _ ← anyChar
-                pure false  -- prefix replace
-            | some '%' =>
-                let _ ← anyChar
-                pure false  -- suffix replace
-            | _ => pure false
+      -- Replacement forms:
+      --   ${var/find/repl}   (single)
+      --   ${var//find/repl}  (global)
+      --   ${var/#find/repl}  (prefix anchored)
+      --   ${var/%find/repl}  (suffix anchored)
+      let (op, doubled) ←
+        match ← peek with
+        | some '/' =>
+            let _ ← anyChar
+            pure (.replace, true)
+        | some '#' =>
+            let _ ← anyChar
+            pure (.replacePrefix, false)
+        | some '%' =>
+            let _ ← anyChar
+            pure (.replaceSuffix, false)
+        | _ =>
+            pure (.replace, false)
       let find ← takeUntil '/'
       match ← optionalP (char '/') with
       | some _ =>
           let repl ← takeUntil '}'
-          pure { base with op := .replace, isDoubled := doubled, arg1 := some find, arg2 := some repl }
+          pure { base with op := op, isDoubled := doubled, arg1 := some find, arg2 := some repl }
       | none =>
-          pure { base with op := .replace, isDoubled := doubled, arg1 := some find, arg2 := some "" }
+          pure { base with op := op, isDoubled := doubled, arg1 := some find, arg2 := some "" }
   | some '^' =>
       let _ ← anyChar
       match ← optionalP (char '^') with
@@ -297,6 +304,6 @@ def parseExpansion (content : String) : Option ParsedExpansion :=
 
 /-- Check if a string represents a simple variable reference -/
 def isSimpleVar (s : String) : Bool :=
-  s.all isVarChar && s.length > 0 && (s.get ⟨0⟩).isAlpha
+  s.all isVarChar && s.length > 0 && ((0 : String.Pos.Raw).get s).isAlpha
 
 end ShellCheck.Parser.Expansion

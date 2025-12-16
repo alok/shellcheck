@@ -4,10 +4,12 @@
 -/
 
 import ShellCheck.AST
+import ShellCheck.Parser.Core
 
 namespace ShellCheck.Parser.Condition
 
 open ShellCheck.AST
+open ShellCheck.Parser.Core
 
 /-- Unary file test operators -/
 def fileTestOps : List String :=
@@ -215,5 +217,152 @@ def parseDoubleBracket (content : String) : Option Token :=
 /-- Parse [ expr ] style condition -/
 def parseSingleBracket (content : String) : Option Token :=
   parseCondition (tokenize content) .singleBracket
+
+/-
+  Token-based condition parsing (used by the full parser).
+
+  This is a substantial upgrade over the older `tokenize`-by-space approach:
+  the full shell parser already tokenizes/quotes/escapes words into `Token`s.
+  Here we interpret a list of already-parsed word-ish tokens as a condition
+  expression, producing `TC_*` nodes that preserve the original operands.
+-/
+
+namespace TokenParse
+
+private def bareWordString? (t : Token) : Option String :=
+  match t.inner with
+  | .T_Literal s => some s
+  | .T_NormalWord [p] =>
+      match p.inner with
+      | .T_Literal s => some s
+      | _ => none
+  | _ => none
+
+private def spanOf (t : Token) : FullParser (Nat × Nat × Nat × Nat) := do
+  let st ← ShellCheck.Parser.Parsec.getState
+  match st.positions.get? t.id with
+  | some (startPos, endPos) =>
+      pure (startPos.posLine, startPos.posColumn, endPos.posLine, endPos.posColumn)
+  | none =>
+      let (line, col) ← currentPos
+      pure (line, col, line, col)
+
+private def mkSpan (inner : InnerToken Token) (first last : Token) : FullParser Token := do
+  let (startLine, startCol, _, _) ← spanOf first
+  let (_, _, endLine, endCol) ← spanOf last
+  let id ← freshIdFull
+  recordPosition id startLine startCol endLine endCol
+  pure ⟨id, inner⟩
+
+private def isAndOp (ct : ConditionType) (op : String) : Bool :=
+  match ct with
+  | .doubleBracket => op == "&&" || op == "-a"
+  | .singleBracket => op == "-a"
+
+private def isOrOp (ct : ConditionType) (op : String) : Bool :=
+  match ct with
+  | .doubleBracket => op == "||" || op == "-o"
+  | .singleBracket => op == "-o"
+
+mutual
+
+  partial def parsePrimary (ct : ConditionType) (ts : List Token) : FullParser (Token × List Token) := do
+    match ts with
+    | [] =>
+        let empty ← mkTokenFull (.TC_Empty ct)
+        pure (empty, [])
+    | t :: rest =>
+        match bareWordString? t with
+        | some "!" =>
+            let (inner, rest') ← parsePrimary ct rest
+            let node ← mkSpan (.TC_Unary ct "!" inner) t inner
+            pure (node, rest')
+        | some "(" =>
+            let (inner, rest') ← parseOr ct rest
+            match rest' with
+            | closeTok :: rest'' =>
+                match bareWordString? closeTok with
+                | some ")" =>
+                    let node ← mkSpan (.TC_Group ct inner) t closeTok
+                    pure (node, rest'')
+                | _ => failure
+            | [] => failure
+        | some op =>
+            if unaryOps.contains op then
+              match rest with
+              | arg :: rest' =>
+                  let node ← mkSpan (.TC_Unary ct op arg) t arg
+                  pure (node, rest')
+              | [] => failure
+            else
+              parseBinaryOrNullary ct t rest
+        | none =>
+            parseBinaryOrNullary ct t rest
+
+  partial def parseBinaryOrNullary (ct : ConditionType) (lhs : Token) (ts : List Token) : FullParser (Token × List Token) := do
+    match ts with
+    | opTok :: rhsTok :: rest =>
+        match bareWordString? opTok with
+        | some op =>
+            if binaryOps.contains op then
+              let node ← mkSpan (.TC_Binary ct op lhs rhsTok) lhs rhsTok
+              pure (node, rest)
+            else
+              let node ← mkSpan (.TC_Nullary ct lhs) lhs lhs
+              pure (node, ts)
+        | none =>
+            let node ← mkSpan (.TC_Nullary ct lhs) lhs lhs
+            pure (node, ts)
+    | _ =>
+        let node ← mkSpan (.TC_Nullary ct lhs) lhs lhs
+        pure (node, ts)
+
+  partial def parseAnd (ct : ConditionType) (ts : List Token) : FullParser (Token × List Token) := do
+    let (left, rest) ← parsePrimary ct ts
+    parseAndCont ct left rest
+
+  partial def parseAndCont (ct : ConditionType) (left : Token) (ts : List Token) : FullParser (Token × List Token) := do
+    match ts with
+    | opTok :: rest =>
+        match bareWordString? opTok with
+        | some op =>
+            if isAndOp ct op then
+              let (right, rest') ← parsePrimary ct rest
+              let node ← mkSpan (.TC_And ct op left right) left right
+              parseAndCont ct node rest'
+            else
+              pure (left, ts)
+        | none => pure (left, ts)
+    | [] => pure (left, [])
+
+  partial def parseOr (ct : ConditionType) (ts : List Token) : FullParser (Token × List Token) := do
+    let (left, rest) ← parseAnd ct ts
+    parseOrCont ct left rest
+
+  partial def parseOrCont (ct : ConditionType) (left : Token) (ts : List Token) : FullParser (Token × List Token) := do
+    match ts with
+    | opTok :: rest =>
+        match bareWordString? opTok with
+        | some op =>
+            if isOrOp ct op then
+              let (right, rest') ← parseAnd ct rest
+              let node ← mkSpan (.TC_Or ct op left right) left right
+              parseOrCont ct node rest'
+            else
+              pure (left, ts)
+        | none => pure (left, ts)
+    | [] => pure (left, [])
+
+end
+
+end TokenParse
+
+/-- Parse a list of already-tokenized condition arguments into a `TC_*` tree. -/
+partial def parseConditionTokensFull (ct : ConditionType) (tokens : List Token) : FullParser Token := do
+  let (expr, rest) := (← TokenParse.parseOr ct tokens)
+  if rest.isEmpty then
+    pure expr
+  else
+    failure
 
 end ShellCheck.Parser.Condition

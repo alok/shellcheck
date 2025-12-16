@@ -145,16 +145,22 @@ instance : Monad ShellParser where
 protected def fail (msg : String) : ShellParser α := fun _ it =>
   .error it (.other msg)
 
-/-- Alternative -/
-@[inline]
-protected def orElse (p : ShellParser α) (q : Unit → ShellParser α) : ShellParser α := fun st it =>
-  match p st it with
-  | .success it' res => .success it' res
-  | .error it' err =>
-      if it.pos == it'.pos then
-        q () st it
-      else
-        .error it' err
+  /-- Alternative (Parsec semantics).
+
+  If the left branch fails *without consuming input*, we run the right branch.
+  If it fails *after consuming input*, we commit to that failure.
+
+  Use `attempt`/`attemptFull` around a branch when it must backtrack even after
+  consuming input. -/
+  @[inline]
+  protected def orElse (p : ShellParser α) (q : Unit → ShellParser α) : ShellParser α := fun st it =>
+    match p st it with
+    | .success it' res => .success it' res
+    | .error it' err =>
+        if it'.pos == it.pos then
+          q () st it
+        else
+          .error it' err
 
 instance : Alternative ShellParser where
   failure := ShellParser.fail ""
@@ -230,6 +236,20 @@ def peek? : ShellParser (Option Char) := liftBase Std.Internal.Parsec.peek?
 /-- Peek at next character (must exist) -/
 def peek! : ShellParser Char := liftBase Std.Internal.Parsec.peek!
 
+/-- Peek ahead `n` characters as a string without consuming input. -/
+def peekString (n : Nat) : ShellParser String := fun st it =>
+  let rec go (k : Nat) (pos : String.Pos.Raw) (acc : List Char) : List Char :=
+    match k with
+    | 0 => acc.reverse
+    | k + 1 =>
+        if pos < it.str.rawEndPos then
+          let c := pos.get it.str
+          go k (pos.next it.str) (c :: acc)
+        else
+          acc.reverse
+  let chars := go n it.pos []
+  .success it (String.ofList chars, st)
+
 /-- Satisfy predicate -/
 def satisfy (pred : Char → Bool) : ShellParser Char := liftBase (Std.Internal.Parsec.satisfy pred)
 
@@ -242,8 +262,17 @@ partial def many (p : ShellParser α) : ShellParser (Array α) := fun st it =>
 where
   go (acc : Array α) (st' : ShellState) (it' : PosIterator) : Std.Internal.Parsec.ParseResult (Array α × ShellState) PosIterator :=
     match p st' it' with
-    | .success it'' (a, st'') => go (acc.push a) st'' it''
-    | .error _ _ => .success it' (acc, st')
+    | .success it'' (a, st'') =>
+        if it''.pos == it'.pos then
+          -- Prevent infinite loops when the parser can succeed without consuming input.
+          .error it'' (.other "many: parser succeeded without consuming input")
+        else
+          go (acc.push a) st'' it''
+    | .error it'' err =>
+        if it''.pos == it'.pos then
+          .success it' (acc, st')
+        else
+          .error it'' err
 
 /-- Many1 (one or more) -/
 def many1 (p : ShellParser α) : ShellParser (Array α) := do
@@ -265,7 +294,11 @@ def many1Chars (p : ShellParser Char) : ShellParser String := do
 def optional (p : ShellParser α) : ShellParser (Option α) := fun st it =>
   match p st it with
   | .success it' (a, st') => .success it' (some a, st')
-  | .error _ _ => .success it (none, st)
+  | .error it' err =>
+      if it'.pos == it.pos then
+        .success it (none, st)
+      else
+        .error it' err
 
 /-- Try with backtracking -/
 def attempt (p : ShellParser α) : ShellParser α := fun st it =>
@@ -281,9 +314,7 @@ Character and string matching.
 
 /-- Match specific character -/
 def pchar (c : Char) : ShellParser Char := do
-  let actual ← anyChar
-  if actual == c then return c
-  else ShellParser.fail s!"expected '{c}'"
+  satisfy (fun actual => actual == c)
 
 /-- Match string -/
 partial def pstring (s : String) : ShellParser String := fun st it =>
@@ -291,14 +322,14 @@ partial def pstring (s : String) : ShellParser String := fun st it =>
     if i >= s.rawEndPos then
       .success it' (s, st)
     else if !it'.hasNext then
-      .error it (.other s!"expected \"{s}\"")
+      .error it' (.other s!"expected \"{s}\"")
     else
       let expected := i.get s
       let actual := it'.curr
       if expected == actual then
         go (i.next s) it'.next
       else
-        .error it (.other s!"expected \"{s}\"")
+        .error it' (.other s!"expected \"{s}\"")
   go 0 it
 
 /-- Skip whitespace -/
