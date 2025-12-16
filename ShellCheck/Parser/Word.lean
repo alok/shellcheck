@@ -650,6 +650,56 @@ where
           let tok ← mkTokenFullAt (.T_Literal lit) litStartLine litStartCol
           readDQParts (tok :: acc)
 
+/-- Read process substitution <(...) or >(...) -/
+partial def readProcSubFull : FullParser Token := do
+  let (startLine, startCol) ← currentPos
+  let dir ← anyCharFull  -- < or >
+  let _ ← charFull '('
+  -- Read content until matching )
+  let content ← readProcSubContent 1 []
+  let _ ← charFull ')'
+  let dirStr := String.mk [dir]
+  -- For now, create a T_ProcSub with the raw content as a literal
+  let contentTok ← mkTokenFullAt (.T_Literal content) startLine startCol
+  mkTokenFullAt (.T_ProcSub dirStr [contentTok]) startLine startCol
+where
+  /-- Read until matching ) accounting for nested parens and quotes -/
+  readProcSubContent (depth : Nat) (acc : List Char) : FullParser String := do
+    match ← peekFull with
+    | none => pure (String.ofList acc.reverse)
+    | some ')' =>
+        if depth <= 1 then
+          pure (String.ofList acc.reverse)
+        else
+          let _ ← anyCharFull
+          readProcSubContent (depth - 1) (')' :: acc)
+    | some '(' =>
+        let _ ← anyCharFull
+        readProcSubContent (depth + 1) ('(' :: acc)
+    | some '\'' =>
+        -- Skip single-quoted content
+        let _ ← anyCharFull
+        let quoted ← takeWhileFull (· != '\'')
+        match ← peekFull with
+        | some '\'' =>
+            let _ ← anyCharFull
+            let newAcc := '\'' :: quoted.toList.reverse ++ ('\'' :: acc)
+            readProcSubContent depth newAcc
+        | _ => readProcSubContent depth ('\'' :: quoted.toList.reverse ++ ('\'' :: acc))
+    | some '"' =>
+        -- Skip double-quoted content (simplified - ignoring escapes within)
+        let _ ← anyCharFull
+        let quoted ← takeWhileFull (· != '"')
+        match ← peekFull with
+        | some '"' =>
+            let _ ← anyCharFull
+            let newAcc := '"' :: quoted.toList.reverse ++ ('"' :: acc)
+            readProcSubContent depth newAcc
+        | _ => readProcSubContent depth ('"' :: quoted.toList.reverse ++ ('"' :: acc))
+    | some c =>
+        let _ ← anyCharFull
+        readProcSubContent depth (c :: acc)
+
 end
 
 /-- Read a complete word (multiple parts) -/
@@ -665,7 +715,16 @@ where
     match ← peekFull with
     | none => pure acc.reverse
     | some c =>
-        if c.isWhitespace || isOperatorStart c || c == '#' then
+        -- Check for process substitution <(...) or >(...) first
+        if c == '<' || c == '>' then
+          let nextTwo ← peekStringFull 2
+          if nextTwo == "<(" || nextTwo == ">(" then
+            let tok ← readProcSubFull
+            readWordParts (tok :: acc)
+          else
+            -- Regular < or > is an operator, stop word
+            pure acc.reverse
+        else if c.isWhitespace || isOperatorStart c || c == '#' then
           pure acc.reverse
         else if c == '\'' then
           let tok ← readSingleQuotedFull

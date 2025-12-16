@@ -932,9 +932,16 @@ where
           let _ ← takeWhileFull (· != '\n')
           pure (assignAcc.reverse, wordAcc.reverse, redirAcc.reverse)
         -- Check for redirects: >, >>, <, <<, etc.
+        -- BUT: <(...) and >(...) are process substitutions, not redirects
         else if c == '>' || c == '<' then
-          let redir ← readRedirectFull
-          readAssignsWordsAndRedirects assignAcc wordAcc (redir :: redirAcc)
+          let nextTwo ← peekStringFull 2
+          if nextTwo == "<(" || nextTwo == ">(" then
+            -- Process substitution - parse as word
+            let word ← readWordFull
+            readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
+          else
+            let redir ← readRedirectFull
+            readAssignsWordsAndRedirects assignAcc wordAcc (redir :: redirAcc)
         -- Check for fd redirect like 2>, 1>&2
         else if c.isDigit then
           match ← optionalFull (attemptFull readFdRedirectFull) with
