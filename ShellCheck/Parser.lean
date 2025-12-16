@@ -1693,7 +1693,9 @@ where
         match ← peekFull with
         | some ';' => pure acc.reverse  -- This is ;; not ;
         | _ =>
-            match ← optionalFull readAndOrWithAnnotations with
+            -- Use attemptFull to backtrack if the next command fails
+            -- (readAndOrWithAnnotations consumes whitespace before parsing)
+            match ← optionalFull (attemptFull readAndOrWithAnnotations) with
             | some next => readTermContinuation (next :: acc)
             | none => pure acc.reverse
     | some '&' =>
@@ -1705,12 +1707,12 @@ where
             let last := acc.head!
             let rest := acc.tail!
             let bgLast ← mkTokenFull (.T_Backgrounded last)
-            match ← optionalFull readAndOrWithAnnotations with
+            match ← optionalFull (attemptFull readAndOrWithAnnotations) with
             | some next => readTermContinuation (next :: bgLast :: rest)
             | none => pure (bgLast :: rest).reverse
     | some '\n' =>
         let _ ← charFull '\n'
-        match ← optionalFull readAndOrWithAnnotations with
+        match ← optionalFull (attemptFull readAndOrWithAnnotations) with
         | some next => readTermContinuation (next :: acc)
         | none =>
             -- Check for end markers
