@@ -1458,9 +1458,14 @@ where
     skipHSpaceFull
     let varName ← takeWhile1Full variableChar
     skipHSpaceFull
-    let _ ← consumeKeyword "in"
-    skipHSpaceFull
-    let words ← readSelectWordsInPipe []
+    -- "in" is optional - if omitted, uses positional parameters
+    let hasIn ← peekKeyword "in"
+    let words ← if hasIn then do
+      let _ ← consumeKeyword "in"
+      skipHSpaceFull
+      readSelectWordsInPipe []
+    else
+      pure []
     skipHSpaceFull
     let _ ← optionalFull (charFull ';')
     skipAllSpaceFull
@@ -1952,15 +1957,20 @@ where
           let cmd ← readAndOrFull
           readCaseBody (cmd :: acc) termType
 
-/-- Read a select expression: select var in words; do body; done -/
+/-- Read a select expression: select var [in words]; do body; done -/
 partial def readSelectFull : FullParser Token := do
   let _ ← consumeKeyword "select"
   skipHSpaceFull
   let varName ← takeWhile1Full variableChar
   skipHSpaceFull
-  let _ ← consumeKeyword "in"
-  skipHSpaceFull
-  let words ← readSelectWords []
+  -- "in" is optional - if omitted, uses positional parameters
+  let hasIn ← peekKeyword "in"
+  let words ← if hasIn then do
+    let _ ← consumeKeyword "in"
+    skipHSpaceFull
+    readSelectWords []
+  else
+    pure []
   skipHSpaceFull
   let _ ← optionalFull (charFull ';')
   skipAllSpaceFull
