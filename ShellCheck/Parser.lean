@@ -1191,13 +1191,16 @@ where
                 let isCase ← peekKeyword "case"
                 if isCase then readCaseInPipe
                 else
-                  let isFunction ← peekKeyword "function"
-                  if isFunction then readFunctionInPipe
+                  let isSelect ← peekKeyword "select"
+                  if isSelect then readSelectInPipe
                   else
-                    -- Try POSIX function syntax: name() { body }
-                    match ← optionalFull (attemptFull readPosixFunctionInPipe) with
-                    | some func => pure func
-                    | none => readSimpleCommandFull
+                    let isFunction ← peekKeyword "function"
+                    if isFunction then readFunctionInPipe
+                    else
+                      -- Try POSIX function syntax: name() { body }
+                      match ← optionalFull (attemptFull readPosixFunctionInPipe) with
+                      | some func => pure func
+                      | none => readSimpleCommandFull
 
   /-- Read a POSIX function definition in pipe context: name() { body } -/
   readPosixFunctionInPipe : FullParser Token := do
@@ -1449,6 +1452,39 @@ where
     skipAllSpaceFull
     let body ← readBraceGroupInPipe
     mkTokenFull (.T_Function ⟨true⟩ ⟨false⟩ name body)
+
+  readSelectInPipe : FullParser Token := do
+    let _ ← consumeKeyword "select"
+    skipHSpaceFull
+    let varName ← takeWhile1Full variableChar
+    skipHSpaceFull
+    let _ ← consumeKeyword "in"
+    skipHSpaceFull
+    let words ← readSelectWordsInPipe []
+    skipHSpaceFull
+    let _ ← optionalFull (charFull ';')
+    skipAllSpaceFull
+    let _ ← consumeKeyword "do"
+    skipAllSpaceFull
+    let body ← readTermInPipe
+    skipHSpaceFull
+    let _ ← optionalFull (charFull ';')
+    skipAllSpaceFull
+    let _ ← consumeKeyword "done"
+    mkTokenFull (.T_SelectIn varName words body)
+
+  readSelectWordsInPipe (acc : List Token) : FullParser (List Token) := do
+    skipHSpaceFull
+    match ← peekFull with
+    | none => pure acc.reverse
+    | some c =>
+        if c == '\n' || c == ';' then pure acc.reverse
+        else
+          let isDo ← peekKeyword "do"
+          if isDo then pure acc.reverse
+          else
+            let word ← readWordFull
+            readSelectWordsInPipe (word :: acc)
 
   -- Self-contained term/andor for inside pipe context
   -- These form a mutually recursive group within the where clause
