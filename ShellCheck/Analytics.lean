@@ -338,12 +338,14 @@ def checkDoubleQuotedWordSplit (_params : Parameters) (t : Token) : List TokenCo
   | _ => []
 
 /-- SC2068: Double quote array expansions -/
-def checkArrayExpansions (_params : Parameters) (t : Token) : List TokenComment :=
+def checkArrayExpansions (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_DollarBraced _ content =>
     let str := oversimplify content |>.foldl (· ++ ·) ""
     if str.endsWith "[@]" || str.endsWith "[*]" then
-      [makeComment .errorC t.id 2068 "Double quote array expansions to avoid re-splitting elements."]
+      -- Don't warn if already in a quoted context (e.g., inside double quotes)
+      if isQuoteFree params.shellType params.parentMap t then []
+      else [makeComment .errorC t.id 2068 "Double quote array expansions to avoid re-splitting elements."]
     else []
   | _ => []
 
