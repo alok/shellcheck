@@ -37,8 +37,8 @@ def readLiteralFull : FullParser Token := do
        c == '|' || c == '&' || c == ';' ||
        c == '<' || c == '>' ||
        c == '(' || c == ')' ||
-       c == '{' || c == '}' ||
        c == '#')
+       -- Note: { and } are allowed in word literals for brace expansion
   mkTokenFullAt (.T_Literal content) startLine startCol
 
 /-- Read a single-quoted string -/
