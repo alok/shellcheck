@@ -55,8 +55,22 @@ WARMUP=2           # Number of warmup runs
 HASKELL_SHELLCHECK=shellcheck  # Path to Haskell binary
 ```
 
+## Check Coverage
+
+Example warnings comparison on `complex_script.sh`:
+
+| Lean4 | Haskell |
+|-------|---------|
+| SC2034 (unused variable) | SC2034 (unused variable) |
+| SC2154 (unassigned variable) | SC2155 (declare+assign) |
+| SC2164 (cd without exit) | SC2030/SC2031 (subshell modification) |
+| SC2082 (indirect expansion) | SC2145 (array in string) |
+
+Both detect real issues but may flag different patterns.
+
 ## Notes
 
 - Both implementations parse all test scripts successfully
-- The Lean port produces fewer warnings (not all checks implemented yet)
+- The Lean port has ~90 implemented checks (Haskell has ~400+)
 - Real-world scripts from Homebrew test production-quality parsing
+- Parser is equivalent; check coverage is still being expanded
