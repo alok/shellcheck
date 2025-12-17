@@ -709,6 +709,129 @@ def checkUnintendedComment : CommandCheck := {
     | Option.none => []
 }
 
+/-- SC2035: Use ./* or -- before glob to avoid matching dashes -/
+def checkGlobDash : CommandCheck := {
+  name := .basename "rm"  -- Also applies to mv, cp, etc.
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          -- Check for globs that might match files starting with dash
+          if (s.startsWith "*" || s.startsWith "?") && !s.startsWith "./" then
+            some (makeComment .warningC arg.id 2035
+              "Use ./*glob* or -- *glob* to avoid matching dash-prefixed files.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2035 for mv command -/
+def checkGlobDashMv : CommandCheck := {
+  name := .basename "mv"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if (s.startsWith "*" || s.startsWith "?") && !s.startsWith "./" then
+            some (makeComment .warningC arg.id 2035
+              "Use ./*glob* or -- *glob* to avoid matching dash-prefixed files.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2035 for cp command -/
+def checkGlobDashCp : CommandCheck := {
+  name := .basename "cp"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if (s.startsWith "*" || s.startsWith "?") && !s.startsWith "./" then
+            some (makeComment .warningC arg.id 2035
+              "Use ./*glob* or -- *glob* to avoid matching dash-prefixed files.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2088: Tilde does not expand in quotes -/
+def checkTildeInQuotes : CommandCheck := {
+  name := .basename "cd"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_DoubleQuoted parts =>
+          if parts.any (fun p => match getLiteralString p with | some s => s.startsWith "~" | _ => false) then
+            some (makeComment .warningC arg.id 2088
+              "Tilde does not expand in quotes. Use $HOME or unquote.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2093: Remove exec if following commands should run -/
+def checkExecFollowed : CommandCheck := {
+  name := .exactly "exec"
+  check := fun params t =>
+    -- Check if there are commands after exec in the same sequence
+    match params.parentMap.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .T_Script _ cmds =>
+        -- If exec is not the last command, warn
+        match cmds.reverse.head? with
+        | some last => if last.id != t.id then
+            [makeComment .warningC t.id 2093
+              "Remove exec if following commands should run, or add exit after exec."]
+          else []
+        | Option.none => []
+      | _ => []
+    | Option.none => []
+}
+
+/-- SC2115: Use "${var:?}" to ensure var is set -/
+def checkRmVar : CommandCheck := {
+  name := .basename "rm"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      let hasRecursive := argStrs.any (fun s => s == "-r" || s == "-rf" || s == "-R" || s.contains 'r')
+      if hasRecursive then
+        args.filterMap fun arg =>
+          match arg.inner with
+          | .T_DollarBraced _ inner =>
+            let varName := getLiteralString inner |>.getD ""
+            -- Check if it's a simple variable without :? protection
+            if !varName.contains ':' && !varName.contains '?' then
+              some (makeComment .warningC arg.id 2115
+                "Use \"${var:?}\" to ensure this variable is set before rm -r.")
+            else Option.none
+          | .T_NormalWord parts =>
+            if parts.any (fun p => match p.inner with | .T_DollarBraced _ _ => true | _ => false) then
+              some (makeComment .infoC arg.id 2115
+                "Consider using \"${var:?}\" to ensure variables are set in rm -r.")
+            else Option.none
+          | _ => Option.none
+      else []
+    | Option.none => []
+}
+
+/-- SC2148: Add shebang if missing -/
+def checkMissingShebang : CommandCheck := {
+  name := .basename "bash"  -- Dummy - this should be a script-level check
+  check := fun _params _t => []  -- Script-level check, handled elsewhere
+}
+
 -- Note: SC2237 for [ ! -z ] is handled in Analytics.lean since [ ] is parsed as T_Condition
 
 /-- SC2236: Use -n instead of ! -z -/
@@ -952,7 +1075,13 @@ def commandChecks : List CommandCheck := [
   checkCdNoCheck,       -- SC2164
   checkEchoStdin,       -- SC2008
   checkTrWords,         -- SC2020
-  checkUnintendedComment -- SC2026
+  checkUnintendedComment, -- SC2026
+  checkGlobDash,        -- SC2035 (rm)
+  checkGlobDashMv,      -- SC2035 (mv)
+  checkGlobDashCp,      -- SC2035 (cp)
+  checkTildeInQuotes,   -- SC2088
+  checkExecFollowed,    -- SC2093
+  checkRmVar            -- SC2115
   -- Note: [ ] and [[ ]] checks moved to Analytics.lean (parsed as T_Condition)
 ]
 
