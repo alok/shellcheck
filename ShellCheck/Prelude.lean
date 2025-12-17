@@ -49,9 +49,9 @@ theorem lastOrDefault_singleton (d : α) (x : α) :
   lastOrDefault d [x] = x := rfl
 
 theorem getAt?_zero (x : α) (xs : List α) :
-    (x :: xs) !!! 0 = some x := sorry
+    (x :: xs) !!! 0 = some x := rfl
 
 theorem getAt?_succ (x : α) (xs : List α) (n : Nat) :
-    (x :: xs) !!! (n + 1) = xs !!! n := sorry
+    (x :: xs) !!! (n + 1) = xs !!! n := rfl
 
 end ShellCheck.Prelude

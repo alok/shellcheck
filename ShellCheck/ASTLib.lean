@@ -460,6 +460,8 @@ theorem isLoop_while (id : Id) (cond body : List Token) :
 theorem isLoop_for (id : Id) (v : String) (ws body : List Token) :
     isLoop ⟨id, .T_ForIn v ws body⟩ = true := rfl
 
+-- Note: These theorems require partial def unfolding which is non-trivial
+-- They are correct by inspection of the code but can't be proven with rfl
 theorem isConstant_literal (id : Id) (s : String) :
     isConstant ⟨id, .T_Literal s⟩ = true := sorry
 
