@@ -25,3 +25,7 @@ root = "Main"
 [[lean_exe]]
 name = "shellcheck4_tests"
 root = "ShellCheck.Tests.Main"
+
+[[lean_exe]]
+name = "shellcheck4_bench"
+root = "benchmarks.Benchmark"
