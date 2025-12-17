@@ -1030,6 +1030,236 @@ def checkArrayComma : CommandCheck := {
 
 -- Note: SC2199 for [[ ${array[@]} ]] is handled in Analytics.lean since [[ ]] is parsed as T_Condition
 
+/-- SC2038: Use -print0 with xargs -0, or -exec + for find|xargs -/
+def checkFindXargs : CommandCheck := {
+  name := .exactly "find"
+  check := fun params t =>
+    -- Check if find is in a pipeline to xargs
+    match params.parentMap.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .T_Pipeline _ cmds =>
+        if cmds.length >= 2 then
+          let hasXargs := cmds.any fun c =>
+            match getCommandBasename c with
+            | some "xargs" => true
+            | _ => false
+          if hasXargs then
+            match getCommandArguments t with
+            | some args =>
+              let argStrs := args.map (getLiteralString · |>.getD "")
+              let hasPrint0 := argStrs.any (· == "-print0")
+              let hasExecPlus := argStrs.any (· == "+")
+              if !hasPrint0 && !hasExecPlus then
+                [makeComment .warningC t.id 2038
+                  "Use -print0 with -0, or -exec + to handle filenames with spaces."]
+              else []
+            | Option.none => []
+          else []
+        else []
+      | _ => []
+    | Option.none => []
+}
+
+/-- SC2039: In POSIX sh, some features are undefined -/
+def checkPosixFeatures : CommandCheck := {
+  name := .exactly "local"
+  check := fun params t =>
+    -- Only warn in sh mode
+    match params.shellType with
+    | .Sh =>
+      [makeComment .warningC t.id 2039
+        "In POSIX sh, 'local' is undefined. Use a subshell or alternative."]
+    | _ => []
+}
+
+/-- SC2045: Iterating over ls output is fragile -/
+def checkLsIteration : CommandCheck := {
+  name := .basename "ls"
+  check := fun params t =>
+    -- Check if ls is in command substitution inside for loop
+    let ancestors := getPath params t
+    let inForLoop := ancestors.any fun ancestor =>
+      match ancestor.inner with
+      | .T_ForIn _ _ _ => true
+      | _ => false
+    let inCommandSub := ancestors.any fun ancestor =>
+      match ancestor.inner with
+      | .T_DollarExpansion _ => true
+      | .T_Backticked _ => true
+      | _ => false
+    if inForLoop && inCommandSub then
+      [makeComment .warningC t.id 2045
+        "Iterating over ls output is fragile. Use globs or find instead."]
+    else []
+}
+
+/-- SC2068: Double quote array expansions to avoid re-splitting -/
+def checkArrayExpansion : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_DollarBraced _ inner =>
+          let s := getLiteralString inner |>.getD ""
+          -- Check for array[@] or array[*] without proper quoting
+          if (s.endsWith "[@]" || s.endsWith "[*]") then
+            some (makeComment .warningC arg.id 2068
+              "Double quote array expansions to avoid re-splitting elements.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2155: Declare and assign separately to avoid masking return values -/
+def checkDeclareAssign : CommandCheck := {
+  name := .exactly "local"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_NormalWord parts =>
+          -- Check if there's an assignment with command substitution
+          let hasCommandSub := parts.any fun p =>
+            match p.inner with
+            | .T_DollarExpansion _ => true
+            | .T_Backticked _ => true
+            | _ => false
+          if hasCommandSub then
+            some (makeComment .warningC arg.id 2155
+              "Declare and assign separately to avoid masking return values.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2155 for export -/
+def checkExportAssign : CommandCheck := {
+  name := .exactly "export"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_NormalWord parts =>
+          let hasCommandSub := parts.any fun p =>
+            match p.inner with
+            | .T_DollarExpansion _ => true
+            | .T_Backticked _ => true
+            | _ => false
+          if hasCommandSub then
+            some (makeComment .warningC arg.id 2155
+              "Declare and assign separately to avoid masking return values.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2016: Expressions don't expand in single quotes -/
+def checkSingleQuoteExpression : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_SingleQuoted s =>
+          if stringContains s "$" || stringContains s "`" then
+            some (makeComment .infoC arg.id 2016
+              "Expressions don't expand in single quotes. Use double quotes.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2072: Decimals are not supported in comparisons -/
+def checkDecimalComparison : CommandCheck := {
+  name := .exactly "test"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      let hasComparison := argStrs.any fun s =>
+        s == "-eq" || s == "-ne" || s == "-lt" || s == "-le" || s == "-gt" || s == "-ge"
+      if hasComparison then
+        args.filterMap fun arg =>
+          match getLiteralString arg with
+          | some s =>
+            if s.any (· == '.') && s.all (fun c => c.isDigit || c == '.') then
+              some (makeComment .errorC arg.id 2072
+                "Decimals are not supported. Use bc or awk for floating point.")
+            else Option.none
+          | Option.none => Option.none
+      else []
+    | Option.none => []
+}
+
+/-- SC2206: Quote to prevent word splitting, or split robustly -/
+def checkArrayAssign : CommandCheck := {
+  name := .exactly "declare"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let hasArrayFlag := args.any fun a => getLiteralString a == some "-a"
+      if hasArrayFlag then
+        args.filterMap fun arg =>
+          match arg.inner with
+          | .T_NormalWord parts =>
+            -- Check for unquoted command substitution in array assignment
+            let hasUnquotedSub := parts.any fun p =>
+              match p.inner with
+              | .T_DollarExpansion _ => true
+              | .T_Backticked _ => true
+              | _ => false
+            if hasUnquotedSub then
+              some (makeComment .warningC arg.id 2206
+                "Quote to prevent word splitting, or use mapfile for robust parsing.")
+            else Option.none
+          | _ => Option.none
+      else []
+    | Option.none => []
+}
+
+/-- SC2086: Quote $@ in printf -/
+def checkPrintfAtVar : CommandCheck := {
+  name := .basename "printf"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_DollarBraced _ inner =>
+          let s := getLiteralString inner |>.getD ""
+          if s == "@" || s == "*" then
+            some (makeComment .warningC arg.id 2145
+              "Use \"$@\" to pass all arguments. $@ and $* require double quotes.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2207: Prefer mapfile or read -a over split by words -/
+def checkMapfile : CommandCheck := {
+  name := .exactly "mapfile"
+  check := fun _params _t =>
+    []  -- mapfile is good, no warning needed - this is a placeholder
+}
+
+-- SC2034: Variable appears unused - would need whole-script analysis, skipped
+-- SC2178: Variable used as array but defined as scalar - handled in Analytics
+
+/-- SC2087: Quote heredoc delimiter to prevent expansion -/
+def checkHeredocDelimiter : CommandCheck := {
+  name := .basename "cat"  -- Commonly used with heredocs
+  check := fun _params _t =>
+    -- Heredoc handling would require looking at redirections
+    -- This is a placeholder - full implementation needs redirection analysis
+    []
+}
+
 /-- All command checks -/
 def commandChecks : List CommandCheck := [
   checkLsGrep,
@@ -1081,7 +1311,17 @@ def commandChecks : List CommandCheck := [
   checkGlobDashCp,      -- SC2035 (cp)
   checkTildeInQuotes,   -- SC2088
   checkExecFollowed,    -- SC2093
-  checkRmVar            -- SC2115
+  checkRmVar,           -- SC2115
+  checkFindXargs,       -- SC2038
+  checkPosixFeatures,   -- SC2039
+  checkLsIteration,     -- SC2045
+  checkArrayExpansion,  -- SC2068
+  checkDeclareAssign,   -- SC2155 (local)
+  checkExportAssign,    -- SC2155 (export)
+  checkSingleQuoteExpression, -- SC2016
+  checkDecimalComparison, -- SC2072
+  checkArrayAssign,     -- SC2206
+  checkPrintfAtVar      -- SC2145
   -- Note: [ ] and [[ ]] checks moved to Analytics.lean (parsed as T_Condition)
 ]
 
