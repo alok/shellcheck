@@ -29,11 +29,23 @@ open ShellCheck.Interface
 open ShellCheck.Parser
 open ShellCheck.Prelude
 
-/-- Command name matcher -/
+/-- Command name matcher - supports single command, multiple commands, or any command -/
 inductive CommandName where
   | exactly : String → CommandName
   | basename : String → CommandName
-  deriving Repr, BEq, Ord, Inhabited
+  | anyExactly : List String → CommandName
+  | anyBasename : List String → CommandName
+  | any : CommandName  -- matches any command
+  deriving Repr, Inhabited
+
+instance : BEq CommandName where
+  beq a b := match a, b with
+    | .exactly s1, .exactly s2 => s1 == s2
+    | .basename s1, .basename s2 => s1 == s2
+    | .anyExactly l1, .anyExactly l2 => l1 == l2
+    | .anyBasename l1, .anyBasename l2 => l1 == l2
+    | .any, .any => true
+    | _, _ => false
 
 /-- Command-specific check with access to parameters -/
 structure CommandCheck where
@@ -55,6 +67,15 @@ def matchesCommandName (pattern : CommandName) (cmd : Token) : Bool :=
     match getCommandBasename cmd with
     | some cmdBase => cmdBase == name
     | Option.none => false
+  | .anyExactly names =>
+    match getCommandName cmd with
+    | some cmdName => names.contains cmdName
+    | Option.none => false
+  | .anyBasename names =>
+    match getCommandBasename cmd with
+    | some cmdBase => names.contains cmdBase
+    | Option.none => false
+  | .any => getCommandName cmd |>.isSome
 
 /-- Get the parent token of a given token -/
 def getParent (params : Parameters) (t : Token) : Option Token :=
@@ -71,6 +92,61 @@ where
       | some parent => go parent (parent :: acc) fuel
       | Option.none => acc
 
+/-!
+## Context Detection Helpers
+
+These helpers determine the syntactic context of a token.
+-/
+
+/-- Check if a token is inside a command substitution $() or `` -/
+def isInCommandSubstitution (params : Parameters) (t : Token) : Bool :=
+  (getPath params t).any fun ancestor =>
+    match ancestor.inner with
+    | .T_DollarExpansion _ => true
+    | .T_Backticked _ => true
+    | _ => false
+
+/-- Check if a token is inside a condition ([ ], [[ ]], or test) -/
+def isInCondition (params : Parameters) (t : Token) : Bool :=
+  (getPath params t).any fun ancestor =>
+    match ancestor.inner with
+    | .T_Condition _ _ => true
+    | _ => false
+
+/-- Check if a token is inside a for loop -/
+def isInForLoop (params : Parameters) (t : Token) : Bool :=
+  (getPath params t).any fun ancestor =>
+    match ancestor.inner with
+    | .T_ForIn _ _ _ => true
+    | .T_ForArithmetic _ _ _ _ => true
+    | _ => false
+
+/-- Check if a token is inside a while/until loop -/
+def isInWhileLoop (params : Parameters) (t : Token) : Bool :=
+  (getPath params t).any fun ancestor =>
+    match ancestor.inner with
+    | .T_WhileExpression _ _ => true
+    | .T_UntilExpression _ _ => true
+    | _ => false
+
+/-- Check if a token is inside any loop -/
+def isInLoop (params : Parameters) (t : Token) : Bool :=
+  isInForLoop params t || isInWhileLoop params t
+
+/-- Check if a token is inside a function definition -/
+def isInFunction (params : Parameters) (t : Token) : Bool :=
+  (getPath params t).any fun ancestor =>
+    match ancestor.inner with
+    | .T_Function _ _ _ _ => true
+    | _ => false
+
+/-- Check if a token is inside a subshell -/
+def isInSubshell (params : Parameters) (t : Token) : Bool :=
+  (getPath params t).any fun ancestor =>
+    match ancestor.inner with
+    | .T_Subshell _ => true
+    | _ => false
+
 /-- Check if a token is inside a pipeline -/
 def isInPipeline (params : Parameters) (t : Token) : Bool :=
   (getPath params t).any fun ancestor =>
@@ -84,6 +160,144 @@ def getContainingPipeline (params : Parameters) (t : Token) : Option Token :=
     match ancestor.inner with
     | .T_Pipeline _ _ => true
     | _ => false
+
+/-!
+## Argument Checking Helpers
+
+These helpers make it easier to check command arguments.
+-/
+
+/-- Get literal strings from arguments -/
+def getArgStrings (args : List Token) : List String :=
+  args.filterMap (getLiteralString ·)
+
+/-- Check if any argument matches a predicate -/
+def hasArgMatching (args : List Token) (pred : String → Bool) : Bool :=
+  args.any fun arg =>
+    match getLiteralString arg with
+    | some s => pred s
+    | Option.none => false
+
+/-- Check if any argument equals a specific string -/
+def hasArg (args : List Token) (s : String) : Bool :=
+  hasArgMatching args (· == s)
+
+/-- Check if any argument starts with a given prefix -/
+def hasArgStartingWith (args : List Token) (pfx : String) : Bool :=
+  hasArgMatching args (·.startsWith pfx)
+
+/-- Filter arguments matching a predicate, returning the token and its string -/
+def filterArgsMatching (args : List Token) (pred : String → Bool) : List (Token × String) :=
+  args.filterMap fun arg =>
+    match getLiteralString arg with
+    | some s => if pred s then some (arg, s) else Option.none
+    | Option.none => Option.none
+
+/-- Check if argument looks like an option (starts with -) -/
+def isOption (s : String) : Bool := s.startsWith "-"
+
+/-- Get non-option arguments -/
+def getNonOptionArgs (args : List Token) : List Token :=
+  args.filter fun arg =>
+    match getLiteralString arg with
+    | some s => !isOption s
+    | Option.none => true  -- keep non-literal args
+
+/-- Check if string contains glob characters -/
+def hasGlobChars (s : String) : Bool :=
+  s.any fun c => c == '*' || c == '?' || c == '['
+
+/-- Check if string looks like a variable reference -/
+def looksLikeVariable (s : String) : Bool :=
+  s.startsWith "$" || s.startsWith "${" || s.contains '$'
+
+/-!
+## Comment Construction Helpers
+-/
+
+/-- Make a warning comment for an argument -/
+def warnArg (arg : Token) (code : Nat) (msg : String) : TokenComment :=
+  makeComment .warningC arg.id code msg
+
+/-- Make an error comment for an argument -/
+def errorArg (arg : Token) (code : Nat) (msg : String) : TokenComment :=
+  makeComment .errorC arg.id code msg
+
+/-- Make a style comment for an argument -/
+def styleArg (arg : Token) (code : Nat) (msg : String) : TokenComment :=
+  makeComment .styleC arg.id code msg
+
+/-- Make an info comment for an argument -/
+def infoArg (arg : Token) (code : Nat) (msg : String) : TokenComment :=
+  makeComment .infoC arg.id code msg
+
+/-- Make a warning comment for a command -/
+def warnCmd (t : Token) (code : Nat) (msg : String) : TokenComment :=
+  makeComment .warningC t.id code msg
+
+/-- Make an error comment for a command -/
+def errorCmd (t : Token) (code : Nat) (msg : String) : TokenComment :=
+  makeComment .errorC t.id code msg
+
+/-- Make a style comment for a command -/
+def styleCmd (t : Token) (code : Nat) (msg : String) : TokenComment :=
+  makeComment .styleC t.id code msg
+
+/-- Make an info comment for a command -/
+def infoCmd (t : Token) (code : Nat) (msg : String) : TokenComment :=
+  makeComment .infoC t.id code msg
+
+/-!
+## Common Check Patterns
+
+These functions implement common check patterns that can be reused.
+-/
+
+/-- Create a check that warns about glob patterns that might match dash-prefixed files -/
+def mkGlobDashCheck (commands : List String) (code : Nat) (msg : String) : CommandCheck := {
+  name := .anyBasename commands
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if (s.startsWith "*" || s.startsWith "?") && !s.startsWith "./" then
+            some (warnArg arg code msg)
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- Create a check that warns when a command is used in a specific context -/
+def mkContextCheck (commands : List String) (contextCheck : Parameters → Token → Bool)
+    (code : Nat) (msg : String) : CommandCheck := {
+  name := .anyBasename commands
+  check := fun params t =>
+    if contextCheck params t then
+      [warnCmd t code msg]
+    else []
+}
+
+/-- Create a check that warns about specific argument patterns -/
+def mkArgPatternCheck (commands : List String) (argPred : String → Bool)
+    (code : Nat) (msg : String) : CommandCheck := {
+  name := .anyBasename commands
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      (filterArgsMatching args argPred).map fun (arg, _) =>
+        warnArg arg code msg
+    | Option.none => []
+}
+
+/-- Create a check that always warns when a command is used -/
+def mkAlwaysWarnCheck (command : String) (code : Nat) (msg : String)
+    (severity : Severity := .warningC) : CommandCheck := {
+  name := .exactly command
+  check := fun _params t =>
+    [makeComment severity t.id code msg]
+}
 
 /-- Pipeline-level check type -/
 abbrev PipelineCheck := Token → List TokenComment
@@ -710,56 +924,9 @@ def checkUnintendedComment : CommandCheck := {
 }
 
 /-- SC2035: Use ./* or -- before glob to avoid matching dashes -/
-def checkGlobDash : CommandCheck := {
-  name := .basename "rm"  -- Also applies to mv, cp, etc.
-  check := fun _params t =>
-    match getCommandArguments t with
-    | some args =>
-      args.filterMap fun arg =>
-        match getLiteralString arg with
-        | some s =>
-          -- Check for globs that might match files starting with dash
-          if (s.startsWith "*" || s.startsWith "?") && !s.startsWith "./" then
-            some (makeComment .warningC arg.id 2035
-              "Use ./*glob* or -- *glob* to avoid matching dash-prefixed files.")
-          else Option.none
-        | Option.none => Option.none
-    | Option.none => []
-}
-
-/-- SC2035 for mv command -/
-def checkGlobDashMv : CommandCheck := {
-  name := .basename "mv"
-  check := fun _params t =>
-    match getCommandArguments t with
-    | some args =>
-      args.filterMap fun arg =>
-        match getLiteralString arg with
-        | some s =>
-          if (s.startsWith "*" || s.startsWith "?") && !s.startsWith "./" then
-            some (makeComment .warningC arg.id 2035
-              "Use ./*glob* or -- *glob* to avoid matching dash-prefixed files.")
-          else Option.none
-        | Option.none => Option.none
-    | Option.none => []
-}
-
-/-- SC2035 for cp command -/
-def checkGlobDashCp : CommandCheck := {
-  name := .basename "cp"
-  check := fun _params t =>
-    match getCommandArguments t with
-    | some args =>
-      args.filterMap fun arg =>
-        match getLiteralString arg with
-        | some s =>
-          if (s.startsWith "*" || s.startsWith "?") && !s.startsWith "./" then
-            some (makeComment .warningC arg.id 2035
-              "Use ./*glob* or -- *glob* to avoid matching dash-prefixed files.")
-          else Option.none
-        | Option.none => Option.none
-    | Option.none => []
-}
+def checkGlobDash : CommandCheck :=
+  mkGlobDashCheck ["rm", "mv", "cp", "chmod", "chown", "chgrp"]
+    2035 "Use ./*glob* or -- *glob* to avoid matching dash-prefixed files."
 
 /-- SC2088: Tilde does not expand in quotes -/
 def checkTildeInQuotes : CommandCheck := {
@@ -1078,19 +1245,8 @@ def checkLsIteration : CommandCheck := {
   name := .basename "ls"
   check := fun params t =>
     -- Check if ls is in command substitution inside for loop
-    let ancestors := getPath params t
-    let inForLoop := ancestors.any fun ancestor =>
-      match ancestor.inner with
-      | .T_ForIn _ _ _ => true
-      | _ => false
-    let inCommandSub := ancestors.any fun ancestor =>
-      match ancestor.inner with
-      | .T_DollarExpansion _ => true
-      | .T_Backticked _ => true
-      | _ => false
-    if inForLoop && inCommandSub then
-      [makeComment .warningC t.id 2045
-        "Iterating over ls output is fragile. Use globs or find instead."]
+    if isInForLoop params t && isInCommandSubstitution params t then
+      [warnCmd t 2045 "Iterating over ls output is fragile. Use globs or find instead."]
     else []
 }
 
@@ -1113,48 +1269,34 @@ def checkArrayExpansion : CommandCheck := {
     | Option.none => []
 }
 
-/-- SC2155: Declare and assign separately to avoid masking return values -/
-def checkDeclareAssign : CommandCheck := {
-  name := .exactly "local"
-  check := fun _params t =>
-    match getCommandArguments t with
-    | some args =>
-      args.filterMap fun arg =>
-        match arg.inner with
-        | .T_NormalWord parts =>
-          -- Check if there's an assignment with command substitution
-          let hasCommandSub := parts.any fun p =>
-            match p.inner with
-            | .T_DollarExpansion _ => true
-            | .T_Backticked _ => true
-            | _ => false
-          if hasCommandSub then
-            some (makeComment .warningC arg.id 2155
-              "Declare and assign separately to avoid masking return values.")
-          else Option.none
-        | _ => Option.none
-    | Option.none => []
-}
+/-- Helper: Check if a token contains a command substitution -/
+def hasCommandSubstitution (t : Token) : Bool :=
+  match t.inner with
+  | .T_DollarExpansion _ => true
+  | .T_Backticked _ => true
+  | .T_NormalWord parts => parts.any fun p =>
+      match p.inner with
+      | .T_DollarExpansion _ => true
+      | .T_Backticked _ => true
+      | _ => false
+  | .T_DoubleQuoted parts => parts.any fun p =>
+      match p.inner with
+      | .T_DollarExpansion _ => true
+      | .T_Backticked _ => true
+      | _ => false
+  | _ => false
 
-/-- SC2155 for export -/
-def checkExportAssign : CommandCheck := {
-  name := .exactly "export"
+/-- SC2155: Declare and assign separately to avoid masking return values -/
+def checkDeclareAssignWithSub : CommandCheck := {
+  name := .anyExactly ["local", "export", "declare", "readonly", "typeset"]
   check := fun _params t =>
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
-        match arg.inner with
-        | .T_NormalWord parts =>
-          let hasCommandSub := parts.any fun p =>
-            match p.inner with
-            | .T_DollarExpansion _ => true
-            | .T_Backticked _ => true
-            | _ => false
-          if hasCommandSub then
-            some (makeComment .warningC arg.id 2155
-              "Declare and assign separately to avoid masking return values.")
-          else Option.none
-        | _ => Option.none
+        if hasCommandSubstitution arg then
+          some (warnArg arg 2155
+            "Declare and assign separately to avoid masking return values.")
+        else Option.none
     | Option.none => []
 }
 
@@ -1507,9 +1649,7 @@ def commandChecks : List CommandCheck := [
   checkEchoStdin,       -- SC2008
   checkTrWords,         -- SC2020
   checkUnintendedComment, -- SC2026
-  checkGlobDash,        -- SC2035 (rm)
-  checkGlobDashMv,      -- SC2035 (mv)
-  checkGlobDashCp,      -- SC2035 (cp)
+  checkGlobDash,        -- SC2035 (rm, mv, cp, chmod, chown, chgrp)
   checkTildeInQuotes,   -- SC2088
   checkExecFollowed,    -- SC2093
   checkRmVar,           -- SC2115
@@ -1517,8 +1657,7 @@ def commandChecks : List CommandCheck := [
   checkPosixFeatures,   -- SC2039
   checkLsIteration,     -- SC2045
   checkArrayExpansion,  -- SC2068
-  checkDeclareAssign,   -- SC2155 (local)
-  checkExportAssign,    -- SC2155 (export)
+  checkDeclareAssignWithSub, -- SC2155 (local, export, declare, readonly, typeset)
   checkSingleQuoteExpression, -- SC2016
   checkDecimalComparison, -- SC2072
   checkArrayAssign,     -- SC2206
