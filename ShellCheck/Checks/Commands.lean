@@ -597,6 +597,118 @@ def checkWhichCommand : CommandCheck := {
       "'which' is non-standard. Use type -p, command -v, or hash instead."]
 }
 
+/-- SC2003: expr is antiquated. Consider using $((..)) or let. -/
+def checkExprArithmetic : CommandCheck := {
+  name := .basename "expr"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      -- Check if it looks like arithmetic (has +, -, *, /, %)
+      if argStrs.any (fun s => s ∈ ["+", "-", "*", "/", "%", ":", "substr", "index", "length"]) then
+        [makeComment .styleC t.id 2003
+          "expr is antiquated. Consider rewriting this using $((..)), ${}, or [[ ]]."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2024: sudo doesn't affect redirects. Use sudo tee or sudo sh -c. -/
+def checkSudoRedirect : CommandCheck := {
+  name := .basename "sudo"
+  check := fun params t =>
+    -- Check if this sudo command has redirects
+    match params.parentMap.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .T_Redirecting redirects _ =>
+        if !redirects.isEmpty then
+          [makeComment .warningC t.id 2024
+            "sudo doesn't affect redirects. Use 'sudo tee' or 'sudo sh -c \"...\"' instead."]
+        else []
+      | _ => []
+    | Option.none => []
+}
+
+/-- SC2086 style: Don't use cd without checking return value -/
+def checkCdNoCheck : CommandCheck := {
+  name := .exactly "cd"
+  check := fun params t =>
+    -- Check if cd is followed by || or && or in an if
+    match params.parentMap.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .T_AndIf _ _ => []  -- cd && something - ok
+      | .T_OrIf _ _ => []   -- cd || something - ok
+      | _ =>
+        -- Simple heuristic: warn if just cd without error handling
+        [makeComment .infoC t.id 2164
+          "Use 'cd ... || exit' or 'cd ... || return' to handle cd failure."]
+    | Option.none => []
+}
+
+/-- SC2129: Consider using { cmd1; cmd2; } >> file -/
+def checkMultipleAppends : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params _t =>
+    -- This would need more context to detect multiple appends to same file
+    -- Simplified: just note that it's a style issue (not auto-detectable easily)
+    []
+}
+
+/-- SC2008: echo doesn't read from stdin -/
+def checkEchoStdin : CommandCheck := {
+  name := .basename "echo"
+  check := fun params t =>
+    -- Check if echo is being piped to
+    match params.parentMap.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .T_Pipeline _ cmds =>
+        -- If echo is not the first command in pipeline, warn
+        match cmds.head? with
+        | some first => if first.id != t.id then
+            [makeComment .warningC t.id 2008
+              "echo doesn't read from stdin, use cat or a similar command."]
+          else []
+        | Option.none => []
+      | _ => []
+    | Option.none => []
+}
+
+/-- SC2020: tr replaces sets of chars, not words -/
+def checkTrWords : CommandCheck := {
+  name := .basename "tr"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      -- Check for word-like patterns (multiple chars without brackets)
+      argStrs.filterMap fun s =>
+        if s.length > 2 && !s.startsWith "[" && !s.startsWith "-" &&
+           s.all (fun c => c.isAlpha || c.isDigit) then
+          some (makeComment .infoC t.id 2020
+            "tr replaces sets of chars, not words. Are you sure this is what you want?")
+        else Option.none
+    | Option.none => []
+}
+
+/-- SC2026: This word looks like a shell comment but isn't -/
+def checkUnintendedComment : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if s.startsWith "#" && s.length > 1 then
+            some (makeComment .warningC arg.id 2026
+              "This word looks like a comment but will be passed as an argument.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
 -- Note: SC2237 for [ ! -z ] is handled in Analytics.lean since [ ] is parsed as T_Condition
 
 /-- SC2236: Use -n instead of ! -z -/
@@ -833,7 +945,14 @@ def commandChecks : List CommandCheck := [
   checkSetAssign,
   checkReadR,
   checkPrintfArgCount,
-  checkArrayComma
+  checkArrayComma,
+  -- More new checks
+  checkExprArithmetic,  -- SC2003
+  checkSudoRedirect,    -- SC2024
+  checkCdNoCheck,       -- SC2164
+  checkEchoStdin,       -- SC2008
+  checkTrWords,         -- SC2020
+  checkUnintendedComment -- SC2026
   -- Note: [ ] and [[ ]] checks moved to Analytics.lean (parsed as T_Condition)
 ]
 

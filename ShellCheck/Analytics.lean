@@ -1309,6 +1309,33 @@ def checkNegatedTest (_params : Parameters) (t : Token) : List TokenComment :=
     | _ => []
   | _ => []
 
+/-- SC2053: Quote the right-hand side of == in [[ ]] to prevent glob matching -/
+def checkUnquotedRhsGlob (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary .doubleBracket op _ rhs =>
+    if op == "==" || op == "=" || op == "!=" then
+      -- Check if rhs is unquoted and contains glob chars
+      match rhs.inner with
+      | .T_NormalWord parts =>
+        let hasGlob := parts.any fun p =>
+          match getLiteralString p with
+          | some s => s.any (fun c => c == '*' || c == '?' || c == '[')
+          | Option.none => false
+        if hasGlob then
+          [makeComment .warningC rhs.id 2053
+            "Quote the right-hand side of == to prevent glob matching."]
+        else []
+      | .T_Literal s =>
+        if s.any (fun c => c == '*' || c == '?' || c == '[') then
+          [makeComment .warningC rhs.id 2053
+            "Quote the right-hand side of == to prevent glob matching."]
+        else []
+      | _ => []
+    else []
+  | _ => []
+
+-- Note: SC2015 is already implemented earlier in this file
+
 /-- SC2116: Useless echo? Instead of 'cmd $(echo foo)', use 'cmd foo' -/
 def checkUuoeVar (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -2609,6 +2636,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkBadTestAndOr,
   checkTestAndOr,  -- SC2166
   checkNegatedTest,  -- SC2237
+  checkUnquotedRhsGlob,  -- SC2053
   checkComparisonOperators,
   checkSubshellAsTest,
   checkBackticksAsTest,
