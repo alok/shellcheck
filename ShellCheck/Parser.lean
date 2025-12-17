@@ -918,7 +918,23 @@ where
                 consumeLines
             | _ => pure ()  -- EOF without delimiter
     consumeLines
+  -- Check if a word represents a declaration builtin that accepts assignments after options
+  isDeclarationBuiltin (word : Token) : Bool :=
+    match word.inner with
+    | .T_NormalWord [⟨_, .T_Literal s⟩] =>
+        s == "declare" || s == "local" || s == "export" || s == "typeset" || s == "readonly"
+    | _ => false
+
+  -- Check if the first word in the accumulator is a declaration builtin
+  -- wordAcc is in reverse order, so the first word is at the end
+  isInDeclarationContext (wordAcc : List Token) : Bool :=
+    match wordAcc.getLast? with
+    | some w => isDeclarationBuiltin w
+    | none => false
+
   -- First read assignments, then words and redirects
+  -- For declaration builtins (declare, local, export, etc.), we keep trying
+  -- to parse assignments even after other words/options have been parsed.
   readAssignsWordsAndRedirects (assignAcc : List Token) (wordAcc : List Token) (redirAcc : List Token)
       : FullParser (List Token × List Token × List Token) := do
     skipHSpaceFull
@@ -948,8 +964,8 @@ where
           | some redir => readAssignsWordsAndRedirects assignAcc wordAcc (redir :: redirAcc)
           | none =>
               -- Not a fd redirect, could be assignment or word
-              if wordAcc.isEmpty then
-                -- Still in assignment phase, try reading an assignment
+              -- Try assignment if: no words yet OR first word is declaration builtin
+              if wordAcc.isEmpty || isInDeclarationContext wordAcc then
                 match ← optionalFull (attemptFull readAssignmentFull) with
                 | some assign => readAssignsWordsAndRedirects (assign :: assignAcc) wordAcc redirAcc
                 | none =>
@@ -960,8 +976,8 @@ where
                 readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
         else
           -- Could be an assignment or a word
-          if wordAcc.isEmpty then
-            -- Still in assignment phase, try reading an assignment
+          -- Try assignment if: no words yet OR first word is declaration builtin
+          if wordAcc.isEmpty || isInDeclarationContext wordAcc then
             match ← optionalFull (attemptFull readAssignmentFull) with
             | some assign => readAssignsWordsAndRedirects (assign :: assignAcc) wordAcc redirAcc
             | none =>
