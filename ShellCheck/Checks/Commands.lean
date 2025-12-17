@@ -566,6 +566,235 @@ def checkEchoN : CommandCheck := {
 
 -- Note: SC2002 (useless cat) and SC2009 (ps | grep) are handled by pipeline checks above
 
+/-- SC2219: Instead of 'let expr', use (( expr )) -/
+def checkLetArithmetic : CommandCheck := {
+  name := .exactly "let"
+  check := fun _params t =>
+    [makeComment .styleC t.id 2219
+      "Instead of 'let expr', prefer (( expr )) ."]
+}
+
+/-- SC2006: Use $(...) instead of legacy backticks -/
+def checkBackticks : CommandCheck := {
+  name := .exactly "echo"  -- Applies generally, but check in echo context
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_Backticked _ =>
+          some (makeComment .styleC arg.id 2006
+            "Use $(...) notation instead of legacy backticks `...`.")
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2230: which is non-standard. Use type, command -v, or hash -/
+def checkWhichCommand : CommandCheck := {
+  name := .basename "which"
+  check := fun _params t =>
+    [makeComment .styleC t.id 2230
+      "'which' is non-standard. Use type -p, command -v, or hash instead."]
+}
+
+-- Note: SC2237 for [ ! -z ] is handled in Analytics.lean since [ ] is parsed as T_Condition
+
+/-- SC2236: Use -n instead of ! -z -/
+def checkTestNotZ : CommandCheck := {
+  name := .exactly "test"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      if argStrs.any (· == "!") && argStrs.any (· == "-z") then
+        [makeComment .styleC t.id 2236
+          "Use -n instead of ! -z."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2061: Quote the regex for grep -E or -P -/
+def checkGrepRegexQuoting : CommandCheck := {
+  name := .basename "grep"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      let hasExtended := argStrs.any (fun s => s == "-E" || s == "-P" || s.startsWith "--extended")
+      if hasExtended then
+        -- Check for unquoted patterns with regex metacharacters
+        args.filterMap fun arg =>
+          match getLiteralString arg with
+          | some s =>
+            if s.any (fun c => c == '*' || c == '+' || c == '?' || c == '|') &&
+               !s.startsWith "'" && !s.startsWith "\"" then
+              some (makeComment .warningC arg.id 2061
+                "Quote the regex to prevent glob expansion.")
+            else Option.none
+          | Option.none => Option.none
+      else []
+    | Option.none => []
+}
+
+/-- SC2012: Use find instead of ls to better handle filenames -/
+def checkLsInScript : CommandCheck := {
+  name := .basename "ls"
+  check := fun params t =>
+    -- Only warn if output is being used (piped or captured)
+    if isInPipeline params t then
+      [makeComment .infoC t.id 2012
+        "Use find instead of ls to better handle non-alphanumeric filenames."]
+    else []
+}
+
+/-- SC2029: Note that single quotes prevent expansion on server -/
+def checkSshSingleQuotes : CommandCheck := {
+  name := .basename "ssh"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_SingleQuoted s =>
+          if stringContains s "$" then
+            some (makeComment .infoC arg.id 2029
+              "Note that $VAR in single quotes won't expand on the SSH server. Use double quotes if intended.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2059: Don't use variables in printf format string -/
+def checkPrintfVar : CommandCheck := {
+  name := .basename "printf"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some (formatArg :: _) =>
+      match formatArg.inner with
+      | .T_DollarBraced _ _ =>
+        [makeComment .warningC formatArg.id 2059
+          "Don't use variables in the printf format string. Use printf '%s' \"$var\"."]
+      | .T_NormalWord parts =>
+        if parts.any (fun p => match p.inner with | .T_DollarBraced _ _ => true | _ => false) then
+          [makeComment .warningC formatArg.id 2059
+            "Don't use variables in the printf format string. Use printf '%s' \"$var\"."]
+        else []
+      | _ => []
+    | _ => []
+}
+
+/-- SC2060: Quote to prevent word splitting/globbing -/
+def checkRmGlob : CommandCheck := {
+  name := .basename "rm"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if s.any (· == '*') && !s.startsWith "'" && !s.startsWith "\"" then
+            some (makeComment .warningC arg.id 2060
+              "Quote to prevent word splitting/globbing, or use a loop.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2114: Warning: deletes all but the specified files in root -/
+def checkRmRoot : CommandCheck := {
+  name := .basename "rm"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      if argStrs.any (· == "/") || argStrs.any (· == "/*") then
+        [makeComment .errorC t.id 2114
+          "Warning: 'rm -rf /' or 'rm -rf /*' is dangerous."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2121: To assign a variable, use var=value, not 'set var=value' -/
+def checkSetAssign : CommandCheck := {
+  name := .exactly "set"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if stringContains s "=" && !s.startsWith "-" then
+            some (makeComment .errorC arg.id 2121
+              "To assign a variable, use var=value, not 'set var=value'.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2122: read will expand escapes by default. Use -r -/
+def checkReadR : CommandCheck := {
+  name := .exactly "read"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      if !argStrs.any (· == "-r") && !argStrs.any (fun s => s.startsWith "-" && s.any (· == 'r')) then
+        [makeComment .warningC t.id 2162
+          "read without -r will mangle backslashes."]
+      else []
+    | Option.none => []
+}
+
+-- Note: SC2166 for [ -a/-o ] is handled in Analytics.lean since [ ] is parsed as T_Condition
+-- Note: SC2181 for [ $? ] is handled in Analytics.lean since [ ] is parsed as T_Condition
+
+/-- SC2183: This format string has N placeholders but M arguments -/
+def checkPrintfArgCount : CommandCheck := {
+  name := .basename "printf"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some (formatArg :: restArgs) =>
+      match getLiteralString formatArg with
+      | some fmt =>
+        -- Count % placeholders (excluding %%)
+        let placeholders := countPlaceholders fmt
+        let argCount := restArgs.length
+        if placeholders > 0 && argCount > 0 && placeholders != argCount then
+          [makeComment .warningC t.id 2183
+            s!"This format string has {placeholders} placeholder(s) but {argCount} argument(s)."]
+        else []
+      | Option.none => []
+    | _ => []
+}
+where
+  countPlaceholders (s : String) : Nat :=
+    let chars := s.toList
+    go chars 0
+  go : List Char → Nat → Nat
+    | [], n => n
+    | '%' :: '%' :: rest, n => go rest n  -- %% is escaped
+    | '%' :: rest, n => go rest (n + 1)   -- % is a placeholder
+    | _ :: rest, n => go rest n
+
+/-- SC2192: This array element has no value. Remove the comma or add a value -/
+def checkArrayComma : CommandCheck := {
+  name := .exactly "declare"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if stringContains s ",," || s.endsWith "," then
+            some (makeComment .errorC arg.id 2192
+              "This array element has no value. Remove the comma or add a value.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+-- Note: SC2199 for [[ ${array[@]} ]] is handled in Analytics.lean since [[ ]] is parsed as T_Condition
+
 /-- All command checks -/
 def commandChecks : List CommandCheck := [
   checkLsGrep,
@@ -589,7 +818,23 @@ def commandChecks : List CommandCheck := [
   checkTestNZ,
   checkLet,
   checkFindWithSymlinks,
-  checkEchoN
+  checkEchoN,
+  -- New checks
+  checkLetArithmetic,
+  checkBackticks,
+  checkWhichCommand,
+  checkTestNotZ,  -- SC2236 for test command
+  checkGrepRegexQuoting,
+  checkLsInScript,
+  checkSshSingleQuotes,
+  checkPrintfVar,
+  checkRmGlob,
+  checkRmRoot,
+  checkSetAssign,
+  checkReadR,
+  checkPrintfArgCount,
+  checkArrayComma
+  -- Note: [ ] and [[ ]] checks moved to Analytics.lean (parsed as T_Condition)
 ]
 
 /-- Main checker -/

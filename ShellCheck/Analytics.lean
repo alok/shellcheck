@@ -1295,6 +1295,20 @@ where
     "-L", "-N", "-O", "-G", "-S",
     "!"]
 
+/-- SC2237: Use [ -n "..." ] instead of [ ! -z "..." ] -/
+def checkNegatedTest (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Unary _ "!" inner =>
+    match inner.inner with
+    | .TC_Unary _ "-z" _ =>
+      [makeComment .styleC t.id 2237
+        "Use [ -n \"...\" ] instead of [ ! -z \"...\" ]."]
+    | .TC_Unary _ "-n" _ =>
+      [makeComment .styleC t.id 2237
+        "Use [ -z \"...\" ] instead of [ ! -n \"...\" ]."]
+    | _ => []
+  | _ => []
+
 /-- SC2116: Useless echo? Instead of 'cmd $(echo foo)', use 'cmd foo' -/
 def checkUuoeVar (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -2594,6 +2608,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkCaseAgainstGlob,
   checkBadTestAndOr,
   checkTestAndOr,  -- SC2166
+  checkNegatedTest,  -- SC2237
   checkComparisonOperators,
   checkSubshellAsTest,
   checkBackticksAsTest,
