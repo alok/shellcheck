@@ -1260,6 +1260,207 @@ def checkHeredocDelimiter : CommandCheck := {
     []
 }
 
+/-- SC2091: Remove surrounding $() to avoid accidental execution -/
+def checkAccidentalExec : CommandCheck := {
+  name := .basename "true"  -- Catch $(true), $(false)
+  check := fun params t =>
+    let ancestors := getPath params t
+    let inCommandSub := ancestors.any fun ancestor =>
+      match ancestor.inner with
+      | .T_DollarExpansion _ => true
+      | .T_Backticked _ => true
+      | _ => false
+    let inCondition := ancestors.any fun ancestor =>
+      match ancestor.inner with
+      | .T_Condition _ _ => true
+      | _ => false
+    if inCommandSub && !inCondition then
+      [makeComment .warningC t.id 2091
+        "Remove surrounding $() to avoid executing output."]
+    else []
+}
+
+/-- SC2100: Use $((..)) instead of deprecated $[..] -/
+def checkDeprecatedArithmetic : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if stringContains s "$[" then
+            some (makeComment .warningC arg.id 2100
+              "Use $((..)) for arithmetic instead of deprecated $[..].")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2129: Consider using { cmd1; cmd2; } >> file -/
+def checkGroupRedirect : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params _t =>
+    -- Would need to track consecutive appends to same file
+    -- Placeholder for now
+    []
+}
+
+/-- SC2139: This expands when defined, not when used. Use single quotes -/
+def checkAliasExpansion : CommandCheck := {
+  name := .exactly "alias"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_DoubleQuoted parts =>
+          let hasExpansion := parts.any fun p =>
+            match p.inner with
+            | .T_DollarBraced _ _ => true
+            | .T_DollarExpansion _ => true
+            | _ => false
+          if hasExpansion then
+            some (makeComment .warningC arg.id 2139
+              "This expands when defined, not when used. Consider single quotes.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2140: Word is of form "A"B"C" -/
+def checkQuotingStyle : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_NormalWord parts =>
+          -- Check for alternating quoted/unquoted pattern
+          let hasDoubleQuotes := parts.any fun p =>
+            match p.inner with | .T_DoubleQuoted _ => true | _ => false
+          let hasLiterals := parts.any fun p =>
+            match p.inner with | .T_Literal s => s.length > 0 | _ => false
+          if hasDoubleQuotes && hasLiterals && parts.length > 2 then
+            some (makeComment .styleC arg.id 2140
+              "Word is of form \"A\"B\"C\". Consider \"ABC\" or 'A'\"B\"'C'.")
+          else Option.none
+        | _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2143: Use grep -q instead of comparing output -/
+def checkGrepQ : CommandCheck := {
+  name := .basename "grep"
+  check := fun params t =>
+    -- Check if grep is in a [ -n $(grep) ] pattern
+    let ancestors := getPath params t
+    let inCommandSub := ancestors.any fun a =>
+      match a.inner with | .T_DollarExpansion _ => true | _ => false
+    let inTest := ancestors.any fun a =>
+      match a.inner with
+      | .T_Condition _ _ => true
+      | .T_SimpleCommand _ (cmd::_) =>
+        match getLiteralString cmd with
+        | some s => s == "test" || s == "["
+        | _ => false
+      | _ => false
+    if inCommandSub && inTest then
+      match getCommandArguments t with
+      | some args =>
+        let hasQ := args.any fun a => getLiteralString a == some "-q"
+        if !hasQ then
+          [makeComment .styleC t.id 2143
+            "Use grep -q instead of comparing output to check if matches exist."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC2144: -e doesn't work with globs. Use for loop or find -/
+def checkTestGlob : CommandCheck := {
+  name := .exactly "test"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      let hasFileTest := argStrs.any fun s => s == "-e" || s == "-f" || s == "-d"
+      if hasFileTest then
+        args.filterMap fun arg =>
+          match getLiteralString arg with
+          | some s =>
+            if s.any (fun c => c == '*' || c == '?') then
+              some (makeComment .errorC arg.id 2144
+                "-e/-f/-d don't work with globs. Use a for loop.")
+            else Option.none
+          | Option.none => Option.none
+      else []
+    | Option.none => []
+}
+
+/-- SC2150: find -exec doesn't handle empty results -/
+def checkFindEmpty : CommandCheck := {
+  name := .exactly "find"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.map (getLiteralString · |>.getD "")
+      let hasExec := argStrs.any (· == "-exec")
+      let hasPrint := argStrs.any (· == "-print")
+      -- Suggest -exec + over -exec ; for batching
+      if hasExec && !hasPrint then
+        -- Check if using ; instead of +
+        if argStrs.any (· == ";") || argStrs.any (· == "\\;") then
+          if !argStrs.any (· == "+") then
+            [makeComment .infoC t.id 2150
+              "Use -exec cmd {} + to batch commands for better performance."]
+          else []
+        else []
+      else []
+    | Option.none => []
+}
+
+-- SC2153: Uppercase variable misspelling - would need expected vars tracking, skipped
+
+/-- SC2163: export requires variable names -/
+def checkExportValue : CommandCheck := {
+  name := .exactly "export"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if s.startsWith "$" then
+            some (makeComment .errorC arg.id 2163
+              "export requires a variable name. Use export VAR=value.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+-- SC2165: This form doesn't work - condition loops handled in Analytics
+
+/-- SC2167: This expression is a math expression -/
+def checkMathExpr : CommandCheck := {
+  name := .exactly "expr"
+  check := fun _params t =>
+    -- Just note that $(()) is preferred
+    [makeComment .styleC t.id 2167
+      "Consider using $((..)) instead of expr for arithmetic."]
+}
+
+/-- SC2169: In dash, some bashisms aren't supported -/
+def checkDashBashisms : CommandCheck := {
+  name := .exactly "source"
+  check := fun params t =>
+    if params.shellType == .Dash then
+      [makeComment .errorC t.id 2169
+        "In dash, 'source' is undefined. Use '.' (dot) instead."]
+    else []
+}
+
 /-- All command checks -/
 def commandChecks : List CommandCheck := [
   checkLsGrep,
@@ -1321,7 +1522,17 @@ def commandChecks : List CommandCheck := [
   checkSingleQuoteExpression, -- SC2016
   checkDecimalComparison, -- SC2072
   checkArrayAssign,     -- SC2206
-  checkPrintfAtVar      -- SC2145
+  checkPrintfAtVar,     -- SC2145
+  checkAccidentalExec,  -- SC2091
+  checkDeprecatedArithmetic, -- SC2100
+  checkAliasExpansion,  -- SC2139
+  checkQuotingStyle,    -- SC2140
+  checkGrepQ,           -- SC2143
+  checkTestGlob,        -- SC2144
+  checkFindEmpty,       -- SC2150
+  checkExportValue,     -- SC2163
+  checkMathExpr,        -- SC2167
+  checkDashBashisms     -- SC2169
   -- Note: [ ] and [[ ]] checks moved to Analytics.lean (parsed as T_Condition)
 ]
 
