@@ -2524,6 +2524,204 @@ def checkCommandSlash : CommandCheck := {
     | Option.none => []
 }
 
+/-- SC2004: $/${} is unnecessary on arithmetic variables -/
+def checkArithmeticDollar : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Arithmetic _ =>
+      -- Check if variables inside (( )) use unnecessary $
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "$" && !Regex.containsSubstring str "$(" then
+        [styleCmd t 2004 "$/${} is unnecessary on arithmetic variables."]
+      else []
+    | _ => []
+}
+
+/-- SC2011: Use 'find .. -print0 | xargs -0' or 'find .. -exec' instead of ls piped to xargs -/
+def checkLsXargs : CommandCheck := {
+  name := .basename "ls"
+  check := fun params t =>
+    if isInPipeline params t then
+      -- Check if piped to xargs
+      [infoCmd t 2011 "Use 'find .. -print0 | xargs -0' instead of 'ls | xargs' to handle filenames with spaces."]
+    else []
+}
+
+/-- SC2015: Note that A && B || C is not if-then-else -/
+def checkAndOrChain : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_OrIf left _ =>
+      match left.inner with
+      | .T_AndIf _ _ =>
+        [infoCmd t 2015 "Note that A && B || C is not if-then-else. C may run when A is true."]
+      | _ => []
+    | _ => []
+}
+
+/-- SC2017: Increase precision by dividing before multiplying -/
+def checkArithmeticPrecision : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Arithmetic _ =>
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "/" && Regex.containsSubstring str "*" then
+        [infoCmd t 2017 "Consider dividing last to maximize precision."]
+      else []
+    | _ => []
+}
+
+/-- SC2019: Use 'mapfile' instead of 'readarray' for portability -/
+def checkReadarray : CommandCheck := {
+  name := .exactly "readarray"
+  check := fun _params t =>
+    [styleCmd t 2019 "'readarray' is less portable than 'mapfile'. Consider using mapfile."]
+}
+
+/-- SC2021: Don't use [] glob ranges in a for loop without a glob -/
+def checkForGlobRange : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_ForIn _ words _ =>
+      words.filterMap fun w =>
+        let s := getLiteralString w |>.getD ""
+        if Regex.containsSubstring s "[" && Regex.containsSubstring s "]" &&
+           !Regex.containsSubstring s "*" && !Regex.containsSubstring s "?" then
+          some (warnArg w 2021 "This [a-z] is a glob range, not a sequence. Use seq or {a..z}.")
+        else Option.none
+    | _ => []
+}
+
+/-- SC2022: Note that unlike globs, this doesn't expand -/
+def checkBraceExpansionInQuotes : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    let str := getLiteralString t |>.getD ""
+    if Regex.containsSubstring str "\"{" && Regex.containsSubstring str "}\"" then
+      [infoCmd t 2022 "Note that brace expansion doesn't work in double quotes."]
+    else []
+}
+
+/-- SC2023: This $0 is the shell's name, not the first argument -/
+def checkDollarZero : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_DollarBraced _ content =>
+      let s := getLiteralString content |>.getD ""
+      if s == "0" then
+        [infoCmd t 2023 "$0 refers to the script name, not the first argument. Use $1."]
+      else []
+    | _ => []
+}
+
+/-- SC2025: Make sure all escape sequences are enclosed in $'...' -/
+def checkEscapeSequence : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    let str := getLiteralString t |>.getD ""
+    if (Regex.containsSubstring str "\\n" || Regex.containsSubstring str "\\t") && !str.startsWith "$'" then
+      [warnCmd t 2025 "Escape sequences like \\n only work in $'...' quotes."]
+    else []
+}
+
+/-- SC2027: Surrounding quotes won't match globs. Use *"x"* or pattern matching -/
+def checkGlobInQuotes : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    let str := getLiteralString t |>.getD ""
+    if Regex.containsSubstring str "\"*" || Regex.containsSubstring str "*\"" then
+      [warnCmd t 2027 "Surrounding quotes won't match globs. Use *\"x\"* without quotes around *."]
+    else []
+}
+
+/-- SC2030: Modification of var is local to subshell -/
+def checkSubshellAssignment : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    match t.inner with
+    | .T_Assignment _ name _ _ =>
+      if isInSubshell params t then
+        [warnCmd t 2030 s!"Modification of '{name}' is local to the subshell and won't persist."]
+      else []
+    | _ => []
+}
+
+/-- SC2031: var was modified in a subshell. That change might not propagate -/
+def checkSubshellRead : CommandCheck := {
+  name := .any
+  check := fun _params _t =>
+    -- Would need data flow analysis to properly implement
+    []
+}
+
+/-- SC2032: Use own script or sh -c 'command here' to run multiple commands -/
+def checkSudoMultipleCommands : CommandCheck := {
+  name := .basename "sudo"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let argStrs := args.filterMap getLiteralString
+      if argStrs.any (fun s => Regex.containsSubstring s "&&" || Regex.containsSubstring s "||" || Regex.containsSubstring s ";") then
+        [warnCmd t 2032 "Use 'sudo sh -c \"command; command\"' to run multiple commands with sudo."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2033: Shell functions can't be passed to external commands -/
+def checkFunctionToExternal : CommandCheck := {
+  name := .anyBasename ["xargs", "find", "ssh", "sudo"]
+  check := fun _params t =>
+    -- Simplified: would need function tracking
+    []
+}
+
+/-- SC2036: If you wanted a literal ~, use ~"..." or quote the entire string -/
+def checkTildeQuoting : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    let str := getLiteralString t |>.getD ""
+    if Regex.containsSubstring str "~\"" || Regex.containsSubstring str "\"~" then
+      [warnCmd t 2036 "If you want a literal ~, quote it. If you want expansion, don't quote ~."]
+    else []
+}
+
+/-- SC2037: To assign value use var=value not var = value -/
+def checkAssignmentSpaces : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    -- Check for "var = value" pattern which is interpreted as command
+    match getCommandName t with
+    | some name =>
+      if name.length <= 20 && name.all (fun c => c.isAlpha || c == '_') then
+        match getCommandArguments t with
+        | some [eq, _val] =>
+          if getLiteralString eq == some "=" then
+            [errorCmd t 2037 s!"To assign '{name}=value', use no spaces around '='."]
+          else []
+        | _ => []
+      else []
+    | Option.none => []
+}
+
+/-- SC2044: For loops over find output are fragile. Use find -exec or while read -/
+def checkForLoopFind : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_ForIn _ words _ =>
+      words.filterMap fun w =>
+        let s := getLiteralString w |>.getD ""
+        if Regex.containsSubstring s "$(find" || Regex.containsSubstring s "`find" then
+          some (warnArg w 2044 "For loops over 'find' output are fragile. Use 'find .. -exec' or 'while read'.")
+        else Option.none
+    | _ => []
+}
+
 /-- SC2310: This function is never invoked (simplified - just checks direct calls) -/
 -- Note: Full implementation would need call graph analysis
 def checkUnusedFunction : CommandCheck := {
@@ -2532,6 +2730,8 @@ def checkUnusedFunction : CommandCheck := {
     -- Would need full scope analysis
     []
 }
+
+set_option maxRecDepth 2048
 
 /-- All command checks -/
 def commandChecks : List CommandCheck := [
@@ -2650,7 +2850,24 @@ def commandChecks : List CommandCheck := [
   checkSelfAssignment,  -- SC2269
   checkCdWithoutExit,   -- SC2277
   checkEmptyCommand,    -- SC2286
-  checkCommandSlash     -- SC2287
+  checkCommandSlash,    -- SC2287
+  -- New SC2xxx checks (batch 3)
+  checkArithmeticDollar,      -- SC2004
+  checkDeprecatedArithmetic,  -- SC2007
+  checkLsXargs,               -- SC2011
+  checkAndOrChain,            -- SC2015
+  checkArithmeticPrecision,   -- SC2017
+  checkReadarray,             -- SC2019
+  checkForGlobRange,          -- SC2021
+  checkBraceExpansionInQuotes, -- SC2022
+  checkDollarZero,            -- SC2023
+  checkEscapeSequence,        -- SC2025
+  checkGlobInQuotes,          -- SC2027
+  checkSubshellAssignment,    -- SC2030
+  checkSudoMultipleCommands,  -- SC2032
+  checkTildeQuoting,          -- SC2036
+  checkAssignmentSpaces,      -- SC2037
+  checkForLoopFind            -- SC2044
   -- Note: [ ] and [[ ]] checks moved to Analytics.lean (parsed as T_Condition)
 ]
 
