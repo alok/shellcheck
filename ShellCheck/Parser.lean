@@ -2315,38 +2315,158 @@ def runFullParser (script : String) (filename : String := "<stdin>") : (Option T
 private def contains (msg sub : String) : Bool :=
   Regex.containsSubstring msg.toLower sub.toLower
 
+/-- Check if msg contains a substring (case-sensitive) -/
+private def containsExact (msg sub : String) : Bool :=
+  Regex.containsSubstring msg sub
+
 /-- Infer SC code from error message patterns -/
 def inferSCCode (msg : String) : Nat × Severity :=
-  -- Control flow errors
-  if contains msg "fi" && contains msg "if" then (1046, .errorC)
-  else if contains msg "done" && (contains msg "do" || contains msg "loop") then (1061, .errorC)
-  else if contains msg "esac" && contains msg "case" then (1064, .errorC)
-  else if contains msg "then" then (1050, .errorC)
-  else if contains msg "do" && contains msg "expected" then (1058, .errorC)
-  -- Whitespace/spacing errors
-  else if contains msg "space" && contains msg "=" then (1068, .errorC)
-  else if contains msg "space" && contains msg "[" then (1069, .errorC)
-  else if contains msg "space" then (1035, .errorC)
-  -- Quoting errors
-  else if contains msg "quote" && contains msg "close" then (1078, .errorC)
-  else if contains msg "single" && contains msg "quote" then (1003, .errorC)
-  -- Variable/assignment errors
-  else if contains msg "$" && contains msg "left side" then (1066, .errorC)
-  else if contains msg "brace" && contains msg "array" then (1087, .errorC)
-  else if contains msg "==" && contains msg "assignment" then (1097, .errorC)
-  -- Unicode errors
-  else if contains msg "unicode" then (1015, .errorC)
+  -- Escaping errors (SC1000-SC1012, SC1117)
+  if contains msg "backslash" && contains msg "literal" then (1001, .infoC)
+  else if contains msg "escape" && contains msg "single quote" then (1003, .errorC)
+  else if contains msg "backslash" && contains msg "linefeed" then (1004, .warningC)
+  else if contains msg "\\t" && contains msg "literal" then (1012, .warningC)
+  else if contains msg "\\n" && contains msg "literal" then (1117, .infoC)
+
+  -- Whitespace errors (SC1007, SC1017-SC1020, SC1035, SC1054, SC1068-SC1069, SC1095, SC1099, etc.)
+  else if contains msg "space after =" then (1007, .errorC)
   else if contains msg "carriage return" then (1017, .errorC)
-  -- Parsing stopped errors
+  else if contains msg "non-breaking space" then (1018, .errorC)
+  else if contains msg "space before the ]" || contains msg "space before ]" then (1020, .errorC)
+  else if contains msg "space after" && contains msg "{" then (1054, .errorC)
+  else if contains msg "space" && contains msg "=" && contains msg "assignment" then (1068, .errorC)
+  else if contains msg "spaces around the =" then (1068, .errorC)
+  else if contains msg "space before" && contains msg "[" then (1069, .errorC)
+  else if contains msg "space" && contains msg "function" && contains msg "body" then (1095, .errorC)
+  else if contains msg "space before the #" then (1099, .errorC)
+  else if contains msg "trailing space" && contains msg "\\" then (1101, .errorC)
+  else if contains msg "space before and after" && contains msg "=" then (1108, .errorC)
+  else if contains msg "leading space" && contains msg "shebang" then (1114, .errorC)
+  else if contains msg "space" && contains msg "#" && contains msg "!" then (1115, .errorC)
+  else if contains msg "whitespace" && contains msg "here-doc" then (1118, .errorC)
+  else if contains msg "space before the !" then (1129, .errorC)
+  else if contains msg "space before the :" then (1130, .errorC)
+  else if contains msg "space" then (1035, .errorC)
+
+  -- Quoting errors (SC1011, SC1015-SC1016, SC1078-SC1079, SC1110-SC1112)
+  else if contains msg "apostrophe" && contains msg "terminated" then (1011, .errorC)
+  else if contains msg "unicode" && contains msg "double quote" then (1015, .errorC)
+  else if contains msg "unicode" && contains msg "single quote" then (1016, .errorC)
+  else if contains msg "close" && contains msg "double quote" then (1078, .errorC)
+  else if contains msg "end quote" && contains msg "suspect" then (1079, .warningC)
+  else if contains msg "unicode quote" then (1110, .errorC)
+
+  -- Test bracket errors (SC1019, SC1026, SC1028-SC1029, SC1033-SC1034, SC1106, SC1139-SC1140)
+  else if contains msg "unary condition" then (1019, .errorC)
+  else if contains msg "grouping" && contains msg "[[" then (1026, .errorC)
+  else if contains msg "escape" && contains msg "\\(" && contains msg "[" then (1028, .errorC)
+  else if contains msg "shouldn't escape" && contains msg "[[" then (1029, .warningC)
+  else if contains msg "[[" && contains msg "]" && contains msg "match" then (1033, .errorC)
+  else if contains msg "[" && contains msg "]]" && contains msg "match" then (1034, .errorC)
+  else if contains msg "arithmetic" && contains msg "-lt" then (1106, .infoC)
+  else if contains msg "-o" && contains msg "||" then (1139, .errorC)
+  else if contains msg "after condition" && contains msg "&&" then (1140, .errorC)
+
+  -- Shebang errors (SC1008, SC1071, SC1082, SC1084, SC1104, SC1113, SC1128)
+  else if contains msg "bom" || contains msg "utf-8 bom" then (1082, .errorC)
+  else if contains msg "!#" && contains msg "shebang" then (1084, .errorC)
+  else if contains msg "not just !" && contains msg "shebang" then (1104, .errorC)
+  else if contains msg "not just #" && contains msg "shebang" then (1113, .errorC)
+  else if contains msg "shebang" && contains msg "first line" then (1128, .errorC)
+  else if contains msg "shebang" && contains msg "unrecognized" then (1008, .warningC)
+  else if contains msg "only supports" && (contains msg "sh" || contains msg "bash") then (1071, .errorC)
+
+  -- Control flow errors (SC1009-SC1010, SC1014, SC1045-SC1053, SC1058, SC1061-SC1063, SC1074-SC1075, SC1131)
+  else if contains msg "parser error was in" then (1009, .errorC)
+  else if contains msg "semicolon" && contains msg "before" && contains msg "done" then (1010, .errorC)
+  else if contains msg "if cmd; then" || contains msg "check exit code" then (1014, .errorC)
+  else if contains msg "&;" then (1045, .errorC)
+  else if contains msg "fi" && contains msg "if" then (1046, .errorC)
+  else if contains msg "fi" && contains msg "matching" then (1047, .errorC)
+  else if contains msg "empty" && contains msg "then" then (1048, .errorC)
+  else if contains msg "forget" && contains msg "then" then (1049, .errorC)
+  else if contains msg "expected" && contains msg "then" then (1050, .errorC)
+  else if contains msg "semicolon" && contains msg "after" && contains msg "then" then (1051, .errorC)
+  else if contains msg "semicolon" && contains msg "after" && contains msg "else" then (1053, .errorC)
+  else if contains msg "expected" && contains msg "do" then (1058, .errorC)
+  else if contains msg "done" && (contains msg "do" || contains msg "loop") then (1061, .errorC)
+  else if contains msg "done" && contains msg "matching" then (1062, .errorC)
+  else if contains msg "linefeed" && contains msg "before" && contains msg "do" then (1063, .errorC)
+  else if contains msg ";;" && contains msg "case" then (1074, .errorC)
+  else if contains msg "elif" && contains msg "else if" then (1075, .errorC)
+  else if contains msg "elif" && contains msg "branch" then (1131, .errorC)
+
+  -- Function errors (SC1064-SC1065)
+  else if contains msg "{" && contains msg "function" then (1064, .errorC)
+  else if contains msg "parameter" && contains msg "$1" then (1065, .errorC)
+  else if contains msg "esac" && contains msg "case" then (1064, .errorC)
+
+  -- Variable errors (SC1036-SC1037, SC1066-SC1067, SC1086-SC1087, SC1097, SC1116)
+  else if contains msg "(" && contains msg "invalid" && contains msg "escape" then (1036, .errorC)
+  else if contains msg "brace" && contains msg "positional" then (1037, .errorC)
+  else if contains msg "$" && contains msg "left side" then (1066, .errorC)
+  else if contains msg "indirection" && contains msg "array" then (1067, .errorC)
+  else if contains msg "$" && contains msg "iterator" && contains msg "for" then (1086, .errorC)
+  else if contains msg "brace" && contains msg "array" then (1087, .errorC)
+  else if contains msg "==" && (contains msg "assignment" || contains msg "use =") then (1097, .errorC)
+  else if contains msg "missing $" && contains msg "((" then (1116, .errorC)
+
+  -- Here-doc errors (SC1038-SC1044, SC1119-SC1122)
+  else if contains msg "< <(" || contains msg "space sensitive" then (1038, .errorC)
+  else if contains msg "indent" && contains msg "end token" then (1039, .errorC)
+  else if contains msg "<<-" && contains msg "tab" then (1040, .errorC)
+  else if contains msg "eof" && contains msg "separate line" then (1041, .errorC)
+  else if contains msg "close match" && contains msg "eof" then (1042, .warningC)
+  else if contains msg "end token" && contains msg "here" then (1044, .errorC)
+  else if contains msg "linefeed" && contains msg "end token" && contains msg ")" then (1119, .errorC)
+  else if contains msg "comment" && contains msg "here-doc" then (1120, .errorC)
+  else if contains msg "terminator" && contains msg "<<" then (1121, .errorC)
+  else if contains msg "after end token" then (1122, .errorC)
+
+  -- Sourcing errors (SC1090-SC1091, SC1094)
+  else if contains msg "non-constant" && contains msg "source" then (1090, .warningC)
+  else if contains msg "not following" then (1091, .infoC)
+  else if contains msg "sourced file" && contains msg "failed" then (1094, .warningC)
+
+  -- Syntax errors (SC1056, SC1070, SC1072-SC1073, SC1077, SC1081, SC1083, SC1088-SC1089, SC1098, SC1132-SC1133, SC1136, SC1141-SC1143)
+  else if contains msg "expected" && contains msg "}" then (1056, .errorC)
+  else if contains msg "parsing stopped" && contains msg "parentheses" then (1088, .errorC)
+  else if contains msg "parsing stopped" && contains msg "keyword" then (1089, .errorC)
   else if contains msg "parsing stopped" then (1070, .errorC)
+  else if contains msg "tick" && contains msg "slant" then (1077, .errorC)
+  else if contains msg "case sensitive" then (1081, .errorC)
+  else if contains msg "{" && contains msg "literal" then (1083, .errorC)
+  else if contains msg "}" && contains msg "literal" then (1083, .errorC)
+  else if contains msg "eval" && contains msg "escape" then (1098, .errorC)
+  else if contains msg "&" && contains msg "terminate" then (1132, .errorC)
+  else if contains msg "start of line" && (contains msg "|" || contains msg "&&") then (1133, .errorC)
+  else if contains msg "after" && contains msg "]" && contains msg "semicolon" then (1136, .errorC)
+  else if contains msg "after compound" && contains msg "redirection" then (1141, .errorC)
+  else if contains msg "process substitution" && contains msg "redirect" then (1142, .errorC)
+  else if contains msg "backslash" && contains msg "comment" then (1143, .infoC)
+
+  -- Unicode errors (SC1100, SC1109)
+  else if contains msg "unicode dash" then (1100, .errorC)
+  else if contains msg "html entity" then (1109, .errorC)
+  else if contains msg "unicode" then (1015, .errorC)
+
+  -- Disambiguation errors (SC1102, SC1105)
+  else if contains msg "disambiguate" && contains msg "$((" then (1102, .errorC)
+  else if contains msg "disambiguate" && contains msg "((" then (1105, .errorC)
+
+  -- Directive errors (SC1107, SC1123-SC1127, SC1135)
+  else if contains msg "directive" && contains msg "unknown" then (1107, .warningC)
+  else if contains msg "directive" && contains msg "compound" then (1123, .errorC)
+  else if contains msg "directive" && contains msg "branch" then (1124, .errorC)
+  else if contains msg "key=value" && contains msg "directive" then (1125, .errorC)
+  else if contains msg "directive" && contains msg "before" then (1126, .errorC)
+  else if contains msg "intended" && contains msg "comment" then (1127, .errorC)
+  else if contains msg "escape" && contains msg "$" && contains msg "literal" then (1135, .infoC)
+
+  -- Generic fallbacks
   else if contains msg "unexpected" then (1072, .errorC)
   else if contains msg "couldn't parse" then (1073, .errorC)
-  -- Here-doc errors
-  else if contains msg "here" && contains msg "doc" then (1044, .errorC)
-  -- Shebang errors
-  else if contains msg "shebang" || contains msg "#!/" then (1071, .errorC)
-  -- Else if errors
-  else if contains msg "elif" then (1075, .errorC)
+
   -- Default: code 0 means unclassified
   else (0, .errorC)
 
