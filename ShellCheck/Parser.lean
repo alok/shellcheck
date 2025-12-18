@@ -9,6 +9,7 @@ import ShellCheck.AST
 import ShellCheck.ASTLib
 import ShellCheck.Data
 import ShellCheck.Interface
+import ShellCheck.Regex
 import ShellCheck.Parser.Types
 import ShellCheck.Parser.Ext
 import ShellCheck.Parser.Core
@@ -17,6 +18,7 @@ import ShellCheck.Parser.Word
 import ShellCheck.Parser.Arithmetic
 import ShellCheck.Parser.Condition
 import ShellCheck.Parser.Parsec
+import ShellCheck.Checks.ParserErrors
 
 namespace ShellCheck.Parser
 
@@ -2309,6 +2311,45 @@ def runFullParser (script : String) (filename : String := "<stdin>") : (Option T
       let msg := s!"{filename}:{it'.line}:{it'.column}: {err}"
       (none, {}, msg :: initState.errors)
 
+/-- Check if msg contains a substring (case-insensitive) -/
+private def contains (msg sub : String) : Bool :=
+  Regex.containsSubstring msg.toLower sub.toLower
+
+/-- Infer SC code from error message patterns -/
+def inferSCCode (msg : String) : Nat × Severity :=
+  -- Control flow errors
+  if contains msg "fi" && contains msg "if" then (1046, .errorC)
+  else if contains msg "done" && (contains msg "do" || contains msg "loop") then (1061, .errorC)
+  else if contains msg "esac" && contains msg "case" then (1064, .errorC)
+  else if contains msg "then" then (1050, .errorC)
+  else if contains msg "do" && contains msg "expected" then (1058, .errorC)
+  -- Whitespace/spacing errors
+  else if contains msg "space" && contains msg "=" then (1068, .errorC)
+  else if contains msg "space" && contains msg "[" then (1069, .errorC)
+  else if contains msg "space" then (1035, .errorC)
+  -- Quoting errors
+  else if contains msg "quote" && contains msg "close" then (1078, .errorC)
+  else if contains msg "single" && contains msg "quote" then (1003, .errorC)
+  -- Variable/assignment errors
+  else if contains msg "$" && contains msg "left side" then (1066, .errorC)
+  else if contains msg "brace" && contains msg "array" then (1087, .errorC)
+  else if contains msg "==" && contains msg "assignment" then (1097, .errorC)
+  -- Unicode errors
+  else if contains msg "unicode" then (1015, .errorC)
+  else if contains msg "carriage return" then (1017, .errorC)
+  -- Parsing stopped errors
+  else if contains msg "parsing stopped" then (1070, .errorC)
+  else if contains msg "unexpected" then (1072, .errorC)
+  else if contains msg "couldn't parse" then (1073, .errorC)
+  -- Here-doc errors
+  else if contains msg "here" && contains msg "doc" then (1044, .errorC)
+  -- Shebang errors
+  else if contains msg "shebang" || contains msg "#!/" then (1071, .errorC)
+  -- Else if errors
+  else if contains msg "elif" then (1075, .errorC)
+  -- Default: code 0 means unclassified
+  else (0, .errorC)
+
 /-- Enhanced parseScript using full parser -/
 def parseScriptFull [Monad m] (_sys : SystemInterface m) (spec : ParseSpec) : m ParseResult := do
   let (root, positions, errors) := runFullParser spec.psScript spec.psFilename
@@ -2316,9 +2357,10 @@ def parseScriptFull [Monad m] (_sys : SystemInterface m) (spec : ParseSpec) : m 
     errors.map fun msg =>
       let mkAt (file : String) (line col : Nat) (message : String) : PositionedComment :=
         let pos : Position := { posFile := file, posLine := line, posColumn := col }
+        let (code, severity) := inferSCCode message
         { pcStartPos := pos
           pcEndPos := pos
-          pcComment := { cSeverity := .errorC, cCode := 0, cMessage := message }
+          pcComment := { cSeverity := severity, cCode := code, cMessage := message }
           pcFix := none }
       match msg.splitOn ":" with
       | file :: lineStr :: colStr :: rest =>
