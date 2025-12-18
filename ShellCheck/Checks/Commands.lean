@@ -2700,6 +2700,385 @@ def checkReturnInMain : CommandCheck := {
     else []
 }
 
+/-- SC3002: In POSIX sh, extglob is undefined -/
+def checkExtglob : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "@(" || Regex.containsSubstring str "!(" ||
+         Regex.containsSubstring str "+(" || Regex.containsSubstring str "*(" then
+        [warnCmd t 3002 "In POSIX sh, extglob is undefined."]
+      else []
+    else []
+}
+
+/-- SC3004: In POSIX sh, BASH_SOURCE is undefined -/
+def checkBashSource : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "BASH_SOURCE" then
+        [warnCmd t 3004 "In POSIX sh, BASH_SOURCE is undefined."]
+      else []
+    else []
+}
+
+/-- SC3005: In POSIX sh, BASH_VERSION is undefined -/
+def checkBashVersion : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "BASH_VERSION" then
+        [warnCmd t 3005 "In POSIX sh, BASH_VERSION is undefined."]
+      else []
+    else []
+}
+
+/-- SC3007: In POSIX sh, FUNCNAME is undefined -/
+def checkFuncname : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "FUNCNAME" then
+        [warnCmd t 3007 "In POSIX sh, FUNCNAME is undefined."]
+      else []
+    else []
+}
+
+/-- SC3008: In POSIX sh, PIPESTATUS is undefined -/
+def checkPipestatus : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "PIPESTATUS" then
+        [warnCmd t 3008 "In POSIX sh, PIPESTATUS is undefined."]
+      else []
+    else []
+}
+
+/-- SC3009: In POSIX sh, `{n..m}` is undefined -/
+def checkBraceExpansion : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "{" && Regex.containsSubstring str ".." then
+        [warnCmd t 3009 "In POSIX sh, brace expansion is undefined."]
+      else []
+    else []
+}
+
+/-- SC3012: In POSIX sh, `!` negation in `[ ]` is undefined -/
+def checkTestNegation : CommandCheck := {
+  name := .basename "["
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if str.startsWith "! " then
+        [warnCmd t 3012 "In POSIX sh, negation with ! in [ ] is undefined."]
+      else []
+    else []
+}
+
+/-- SC3015: In POSIX sh, `select` loops are undefined -/
+def checkSelectLoop : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    match t.inner with
+    | .T_SelectIn _ _ _ =>
+      if params.shellType == .Sh then
+        [warnCmd t 3015 "In POSIX sh, select loops are undefined."]
+      else []
+    | _ => []
+}
+
+/-- SC3016: In POSIX sh, `>&` file descriptor duplication is undefined -/
+def checkFdDuplication : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str ">&" && !Regex.containsSubstring str "2>&1" then
+        [warnCmd t 3016 "In POSIX sh, some `>&` redirections are undefined."]
+      else []
+    else []
+}
+
+/-- SC3017: In POSIX sh, `&>` redirection is undefined -/
+def checkAmpersandRedirect : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "&>" then
+        [warnCmd t 3017 "In POSIX sh, `&>` redirection is undefined."]
+      else []
+    else []
+}
+
+/-- SC3018: In POSIX sh, `<<<` here-strings are undefined -/
+def checkHereString : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "<<<" then
+        [warnCmd t 3018 "In POSIX sh, here-strings are undefined."]
+      else []
+    else []
+}
+
+/-- SC3019: In POSIX sh, `|&` is undefined -/
+def checkPipeAmpersand : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "|&" then
+        [warnCmd t 3019 "In POSIX sh, `|&` is undefined. Use `2>&1 |`."]
+      else []
+    else []
+}
+
+/-- SC3021: In POSIX sh, `coproc` is undefined -/
+def checkCoproc : CommandCheck := {
+  name := .exactly "coproc"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      [warnCmd t 3021 "In POSIX sh, coproc is undefined."]
+    else []
+}
+
+/-- SC3022: In POSIX sh, `+=` is undefined -/
+def checkPlusEquals : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "+=" then
+        [warnCmd t 3022 "In POSIX sh, += is undefined."]
+      else []
+    else []
+}
+
+/-- SC3023: In POSIX sh, `read -a` is undefined -/
+def checkReadArray : CommandCheck := {
+  name := .exactly "read"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        let argStrs := args.filterMap getLiteralString
+        if argStrs.contains "-a" then
+          [warnCmd t 3023 "In POSIX sh, read -a is undefined."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC3024: In POSIX sh, `read -d` is undefined -/
+def checkReadDelimiter : CommandCheck := {
+  name := .exactly "read"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        let argStrs := args.filterMap getLiteralString
+        if argStrs.contains "-d" then
+          [warnCmd t 3024 "In POSIX sh, read -d is undefined."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC3025: In POSIX sh, `read -n` is undefined -/
+def checkReadN : CommandCheck := {
+  name := .exactly "read"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        let argStrs := args.filterMap getLiteralString
+        if argStrs.contains "-n" then
+          [warnCmd t 3025 "In POSIX sh, read -n is undefined."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC3026: In POSIX sh, `read -t` is undefined -/
+def checkReadTimeout : CommandCheck := {
+  name := .exactly "read"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        let argStrs := args.filterMap getLiteralString
+        if argStrs.contains "-t" then
+          [warnCmd t 3026 "In POSIX sh, read -t is undefined."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC3028: In POSIX sh, `$EUID` is undefined -/
+def checkEuid : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "$EUID" || Regex.containsSubstring str "${EUID}" then
+        [warnCmd t 3028 "In POSIX sh, EUID is undefined."]
+      else []
+    else []
+}
+
+/-- SC3029: In POSIX sh, `$UID` is undefined -/
+def checkUid : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "$UID" || Regex.containsSubstring str "${UID}" then
+        [warnCmd t 3029 "In POSIX sh, UID is undefined."]
+      else []
+    else []
+}
+
+/-- SC3031: In POSIX sh, `=~` regex matching is undefined -/
+def checkRegexMatching : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "=~" then
+        [warnCmd t 3031 "In POSIX sh, =~ regex matching is undefined."]
+      else []
+    else []
+}
+
+/-- SC3032: In POSIX sh, `set -o` options are limited -/
+def checkSetOptions : CommandCheck := {
+  name := .exactly "set"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        let argStrs := args.filterMap getLiteralString
+        if argStrs.any (fun s => s.startsWith "-o" || s.startsWith "+o") then
+          [infoCmd t 3032 "In POSIX sh, set -o options are limited."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC3033: In POSIX sh, `printf -v` is undefined -/
+def checkPrintfV : CommandCheck := {
+  name := .basename "printf"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        let argStrs := args.filterMap getLiteralString
+        if argStrs.contains "-v" then
+          [warnCmd t 3033 "In POSIX sh, printf -v is undefined."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC3034: In POSIX sh, `let` is undefined -/
+def checkLetInSh : CommandCheck := {
+  name := .exactly "let"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      [warnCmd t 3034 "In POSIX sh, let is undefined."]
+    else []
+}
+
+/-- SC3035: In POSIX sh, `type -P` is undefined -/
+def checkTypeP : CommandCheck := {
+  name := .exactly "type"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        let argStrs := args.filterMap getLiteralString
+        if argStrs.any (fun s => s.startsWith "-P" || s == "-p") then
+          [warnCmd t 3035 "In POSIX sh, type -P/-p options are undefined."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC3036: In POSIX sh, `echo -e` is undefined -/
+def checkEchoE : CommandCheck := {
+  name := .basename "echo"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        let argStrs := args.filterMap getLiteralString
+        if argStrs.contains "-e" then
+          [warnCmd t 3036 "In POSIX sh, echo -e is undefined. Use printf."]
+        else []
+      | Option.none => []
+    else []
+}
+
+/-- SC3038: In POSIX sh, test `==` is undefined -/
+def checkTestDoubleEquals : CommandCheck := {
+  name := .basename "test"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "==" then
+        [warnCmd t 3038 "In POSIX sh, test == is undefined. Use =."]
+      else []
+    else []
+}
+
+/-- SC3039: In POSIX sh, `[[` is undefined -/
+def checkDoubleBrackets : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    match t.inner with
+    | .T_Condition _ _ =>
+      if params.shellType == .Sh then
+        [warnCmd t 3039 "In POSIX sh, [[ ]] is undefined. Use [ ]."]
+      else []
+    | _ => []
+}
+
+/-- SC3040: In POSIX sh, `set -o pipefail` is undefined -/
+def checkPipefail : CommandCheck := {
+  name := .exactly "set"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "pipefail" then
+        [warnCmd t 3040 "In POSIX sh, set -o pipefail is undefined."]
+      else []
+    else []
+}
+
+/-- SC3041: In POSIX sh, `set -o errexit` in subshells is undefined -/
+def checkErrexit : CommandCheck := {
+  name := .exactly "set"
+  check := fun params t =>
+    if params.shellType == .Sh && isInSubshell params t then
+      let str := getLiteralString t |>.getD ""
+      if Regex.containsSubstring str "errexit" || Regex.containsSubstring str "-e" then
+        [infoCmd t 3041 "In POSIX sh, errexit behavior in subshells is undefined."]
+      else []
+    else []
+}
+
 set_option maxRecDepth 2048
 
 /-- All command checks -/
