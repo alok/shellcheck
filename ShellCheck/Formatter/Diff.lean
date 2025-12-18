@@ -153,7 +153,7 @@ def formatResultDiff (color : ColorFunc) (cr : CheckResult) (contents : String) 
     some (formatDoc color doc)
 
 /-- Create Diff formatter -/
-def format [Monad m] (options : Format.FormatterOptions) : Format.Formatter m := {
+def format [Monad m] (_options : Format.FormatterOptions) : Format.Formatter m := {
   header := pure ()
   onResult := fun _cr _sys => pure ()  -- Would output diff
   onFailure := fun _file _msg => pure ()  -- Would print error
@@ -177,13 +177,13 @@ theorem countDelta_second_increments_right (s : String) (rest : List (DiffElem S
     let (l, r) := countDelta rest
     (l, r + 1) := sorry
 
-theorem formatDiffLine_first_starts_minus (color : ColorFunc) (s : String) :
+theorem formatDiffLine_first_starts_minus (_color : ColorFunc) (_s : String) :
     True := trivial  -- Would verify starts with '-' (before coloring)
 
-theorem formatDiffLine_second_starts_plus (color : ColorFunc) (s : String) :
+theorem formatDiffLine_second_starts_plus (_color : ColorFunc) (_s : String) :
     True := trivial  -- Would verify starts with '+' (before coloring)
 
-theorem formatDoc_has_headers (color : ColorFunc) (doc : DiffDoc String) :
+theorem formatDoc_has_headers (_color : ColorFunc) (_doc : DiffDoc String) :
     True := trivial  -- Would verify --- and +++ headers present
 
 theorem normalizePath_replaces_backslash (path : String) :
