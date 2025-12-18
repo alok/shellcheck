@@ -1226,7 +1226,8 @@ where
     skipHSpaceFull
     let _ ← stringFull "()"
     skipAllSpaceFull
-    let body ← readBraceGroupInPipe
+    -- Bash allows `name() ( ... )` (subshell function bodies).
+    let body ← attemptFull readBraceGroupInPipe <|> readSubshellInPipe
     mkTokenFull (.T_Function ⟨false⟩ ⟨true⟩ name body)
 
   -- Forward declarations for compound commands in pipe
@@ -2046,7 +2047,9 @@ partial def readFunctionFull : FullParser Token := do
     skipHSpaceFull
     let _ ← stringFull "()"
     skipAllSpaceFull
-    let body ← readBraceGroupFull
+    -- Bash allows `name() ( ... )` (subshell function bodies). ShellCheck models this as a
+    -- function whose body token is a `T_Subshell`.
+    let body ← attemptFull readBraceGroupFull <|> readSubshellFull
     mkTokenFull (.T_Function ⟨false⟩ ⟨true⟩ name body)
 
   /-- Read any command (compound or simple) -/

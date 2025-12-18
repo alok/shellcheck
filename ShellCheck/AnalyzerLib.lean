@@ -267,25 +267,62 @@ def executableFromShebang (s : String) : String :=
     else
       exec
 
-/-- Check if script contains 'set -e' anywhere -/
-def containsSetE (root : Token) : Bool :=
-  -- Check shebang for -e and check for 'set' commands with -e
-  match root.inner with
-  | .T_Script shebang _ =>
-    match shebang.inner with
-    | .T_Literal s => s.splitOn "-" |>.any (fun part => part.any (· == 'e'))
+/-- Does this script mention `set -e` / `set -o errexit` anywhere?
+
+This is used as a conservative signal for checks that behave differently when
+errexit is enabled. Mirrors ShellCheck's `containsSetE` hack: it's intentionally
+best-effort and errs on the side of `true` when we see relevant syntax. -/
+partial def containsSetE (root : Token) : Bool :=
+  go root
+where
+  shebangHasSetE (t : Token) : Bool :=
+    match t.inner with
+    | .T_Script shebang _ =>
+      match getLiteralString shebang with
+      | some s =>
+        -- Approximate `[[:space:]]-[^-]*e` by scanning for a `-...e` flag word.
+        let words := s.splitOn " "
+        words.any fun w =>
+          w.startsWith "-" && !w.startsWith "--" && (w.drop 1).contains 'e' && !(w.drop 1).contains '-'
+      | none => false
     | _ => false
-  | _ => false
 
-/-- Check if option is set via 'shopt -s' -/
-def containsShopt (_opt : String) (_root : Token) : Bool :=
-  -- Simplified check - would walk tree looking for shopt commands
-  false
+  isSetE (t : Token) : Bool :=
+    match getCommandName t with
+    | some "set" =>
+      (oversimplify t).any (· == "errexit") || hasFlag t "e"
+    | _ => false
 
-/-- Check if option is set via 'set -o' -/
-def containsSetOption (_opt : String) (_root : Token) : Bool :=
-  -- Simplified check
-  false
+  go (t : Token) : Bool :=
+    shebangHasSetE t || isSetE t || (getTokenChildren t).any go
+
+/-- Does this script mention `shopt -s $opt` anywhere? -/
+partial def containsShopt (opt : String) (root : Token) : Bool :=
+  go root
+where
+  isShopt (t : Token) : Bool :=
+    match getCommandName t with
+    | some "shopt" => (oversimplify t).any (· == opt)
+    | _ => false
+
+  go (t : Token) : Bool :=
+    isShopt t || (getTokenChildren t).any go
+
+/-- Does this script mention `set -o $opt` anywhere?
+
+Like ShellCheck, we treat any `set -o ...` usage as "could have enabled this
+option" (i.e. checking for the presence of the `-o` flag is a conservative
+fallback). -/
+partial def containsSetOption (opt : String) (root : Token) : Bool :=
+  go root
+where
+  isSetOpt (t : Token) : Bool :=
+    match getCommandName t with
+    | some "set" => (oversimplify t).any (· == opt) || hasFlag t "o"
+    | _ => false
+
+  go (t : Token) : Bool :=
+    isSetOpt t || (getTokenChildren t).any go
 
 /-- Check if a shell option is set anywhere -/
 def isOptionSet (opt : String) (root : Token) : Bool :=
@@ -664,7 +701,16 @@ where
 
   getDeclareVariables (_base : Token) (args : List Token) :
       List (Token × Token × String × DataType) :=
-    getModifierParams DataType.DataString args
+    -- `declare -a/-A` defines arrays.
+    -- This is important for checks like SC2178/SC2179 (array ↔ string confusion).
+    let flags : List String := args.filterMap fun arg =>
+      match getLiteralString arg with
+      | some s => if s.startsWith "-" then some s else none
+      | none => none
+    let isArrayDecl := flags.any fun f => f.any (· == 'a') || f.any (· == 'A')
+    let defaultType : DataSource → DataType :=
+      if isArrayDecl then DataType.DataArray else DataType.DataString
+    getModifierParams defaultType args
 
   getModifierParams (defaultType : DataSource → DataType) (args : List Token) :
       List (Token × Token × String × DataType) :=
@@ -771,7 +817,12 @@ where
     let afterBracket := s.dropWhile (· != '[')
     if afterBracket.isEmpty then []
     else
-      let indexPart := (afterBracket.drop 1).takeWhile (· != ']')
+      let rawIndex := (afterBracket.drop 1).takeWhile (· != ']')
+      let indexPart :=
+        if rawIndex.startsWith "$" then
+          rawIndex.drop 1
+        else
+          rawIndex
       if isVariableName indexPart then [indexPart] else []
 
   getOffsetReferences (modifier : String) : List String :=
@@ -867,11 +918,10 @@ def leadTypeImpl (params : Parameters) (t : Token) : Scope :=
   | .T_Subshell _ => .SubshellScope "(..) group"
   | .T_BatsTest _ _ => .SubshellScope "@bats test"
   | .T_CoProcBody _ => .SubshellScope "coproc"
-  | .T_Redirecting _ _ =>
+  | _ =>
     match causesSubshell params t with
     | some true => .SubshellScope "pipeline"
     | _ => .NoneScope
-  | _ => .NoneScope
 where
   causesSubshell (params : Parameters) (t : Token) : Option Bool := do
     let parent ← params.parentMap.get? t.id
@@ -910,7 +960,7 @@ partial def doStackAnalysisForFlow (params : Parameters) (t : Token) : List Stac
 
 /-- Get variable flow from AST - walks the AST tracking assignments and references with scope -/
 def getVariableFlow (params : Parameters) (root : Token) : List StackData :=
-  doStackAnalysisForFlow params root |>.reverse
+  doStackAnalysisForFlow params root
 
 /-- Check if a data source is a true assignment (not declaration/check) -/
 def isTrueAssignmentSource : DataType → Bool
@@ -1010,15 +1060,10 @@ def whenShell (shells : List Shell) (analysis : Analysis) : Analysis := do
 
 /-- Check if regex looks like confused glob -/
 def isConfusedGlobRegex (s : String) : Bool :=
-  if s.isEmpty then false
-  else if s.front == '*' then true
-  else if s.length >= 2 then
-    let last := s.back
-    let chars := s.toList
-    let secondLast := chars[chars.length - 2]!
-    last == '*' && secondLast != '\\' && secondLast != '.'
-  else
-    false
+  match s.data with
+  | '*' :: _ => true
+  | [x, '*'] => x != '\\' && x != '.'
+  | _ => false
 
 /-- Find first match where predicate is Just True -/
 def findFirst (p : α → Option Bool) : List α → Option α
@@ -1258,7 +1303,7 @@ def makeParameters (spec : AnalysisSpec) : Parameters :=
   let root := spec.asScript
   let shell := spec.asShellType.getD (determineShell spec.asFallbackShell root)
   let parentTree := getParentTree root
-  let params : Parameters := {
+  let params0 : Parameters := {
     rootNode := root
     shellType := shell
     hasSetE := containsSetE root
@@ -1282,8 +1327,16 @@ def makeParameters (spec : AnalysisSpec) : Parameters :=
     parentMap := parentTree
     variableFlow := []  -- Placeholder, computed below
     tokenPositions := spec.asTokenPositions
-    cfgAnalysis := Option.none  -- Would compute if extended analysis enabled
+    cfgAnalysis := Option.none  -- Filled below if extended analysis enabled
   }
+  let cfg :=
+    match spec.asExtendedAnalysis with
+    | some true =>
+      let cfParams : ShellCheck.CFG.CFGParameters :=
+        { cfLastpipe := params0.hasLastpipe, cfPipefail := params0.hasPipefail }
+      some (ShellCheck.CFGAnalysis.analyzeControlFlow cfParams root)
+    | _ => Option.none
+  let params := { params0 with cfgAnalysis := cfg }
   -- Now compute variable flow with the partial params (it only needs parentMap)
   let flow := getVariableFlow params root
   { params with variableFlow := flow }

@@ -1,13 +1,22 @@
+import Cli
 import ShellCheck
 import ShellCheck.Checker
 import ShellCheck.Parser
 import ShellCheck.Formatter.GCC
 import ShellCheck.Formatter.Format
+import ShellCheck.Formatter.JSON
+import ShellCheck.Formatter.TTY
+import ShellCheck.Formatter.CheckStyle
+import ShellCheck.Formatter.Diff
+import ShellCheck.Formatters
+import Std.Data.HashSet
 
+open Cli
 open ShellCheck.Interface
 open ShellCheck.Checker
-open ShellCheck.Formatter.Format
+open ShellCheck.Data
 open ShellCheck.Formatter.GCC
+open ShellCheck.Formatters
 
 /-- IO-based system interface that can read files -/
 def ioSystemInterface : SystemInterface IO := {
@@ -21,165 +30,276 @@ def ioSystemInterface : SystemInterface IO := {
   siGetConfig := fun _ => pure none
 }
 
-/-- Format severity for output -/
-def formatSeverity (sev : Severity) : String :=
-  match sev with
-  | .errorC => "error"
-  | .warningC => "warning"
-  | .infoC => "note"
-  | .styleC => "style"
+/-- Support parsing `--shell=bash` etc via `Cli`. -/
+instance : Cli.ParseableType Shell where
+  name := "Shell"
+  parse? s :=
+    match s.trim.toLower with
+    | "sh" => some .Sh
+    | "posix" => some .Sh
+    | "bash" => some .Bash
+    | "ksh" => some .Ksh
+    | "dash" => some .Dash
+    | "busybox" => some .BusyboxSh
+    | "busyboxsh" => some .BusyboxSh
+    | "busybox-sh" => some .BusyboxSh
+    | _ => none
 
-/-- Format a positioned comment for output -/
-def formatComment' (pc : PositionedComment) : String :=
-  let file := pc.pcStartPos.posFile
-  let line := pc.pcStartPos.posLine
-  let col := pc.pcStartPos.posColumn
-  let sev := formatSeverity pc.pcComment.cSeverity
-  let code := pc.pcComment.cCode
-  let msg := pc.pcComment.cMessage
-  s!"{file}:{line}:{col}: {sev}: {msg} [SC{code}]"
+/-- Support parsing `-f gcc|tty|json|...` via `Cli`. -/
+instance : Cli.ParseableType OutputFormat where
+  name := "Format"
+  parse? s := OutputFormat.fromString s.trim.toLower
 
-/-- Check a single file and print results -/
-def checkFile (filename : String) (debug : Bool := false) : IO UInt32 := do
-  -- Read the file
-  let contents ← IO.FS.readFile filename
+structure ScCode where
+  n : Int
+  deriving Repr, Inhabited, BEq
 
-  if debug then
+/-- Support parsing `SC2086` or `2086` via `Cli`. -/
+instance : Cli.ParseableType ScCode where
+  name := "SCCode"
+  parse? s :=
+    let s := s.trim
+    let s :=
+      if s.length ≥ 2 && (s.take 2).toLower == "sc" then
+        s.drop 2
+      else
+        s
+    match s.trim.toNat? with
+    | some n => some ⟨Int.ofNat n⟩
+    | none => none
+
+/-- Support parsing `--severity=warning` via `Cli`. -/
+instance : Cli.ParseableType Severity where
+  name := "Severity"
+  parse? s :=
+    match s.trim.toLower with
+    | "error" => some .errorC
+    | "warning" => some .warningC
+    | "info" => some .infoC
+    | "style" => some .styleC
+    | _ => none
+
+/-- Support parsing `--color=auto|always|never` via `Cli`. -/
+instance : Cli.ParseableType ColorOption where
+  name := "Color"
+  parse? s :=
+    match s.trim.toLower with
+    | "auto" => some .colorAuto
+    | "always" => some .colorAlways
+    | "never" => some .colorNever
+    | _ => none
+
+structure CheckedFile where
+  filename : String
+  contents : String
+  result : CheckResult
+
+structure RunConfig where
+  debug : Bool := false
+  shellOverride? : Option Shell := none
+  checkSourced : Bool := false
+  ignoreRC : Bool := false
+  excludedWarnings : List Int := []
+  includedWarnings? : Option (List Int) := none
+  minSeverity : Severity := .styleC
+  extendedAnalysis? : Option Bool := none
+  optionalChecks : List String := []
+  deriving Inhabited
+
+def shouldUseColor (opt : ColorOption) : IO Bool := do
+  match opt with
+  | .colorAlways => pure true
+  | .colorNever => pure false
+  | .colorAuto =>
+      let out ← IO.getStdout
+      out.isTty
+
+def flagsNamed (p : Parsed) (longName : String) : Array Parsed.Flag :=
+  p.flags.filter (fun f => f.flag.longName = longName)
+
+def checkOneFile (filename : String) (cfg : RunConfig)
+    : IO (Option CheckedFile) := do
+  let contents ←
+    try
+      IO.FS.readFile filename
+    catch e =>
+      IO.eprintln s!"Error reading {filename}: {e}"
+      return none
+
+  if cfg.debug then
     IO.eprintln s!"[DEBUG] Read {contents.length} bytes from {filename}"
 
-  -- Create check spec
   let spec : CheckSpec := {
     csFilename := filename
     csScript := contents
-    csCheckSourced := false
-    csIgnoreRC := true
-    csShellTypeOverride := none
-    csIncludedWarnings := none
-    csExcludedWarnings := []
-    csMinSeverity := .styleC
-    csOptionalChecks := []
-    csExtendedAnalysis := none
+    csCheckSourced := cfg.checkSourced
+    csIgnoreRC := cfg.ignoreRC
+    csExcludedWarnings := cfg.excludedWarnings
+    csIncludedWarnings := cfg.includedWarnings?
+    csShellTypeOverride := cfg.shellOverride?
+    csMinSeverity := cfg.minSeverity
+    csExtendedAnalysis := cfg.extendedAnalysis?
+    csOptionalChecks := cfg.optionalChecks
   }
 
-  -- First let's check if parsing works
-  if debug then
-    let parseSpec : ShellCheck.Interface.ParseSpec := {
-      psFilename := filename
-      psScript := contents
-      psCheckSourced := false
-      psIgnoreRC := true
-      psShellTypeOverride := none
-    }
-    let parseResult ← ShellCheck.Parser.parseScriptFull ioSystemInterface parseSpec
-    IO.eprintln s!"[DEBUG] Parse result has root: {parseResult.prRoot.isSome}"
-    IO.eprintln s!"[DEBUG] Token positions count: {parseResult.prTokenPositions.size}"
-    -- Dump first few tokens
-    match parseResult.prRoot with
-    | some root =>
-      let rootType := match root.inner with | .T_Script _ _ => "T_Script" | _ => "other"
-      IO.eprintln s!"[DEBUG] Root token type: {rootType}"
-      -- Collect and show token types
-      let showToken (t : ShellCheck.AST.Token) : String :=
-        match t.inner with
-        | .T_Script _ _ => "T_Script"
-        | .T_SimpleCommand _ ws => s!"T_SimpleCommand({ws.length} words)"
-        | .T_Literal s => s!"T_Literal({s.take 20})"
-        | .T_DollarBraced _ _ => "T_DollarBraced"
-        | .T_Backticked _ => "T_Backticked"
-        | .T_DoubleQuoted _ => "T_DoubleQuoted"
-        | .T_SingleQuoted s => s!"T_SingleQuoted({s.take 10})"
-        | .T_Function _ _ name _ => s!"T_Function({name})"
-        | .T_BraceGroup _ => "T_BraceGroup"
-        | .T_Redirecting _ _ => "T_Redirecting"
-        | _ => "other"
-      -- Helper to show token with nested structure (non-recursive for simplicity)
-      let showTokenFull (t : ShellCheck.AST.Token) : String :=
-        match t.inner with
-        | .T_NormalWord parts => s!"T_NormalWord({parts.length} parts)"
-        | .T_DollarBraced _ inner =>
-            match inner.inner with
-            | .T_Literal s => s!"T_DollarBraced({s.take 20})"
-            | _ => "T_DollarBraced(?)"
-        | .T_Literal s => s!"T_Literal({s.take 20})"
-        | .T_DoubleQuoted parts => s!"T_DoubleQuoted({parts.length} parts)"
-        | _ => showToken t
-      let tokenTypes := match root.inner with
-        | .T_Script _ cs =>
-          cs.take 10 |>.map fun cmd =>
-            let cmdType := showToken cmd
-            match cmd.inner with
-            | .T_SimpleCommand assigns ws =>
-              let assignStrs := assigns.map fun (a : ShellCheck.AST.Token) =>
-                match a.inner with
-                | .T_Assignment _ name _ val =>
-                  let valType := match val.inner with
-                    | .T_Array _ => "Array"
-                    | .T_Literal s => s!"Lit({s.take 10})"
-                    | _ => "other"
-                  s!"{name}={valType}"
-                | _ => "?"
-              let wordStrs := ws.map showTokenFull
-              s!"{cmdType}[assigns:{assignStrs}, words:{String.intercalate ", " wordStrs}]"
-            | _ => cmdType
-        | _ => ["not a script"]
-      IO.eprintln s!"[DEBUG] Commands: {tokenTypes}"
-    | none => pure ()
-
-  -- Run the checker
   let result ← checkScript ioSystemInterface spec
 
-  if debug then
+  if cfg.debug then
     IO.eprintln s!"[DEBUG] Got {result.crComments.length} comments"
 
-  -- Print results
-  for comment in result.crComments do
-    IO.println (formatComment' comment)
+  return some { filename, contents, result }
 
-  -- Return exit code based on whether issues were found
-  if result.crComments.isEmpty then
-    if debug then
-      IO.eprintln "[DEBUG] No issues found"
-    pure 0
-  else
-    pure 1
+def printOptionalChecks : IO Unit := do
+  let fromAnalyzer : List CheckDescription := ShellCheck.Analyzer.optionalChecks
+  let fromAnalytics : List CheckDescription :=
+    ShellCheck.Analytics.optionalChecks.map fun name =>
+      { newCheckDescription with
+        cdName := name
+        cdDescription := "(description not yet ported)"
+        cdPositive := ""
+        cdNegative := "" }
+  let all := fromAnalyzer ++ fromAnalytics
+  let sorted :=
+    all.toArray.qsort (fun a b => a.cdName < b.cdName) |>.toList
+  let mut seen : Std.HashSet String := {}
+  for item in sorted do
+    if !seen.contains item.cdName then
+      seen := seen.insert item.cdName
+      IO.println s!"name:    {item.cdName}"
+      IO.println s!"desc:    {item.cdDescription}"
+      IO.println s!"example: {item.cdPositive}"
+      IO.println s!"fix:     {item.cdNegative}"
+      IO.println ""
 
-/-- Print usage information -/
-def printUsage : IO Unit := do
-  IO.println "ShellCheck Lean4 port"
-  IO.println ""
-  IO.println "Usage: shellcheck4 [OPTIONS] FILE..."
-  IO.println ""
-  IO.println "Options:"
-  IO.println "  --help      Show this help"
-  IO.println "  --version   Show version"
-  IO.println ""
-  IO.println "Note: This is a work-in-progress port. Many checks are stubs."
+def runShellcheck4 (p : Parsed) : IO UInt32 := do
+  if p.hasFlag "list-optional" then
+    printOptionalChecks
+    return 0
 
-def main (args : List String) : IO UInt32 := do
-  match args with
-  | [] =>
-    printUsage
-    pure 0
-  | ["--help"] =>
-    printUsage
-    pure 0
-  | ["--version"] =>
-    IO.println "shellcheck4 0.1.0 (Lean 4 port)"
-    pure 0
-  | _ =>
-    let debug := args.contains "--debug"
-    let files := args.filter (fun a => !a.startsWith "--")
-    if files.isEmpty then
-      printUsage
-      pure 0
-    else
-      let mut exitCode : UInt32 := 0
-      for file in files do
-        try
-          let code ← checkFile file debug
-          if code != 0 then
-            exitCode := 1
-        catch e =>
-          IO.eprintln s!"{file}: {e}"
-          exitCode := 1
-      pure exitCode
+  let debug := p.hasFlag "debug"
+  let fmt : OutputFormat := p.flag! "format" |>.as! OutputFormat
+  let shellOverride? : Option Shell :=
+    p.flag? "shell" |>.map (fun f => f.as! Shell)
+
+  let excluded : List Int :=
+    (flagsNamed p "exclude").toList.flatMap (fun f =>
+      (f.as! (Array ScCode)).toList.map (·.n))
+
+  let includedCodes : List Int :=
+    (flagsNamed p "include").toList.flatMap (fun f =>
+      (f.as! (Array ScCode)).toList.map (·.n))
+  let included? : Option (List Int) :=
+    if (flagsNamed p "include").isEmpty then none else some includedCodes
+
+  let optionalChecks : List String :=
+    (flagsNamed p "enable").toList.flatMap (fun f =>
+      (f.as! (Array String)).toList)
+
+  let checkSourced := p.hasFlag "check-sourced"
+  let ignoreRC := p.hasFlag "norc"
+  let minSeverity : Severity :=
+    (p.flag? "severity" |>.map (fun f => f.as! Severity)).getD .styleC
+  let extendedAnalysis? : Option Bool :=
+    if p.hasFlag "extended-analysis" then some true else none
+
+  let colorOpt : ColorOption := p.flag! "color" |>.as! ColorOption
+  let useColor ← shouldUseColor colorOpt
+
+  let wikiLinkCount : Nat := p.flag! "wiki-link-count" |>.as! Nat
+
+  let files : Array String := p.variableArgsAs! String
+  if files.isEmpty then
+    p.printError "No input files specified."
+    return 1
+
+  let mut checked : List CheckedFile := []
+  let cfg : RunConfig := {
+    debug
+    shellOverride?
+    checkSourced
+    ignoreRC
+    excludedWarnings := excluded
+    includedWarnings? := included?
+    minSeverity
+    extendedAnalysis?
+    optionalChecks
+  }
+
+  for f in files do
+    if let some cf ← checkOneFile f cfg then
+      checked := cf :: checked
+
+  let checkedFiles := checked.reverse
+  let results := checkedFiles.map (·.result)
+  let hasIssues := results.any (fun r => !r.crComments.isEmpty)
+
+  match fmt with
+  | .gcc =>
+      for cf in checkedFiles do
+        let lines := ShellCheck.Formatter.GCC.formatResultWithContents cf.result cf.contents
+        for line in lines do
+          IO.println line
+  | .tty =>
+      let color := ShellCheck.Formatter.TTY.getColorFunc useColor
+      for cf in checkedFiles do
+        let lines := ShellCheck.Formatter.TTY.formatResultWithSource color cf.result cf.contents
+        for line in lines do
+          IO.println line
+      let codes :=
+        checkedFiles.flatMap (fun cf => cf.result.crComments.map (·.pcComment.cCode))
+          |>.filter (· > 0)
+          |>.map (·.toNat)
+      let mut seen : Std.HashSet Nat := {}
+      let mut uniq : List Nat := []
+      for c in codes do
+        if uniq.length < wikiLinkCount && !seen.contains c then
+          seen := seen.insert c
+          uniq := uniq ++ [c]
+      for line in ShellCheck.Formatter.TTY.formatWikiLinks uniq do
+        IO.println line
+  | .json =>
+      IO.println (ShellCheck.Formatter.JSON.formatResults results)
+  | .quiet =>
+      pure ()
+  | .checkstyle =>
+      IO.println (ShellCheck.Formatter.CheckStyle.formatResults results)
+  | .diff =>
+      let color :=
+        if useColor then ShellCheck.Formatter.Diff.colorize else ShellCheck.Formatter.Diff.noColor
+      for cf in checkedFiles do
+        if let some diff := ShellCheck.Formatter.Diff.formatResultDiff color cf.result cf.contents then
+          IO.println diff
+
+  pure (if hasIssues then 1 else 0)
+
+def shellcheck4Cmd : Cmd := `[Cli|
+  shellcheck4 VIA runShellcheck4; [shellcheckVersion]
+  "ShellCheck Lean 4 port"
+
+  FLAGS:
+    debug;                   "Enable debug output."
+    a, "check-sourced";      "Include warnings from sourced files."
+    C, color : ColorOption;  "Use color (auto, always, never)."
+    f, format : OutputFormat; "Output format (gcc, tty, json, quiet, checkstyle, diff)."
+    i, "include" : Array ScCode; "Consider only given types of warnings (comma-separated)."
+    e, exclude : Array ScCode; "Exclude types of warnings (comma-separated)."
+    "extended-analysis";        "Perform extended dataflow analysis."
+    "list-optional";          "List checks disabled by default."
+    norc;                     "Don't look for .shellcheckrc files."
+    rcfile : String;          "Prefer the specified configuration file over searching for one."
+    o, enable : Array String; "List of optional checks to enable (or 'all')."
+    P, "source-path" : String; "Specify path when looking for sourced files."
+    s, shell : Shell;         "Specify shell dialect (sh, bash, dash, ksh, busybox)."
+    S, severity : Severity;   "Minimum severity (error, warning, info, style)."
+    W, "wiki-link-count" : Nat; "Number of wiki links to show, when applicable."
+    x, "external-sources";    "Allow 'source' outside of FILES."
+
+  ARGS:
+    ...files : String;  "Input files to check."
+
+  EXTENSIONS:
+    defaultValues! #[("format", "tty"), ("color", "auto"), ("wiki-link-count", "3")]
+]
+
+def main (args : List String) : IO UInt32 :=
+  shellcheck4Cmd.validate args

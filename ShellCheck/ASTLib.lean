@@ -143,6 +143,21 @@ partial def getLiteralString (t : Token) : Option String :=
 def getLiteralStringDef (default : String) (t : Token) : String :=
   getLiteralString t |>.getD default
 
+/-- Get a literal string, but only if it is entirely unquoted.
+
+This corresponds to ShellCheck's `getUnquotedLiteral`: it succeeds only for plain
+`T_NormalWord` values whose parts are all `T_Literal` (no quotes, expansions, etc.). -/
+partial def getUnquotedLiteral (t : Token) : Option String := do
+  match t.inner with
+  | .T_NormalWord parts =>
+    let pieces ← parts.mapM fun part =>
+      match part.inner with
+      | .T_Literal s => some s
+      | _ => Option.none
+    some (String.join pieces)
+  | .T_Literal s => some s
+  | _ => Option.none
+
 /-- Get only literal parts, skipping non-literals -/
 def onlyLiteralString (t : Token) : String :=
   getLiteralStringDef "" t
@@ -332,6 +347,189 @@ partial def pseudoGlobsCanOverlap : List PseudoGlob → List PseudoGlob → Bool
   | _::_, [] => false
   | [], r => pseudoGlobsCanOverlap r []
 
+/-- Reorder a pseudoglob for more efficient matching.
+
+This is a semantics-preserving normalization for sequences of `.pgAny` and `.pgMany`
+since their order does not affect which string lengths are matched. -/
+def simplifyPseudoGlob (g : List PseudoGlob) : List PseudoGlob :=
+  go (g.length + 1) g
+where
+  isWild (x : PseudoGlob) : Bool :=
+    x == .pgAny || x == .pgMany
+
+  orderWilds (wilds : List PseudoGlob) : List PseudoGlob :=
+    let anyCount := wilds.foldl (fun acc x => if x == .pgAny then acc + 1 else acc) 0
+    let hasMany := wilds.any (· == .pgMany)
+    (List.replicate anyCount .pgAny) ++ (if hasMany then [.pgMany] else [])
+
+  spanWilds : List PseudoGlob → (List PseudoGlob × List PseudoGlob)
+    | [] => ([], [])
+    | x :: xs =>
+        if isWild x then
+          let (wilds, rest) := spanWilds xs
+          (x :: wilds, rest)
+        else
+          ([], x :: xs)
+
+  go : Nat → List PseudoGlob → List PseudoGlob
+    | 0, _ => []
+    | _fuel + 1, [] => []
+    | fuel + 1, x@(.pgChar _) :: rest => x :: go fuel rest
+    | fuel + 1, list =>
+        let (wilds, rest) := spanWilds list
+        orderWilds wilds ++ go fuel rest
+
+/-- Check whether the first pseudoglob always overlaps (i.e. is a superset of) the second. -/
+partial def pseudoGlobIsSuperSetof : List PseudoGlob → List PseudoGlob → Bool
+  | x@(xf :: xs), y@(yf :: ys) =>
+      match xf, yf with
+      | .pgMany, .pgMany => pseudoGlobIsSuperSetof x ys
+      | .pgMany, _ => pseudoGlobIsSuperSetof x ys || pseudoGlobIsSuperSetof xs y
+      | _, .pgMany => false
+      | .pgAny, _ => pseudoGlobIsSuperSetof xs ys
+      | _, .pgAny => false
+      | .pgChar c1, .pgChar c2 => c1 == c2 && pseudoGlobIsSuperSetof xs ys
+  | [], [] => true
+  | .pgMany :: rest, [] => pseudoGlobIsSuperSetof rest []
+  | _, _ => false
+
+/-- Interpret an *unquoted* case-pattern literal as a pseudoglob.
+
+Note: our parser currently represents most pattern characters as `.T_Literal`, so we
+do a best-effort scan for the common metacharacters `*`, `?`, and bracket classes
+like `[abc]`. -/
+def casePatternLiteralToPseudoGlob (s : String) : List PseudoGlob :=
+  let cs := s.toList
+  go (cs.length + 1) cs
+where
+  go : Nat → List Char → List PseudoGlob
+    | 0, _ => []
+    | _fuel + 1, [] => []
+    | fuel + 1, '*' :: rest => .pgMany :: go fuel rest
+    | fuel + 1, '?' :: rest => .pgAny :: go fuel rest
+    | fuel + 1, '[' :: rest =>
+        match rest.dropWhile (· != ']') with
+        | [] =>
+            -- Unterminated: treat '[' as literal.
+            .pgChar '[' :: go fuel rest
+        | _close :: rest' =>
+            -- `[ ... ]` matches a single char.
+            .pgAny :: go fuel rest'
+    | fuel + 1, c :: rest => .pgChar c :: go fuel rest
+
+/-- Exact version of `casePatternLiteralToPseudoGlob`.
+
+We only return a pseudoglob if we can preserve exact semantics in our approximation,
+so we reject unquoted bracket classes like `[abc]`. -/
+def casePatternLiteralToExactPseudoGlob (s : String) : Option (List PseudoGlob) :=
+  go s.toList
+where
+  go : List Char → Option (List PseudoGlob)
+    | [] => some []
+    | '*' :: rest => List.cons .pgMany <$> go rest
+    | '?' :: rest => List.cons .pgAny <$> go rest
+    | '[' :: _ => none
+    | c :: rest => List.cons (.pgChar c) <$> go rest
+
+/-- Convert a case pattern to a pseudoglob, respecting quoting.
+
+Unquoted `*`/`?` in literals are treated as wildcards, while quoted ones are
+treated as literal characters. Unknown expansions become `.pgMany`. -/
+partial def casePatternToPseudoGlob (t : Token) : List PseudoGlob :=
+  simplifyPseudoGlob (go false t)
+where
+  go (quoted : Bool) (t : Token) : List PseudoGlob :=
+    match t.inner with
+    | .T_Annotation _ inner => go quoted inner
+    | .T_NormalWord parts => parts.flatMap (go quoted)
+    | .T_DoubleQuoted parts => parts.flatMap (go true)
+    | .T_DollarDoubleQuoted parts => parts.flatMap (go true)
+    | .T_SingleQuoted s => s.toList.map .pgChar
+    | .T_DollarSingleQuoted s => s.toList.map .pgChar
+    | .T_Literal s =>
+        if quoted then
+          s.toList.map .pgChar
+        else
+          casePatternLiteralToPseudoGlob s
+    | .T_Glob "?" => [.pgAny]
+    | .T_Glob "*" => [.pgMany]
+    | .T_Glob _ => [.pgAny]
+    | _ => [.pgMany]
+
+/-- Exact pseudoglob conversion for case patterns.
+
+Fails (`none`) if the pattern contains expansions or other glob constructs we
+can't represent exactly (e.g. bracket classes). -/
+partial def casePatternToExactPseudoGlob (t : Token) : Option (List PseudoGlob) :=
+  simplifyPseudoGlob <$> go false t
+where
+  go (quoted : Bool) (t : Token) : Option (List PseudoGlob) := do
+    match t.inner with
+    | .T_Annotation _ inner => go quoted inner
+    | .T_NormalWord parts =>
+        let ps ← parts.mapM (go quoted)
+        pure (ps.foldl (· ++ ·) [])
+    | .T_DoubleQuoted parts =>
+        let ps ← parts.mapM (go true)
+        pure (ps.foldl (· ++ ·) [])
+    | .T_DollarDoubleQuoted parts =>
+        let ps ← parts.mapM (go true)
+        pure (ps.foldl (· ++ ·) [])
+    | .T_SingleQuoted s => some (s.toList.map .pgChar)
+    | .T_DollarSingleQuoted s => some (s.toList.map .pgChar)
+    | .T_Literal s =>
+        if quoted then
+          some (s.toList.map .pgChar)
+        else
+          casePatternLiteralToExactPseudoGlob s
+    | .T_Glob "?" => some [.pgAny]
+    | .T_Glob "*" => some [.pgMany]
+    | .T_Glob _ => none
+    | _ => none
+
+/-- Does a case pattern contain explicit glob syntax?
+
+This is a best-effort predicate used for checks like SC2254 ("Quote expansions in
+case patterns ...") where we want to *avoid* warning when the pattern already
+contains wildcard matching (e.g. `*$var*`).
+
+Our parser currently does not always tokenize `*`, `?`, or bracket classes into
+`T_Glob`/`T_Extglob`, so we also scan unquoted literal text for the common
+metacharacters. -/
+partial def casePatternHasExplicitGlob (t : Token) : Bool :=
+  go false t
+where
+  containsGlobMeta (s : String) : Bool :=
+    s.any fun c => c == '*' || c == '?' || c == '['
+
+  -- Rough detection for extglob starts like `@(`, `+(`, `!(` when they appear in
+  -- literal text. (`*(` / `?(` are already covered by `*`/`?`.)
+  containsExtGlobStart (s : String) : Bool :=
+    let cs := s.toList
+    let rec go : List Char → Bool
+      | [] => false
+      | [_] => false
+      | a :: b :: rest =>
+          (b == '(' && (a == '@' || a == '!' || a == '+')) || go (b :: rest)
+    go cs
+
+  go (quoted : Bool) (t : Token) : Bool :=
+    match t.inner with
+    | .T_Annotation _ inner => go quoted inner
+    | .T_NormalWord parts => parts.any (go quoted)
+    | .T_DoubleQuoted parts => parts.any (go true)
+    | .T_DollarDoubleQuoted parts => parts.any (go true)
+    | .T_SingleQuoted _ => false
+    | .T_DollarSingleQuoted _ => false
+    | .T_Glob _ => true
+    | .T_Extglob _ _ => true
+    | .T_Literal s =>
+        if quoted then
+          false
+        else
+          containsGlobMeta s || containsExtGlobStart s
+    | _ => false
+
 /-- Check if two words can be equal -/
 def wordsCanBeEqual (x y : Token) : Bool :=
   pseudoGlobsCanOverlap (wordToPseudoGlob x) (wordToPseudoGlob y)
@@ -451,6 +649,110 @@ def isUnquotedFlag (t : Token) : Bool :=
   match getLeadingUnquotedString t with
   | some s => s.startsWith "-"
   | none => false
+
+/-!
+## GNU/BSD Option Parsing
+
+ShellCheck's Haskell implementation provides `getGnuOpts`/`getBsdOpts` for parsing short/long
+options based on a getopts-style format string (e.g. `flagsForRead`).
+
+These helpers are used by various checks to conservatively identify which tokens are flags and which
+are positional arguments. Unknown flags cause parsing to fail (return `none`), matching the upstream
+behavior.
+-/
+
+/-- Internal option parser used by `getGnuOpts` and `getBsdOpts`.
+
+Returns a list of `(flag, (optionToken, valueToken))`:
+- `flag == ""` means a positional argument
+- for flags that don't take an argument, `valueToken == optionToken`
+- for flags that take an argument, `valueToken` is the associated token (when present)
+
+Unknown flags cause the parse to fail. -/
+partial def getOpts (gnu : Bool) (arbitraryLongOpts : Bool) (spec : String)
+    (longopts : List (String × Bool)) (args : List Token) :
+    Option (List (String × (Token × Token))) :=
+  process args
+where
+  /-- Parse a getopts-style spec like `"erd:u:"` into `(flag, needsArg)` pairs. -/
+  flagList : List Char → List (String × Bool)
+    | [] => []
+    | c :: ':' :: rest => (String.singleton c, true) :: flagList rest
+    | c :: rest => (String.singleton c, false) :: flagList rest
+
+  flags : List (String × Bool) :=
+    ("", false) :: (flagList spec.toList ++ longopts)
+
+  lookupNeedsArg (name : String) : Option Bool :=
+    (flags.find? (fun (n, _) => n == name)).map (fun (_, b) => b)
+
+  /-- Split a `--long` option word into `(name, hasEq)` for `--name=...`. -/
+  splitLong (word : String) : String × Bool :=
+    let cs := word.toList
+    let rec go (acc : List Char) : List Char → String × Bool
+      | [] => (String.ofList acc.reverse, false)
+      | '=' :: _ => (String.ofList acc.reverse, true)
+      | c :: rest => go (c :: acc) rest
+    go [] cs
+
+  listToArgs (rest : List Token) : List (String × (Token × Token)) :=
+    rest.map (fun x => ("", (x, x)))
+
+  process : List Token → Option (List (String × (Token × Token)))
+    | [] => some []
+    | token :: rest =>
+      -- Use a sentinel that won't be parsed as an option prefix.
+      let s := getLiteralStringDef "∅" token
+      if s == "--" then
+        some (listToArgs rest)
+      else if s.startsWith "--" && s.length > 2 then
+        let word := s.drop 2
+        let (name, hasEq) := splitLong word
+        let needsArg? :=
+          if arbitraryLongOpts then some (lookupNeedsArg name |>.getD false)
+          else lookupNeedsArg name
+        match needsArg? with
+        | none => none
+        | some needsArg =>
+          if needsArg && !hasEq then
+            match rest with
+            | argTok :: rest2 =>
+              (fun more => (name, (token, argTok)) :: more) <$> process rest2
+            | [] => none
+          else
+            (fun more => (name, (token, token)) :: more) <$> process rest
+      else if s.startsWith "-" && s.length > 1 then
+        shortToOpts (s.drop 1).toList token rest
+      else
+        if gnu then
+          (fun more => ("", (token, token)) :: more) <$> process rest
+        else
+          some (listToArgs (token :: rest))
+
+  shortToOpts : List Char → Token → List Token → Option (List (String × (Token × Token)))
+    | [], _token, args => process args
+    | c :: restChars, token, args =>
+      match lookupNeedsArg (String.singleton c) with
+      | none => none
+      | some needsArg =>
+        if needsArg && restChars.isEmpty then
+          match args with
+          | next :: restArgs =>
+            (fun more => (String.singleton c, (token, next)) :: more) <$> process restArgs
+          | [] => none
+        else if needsArg then
+          -- Attached argument like -u3; don't split the rest of the token further.
+          (fun more => (String.singleton c, (token, token)) :: more) <$> process args
+        else
+          (fun more => (String.singleton c, (token, token)) :: more) <$> shortToOpts restChars token args
+
+/-- GNU-style option parsing (continues past the first non-flag argument). -/
+def getGnuOpts (spec : String) (args : List Token) : Option (List (String × (Token × Token))) :=
+  getOpts true false spec [] args
+
+/-- BSD-style option parsing (stops at the first non-flag argument). -/
+def getBsdOpts (spec : String) (args : List Token) : Option (List (String × (Token × Token))) :=
+  getOpts false false spec [] args
 
 -- Theorems (stubs)
 

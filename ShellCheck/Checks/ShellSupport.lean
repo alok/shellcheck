@@ -27,7 +27,7 @@ def stringContains (s sub : String) : Bool :=
 /-- Wrapper for shell-specific checks -/
 structure ForShell where
   shells : List Shell
-  check : Token → List TokenComment
+  check : Parameters → Token → List TokenComment
 
 /-- Get checker for specific shell -/
 def getChecker (params : Parameters) (list : List ForShell) : Checker := {
@@ -35,13 +35,13 @@ def getChecker (params : Parameters) (list : List ForShell) : Checker := {
   perToken := fun token =>
     let shell := params.shellType
     let applicable := list.filter fun fs => fs.shells.contains shell
-    pure (applicable.foldl (fun acc fs => acc ++ fs.check token) [])
+    pure (applicable.foldl (fun acc fs => acc ++ fs.check params token) [])
 }
 
 /-- SC2079: (( )) doesn't support decimals. Use bc or awk. -/
 def checkForDecimals : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh, .Bash]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .TA_Expansion _ =>
       match getLiteralString t with
@@ -56,7 +56,7 @@ def checkForDecimals : ForShell := {
 /-- Check for POSIX-incompatible bashisms in sh scripts -/
 partial def checkBashisms : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_ProcSub _ _ =>
       [makeComment .errorC t.id 2039 "In POSIX sh, process substitution is undefined."]
@@ -71,48 +71,101 @@ partial def checkBashisms : ForShell := {
     | _ => []
 }
 
-/-- SC2076: Don't pipe echo to sed for substitution -/
+/-- SC2001: Prefer `${variable//search/replace}` over `echo ... | sed ...` for simple substitutions. -/
 def checkEchoSed : ForShell := {
-  shells := [.Sh, .Dash, .BusyboxSh, .Bash, .Ksh]
-  check := fun t =>
+  shells := [.Bash, .Ksh]
+  check := fun _params t =>
     match t.inner with
+    | .T_Redirecting redirects cmd =>
+      if redirects.any redirectHereString then
+        checkSed t.id (oversimplify cmd)
+      else
+        []
     | .T_Pipeline _ cmds =>
-      -- Check for echo ... | sed 's/.../.../g' pattern
       match cmds with
-      | firstCmd :: secondCmd :: _ =>
-        let isEcho := match getCommandName firstCmd with
-          | some name => name == "echo" || name.endsWith "/echo"
-          | none => false
-        let isSed := match getCommandName secondCmd with
-          | some name => name == "sed" || name.endsWith "/sed"
-          | none => false
-        if isEcho && isSed then
-          [makeComment .styleC t.id 2076
-            "Don't echo to sed. Use ${var//search/replace} in Bash or ${var%pattern} in POSIX."]
-        else []
+      | [a, b] =>
+        let acmd := oversimplify a
+        let bcmd := oversimplify b
+        if acmd == ["echo", "${VAR}"] then
+          checkSed t.id bcmd
+        else
+          []
       | _ => []
     | _ => []
 }
+where
+  redirectHereString (t : Token) : Bool :=
+    match t.inner with
+    | .T_FdRedirect _ target =>
+      match target.inner with
+      | .T_HereString .. => true
+      | _ => false
+    | _ => false
+
+  checkSed (id : Id) : List String → List TokenComment
+    | ["sed", v] => checkIn id v
+    | ["sed", "-e", v] => checkIn id v
+    | _ => []
+
+  checkIn (id : Id) (script : String) : List TokenComment :=
+    if isSimpleSed script then
+      [makeComment .styleC id 2001
+        "See if you can use ${variable//search/replace} instead."]
+    else
+      []
+
+  -- Detect a sed program of the form `s<d>old<d>new<d>...` with a single delimiter.
+  -- This is intentionally conservative and mirrors upstream's heuristic.
+  isSimpleSed (s : String) : Bool :=
+    match s.toList with
+    | 's' :: delim :: rest =>
+      let rest :=
+        match rest.getLast? with
+        | some 'g' => rest.dropLast
+        | _ => rest
+      (rest.filter (· == delim)).length == 2
+    | _ => false
 
 /-- SC2051: Bash doesn't support variables in brace ranges -/
 def checkBraceExpansionVars : ForShell := {
   shells := [.Bash]
-  check := fun t =>
+  check := fun params t =>
     match t.inner with
     | .T_BraceExpansion items =>
-      items.filterMap fun item =>
-        match item.inner with
-        | .T_DollarBraced _ _ =>
-          some (makeComment .warningC t.id 2051
-            "Bash doesn't support variables in brace range expansions.")
-        | _ => Option.none
+      let hasVarInRange :=
+        items.any fun item =>
+          let s := toString item
+          stringContains s "$.." || stringContains s "..$"
+      if hasVarInRange then
+        if isEvaled params t then
+          [makeComment .styleC t.id 2175
+            "Quote this invalid brace expansion since it should be passed literally to eval."]
+        else
+          [makeComment .warningC t.id 2051
+            "Bash doesn't support variables in brace range expansions."]
+      else []
     | _ => []
 }
+where
+  literalExt (t : Token) : Option String :=
+    match t.inner with
+    | .T_DollarBraced .. => some "$"
+    | .T_DollarExpansion .. => some "$"
+    | .T_DollarArithmetic .. => some "$"
+    | _ => some "-"
+
+  toString (t : Token) : String :=
+    getLiteralStringExt literalExt t |>.getD ""
+
+  isEvaled (params : Parameters) (t : Token) : Bool :=
+    match getClosestCommand params.parentMap t with
+    | some cmd => isCommand cmd "eval"
+    | Option.none => false
 
 /-- SC2180: Bash doesn't support multi-dimensional arrays -/
 def checkMultiDimensionalArrays : ForShell := {
   shells := [.Bash]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_Assignment _ varName _ _ =>
       -- Check for arr[1][2] pattern in variable name
@@ -137,7 +190,7 @@ def checkMultiDimensionalArrays : ForShell := {
 /-- SC2025: Check PS1 assignments for non-printable characters not wrapped in \[..\] -/
 def checkPS1Assignments : ForShell := {
   shells := [.Bash]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_Assignment _ varName _ rhs =>
       if varName == "PS1" || varName == "PS2" || varName == "PS3" || varName == "PS4" then
@@ -160,7 +213,7 @@ def checkPS1Assignments : ForShell := {
 /-- SC2055: Check for multiple bangs -/
 def checkMultipleBangs : ForShell := {
   shells := [.Bash, .Ksh]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_Banged inner =>
       match inner.inner with
@@ -173,7 +226,7 @@ def checkMultipleBangs : ForShell := {
 /-- SC2261: Check for negated pipelines in POSIX sh -/
 def checkBangAfterPipe : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_Banged inner =>
       -- In POSIX sh, ! can only negate a whole pipeline, not individual commands
@@ -196,7 +249,7 @@ def isNegatedCondition : Token → Bool
 /-- SC2107: Check for [ ! test -a ! test ] which should be ! [ test -o test ] -/
 def checkNegatedUnaryOps : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh, .Bash, .Ksh]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .TC_And _ "-a" left right =>
       -- Check for pattern: ! test -a ! test
@@ -216,7 +269,7 @@ def checkNegatedUnaryOps : ForShell := {
 /-- SC2088: Tilde does not expand in quotes -/
 def checkTildeInQuotes : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh, .Bash, .Ksh]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_DoubleQuoted parts =>
       parts.filterMap fun part =>
@@ -238,7 +291,7 @@ def checkTildeInQuotes : ForShell := {
 /-- SC2089: Quotes/backslashes will be treated literally in assignment -/
 def checkQuotesInAssignment : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh, .Bash, .Ksh]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_Assignment _ _varName _ rhs =>
       match getLiteralString rhs with
@@ -255,7 +308,7 @@ def checkQuotesInAssignment : ForShell := {
 /-- SC2016: Expressions don't expand in single quotes -/
 def checkExpressionsInSingleQuotes : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh, .Bash, .Ksh]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_SingleQuoted s =>
       if stringContains s "$" || stringContains s "`" then
@@ -268,7 +321,7 @@ def checkExpressionsInSingleQuotes : ForShell := {
 /-- SC2046: Quote to prevent word splitting -/
 def checkWordSplitting : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh, .Bash, .Ksh]
-  check := fun t =>
+  check := fun _params t =>
     match t.inner with
     | .T_DollarExpansion _ =>
       -- Unquoted command substitution

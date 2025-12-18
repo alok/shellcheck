@@ -18,6 +18,17 @@ open ShellCheck.ASTLib
 open ShellCheck.Interface
 open ShellCheck.Parser
 
+/-- Numeric ordering for severities (smaller = more severe). -/
+def severityRank : Severity → Nat
+  | .errorC => 0
+  | .warningC => 1
+  | .infoC => 2
+  | .styleC => 3
+
+/-- Boolean severity comparison matching ShellCheck's `severity <= minSeverity`. -/
+def severityAtMost (a b : Severity) : Bool :=
+  decide (severityRank a ≤ severityRank b)
+
 /-- Convert a token comment to a positioned comment -/
 def tokenToPosition (startMap : TokenPositions)
     (tc : TokenComment) : Option PositionedComment := do
@@ -58,10 +69,10 @@ def sortMessages (pcs : List PositionedComment) : List PositionedComment :=
 def shouldInclude (spec : CheckSpec) (pc : PositionedComment) : Bool :=
   let code := pc.pcComment.cCode
   let severity := pc.pcComment.cSeverity
-  -- Check exclusions and inclusions (simplified for now)
-  match spec.csIncludedWarnings with
-  | some included => included.contains code
-  | none => not (spec.csExcludedWarnings.contains code)
+  severityAtMost severity spec.csMinSeverity &&
+    match spec.csIncludedWarnings with
+    | some included => included.contains code
+    | none => not (spec.csExcludedWarnings.contains code)
 
 /-- Check a shell script -/
 def checkScript [Monad m] (sys : SystemInterface m) (spec : CheckSpec) : m CheckResult := do
