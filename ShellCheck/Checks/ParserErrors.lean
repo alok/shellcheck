@@ -70,10 +70,9 @@ namespace Whitespace
   def sc1023 := err 1023 "Expected space after redirection."
   def sc1024 := err 1024 "Don't put a space before a here-doc marker."
   def sc1025 := err 1025 "Use single quotes to quote literal strings."
-  def sc1027 := err 1027 "Expected a space between arithmetic and comparison operators."
+  def sc1027 := err 1027 "Missing argument for operator. Expected a term after comparison."
   def sc1035 := err 1035 "You need a space here"
   def sc1054 := err 1054 "You need a space after the '{'."
-  def sc1055 := err 1055 "You need a space between the array reference and index."
   def sc1068 := err 1068 "Don't put spaces around the = in assignments."
   def sc1069 := err 1069 "You need a space before the `[`."
   def sc1095 := err 1095 "You need a space or linefeed between the function name and body."
@@ -108,8 +107,7 @@ namespace TestBrackets
   def sc1032 := err 1032 "This '>' is a redirection, not a comparison."
   def sc1033 := err 1033 "Test expression opened with `[[` but closed with `]`. Match them."
   def sc1034 := err 1034 "Test expression opened with `[` but closed with `]]`. Match them."
-  def sc1057 := info 1057 "Did you mean >= ? In arithmetic, > is greater than, not greater-than-or-equal."
-  def sc1080 := err 1080 "Use the right bracket matching the left one."
+  def sc1080 := warn 1080 "Use `\\\\` before line feeds in `[ ]` to keep parsing."
   def sc1106 := info 1106 "In arithmetic contexts, use `<` instead of `-lt`"
   def sc1139 := err 1139 "Use || instead of '-o' between test commands."
   def sc1140 := err 1140 "Unexpected parameters after condition. Missing &&/||, or bad expression?"
@@ -138,23 +136,24 @@ namespace ControlFlow
   def sc1051 := err 1051 "Semicolons directly after 'then' are not allowed. Just remove it."
   def sc1052 := err 1052 "Semicolons directly after 'then' are not allowed. Just remove it."
   def sc1053 := err 1053 "Semicolons directly after 'else' are not allowed. Just remove it."
+  def sc1055 := err 1055 "Need at least one command in the body. Use `true;` as a no-op."
+  def sc1057 := err 1057 "Missing 'do' for this loop."
   def sc1058 := err 1058 "Expected `do`."
-  def sc1060 := err 1060 "Expected 'case' to be followed by word and 'in'."
+  def sc1059 := err 1059 "Semicolons directly after 'do' are not allowed. Just remove it."
+  def sc1060 := err 1060 "Empty 'do' clause is not allowed. Use `true;` as a no-op."
   def sc1061 := err 1061 "Couldn't find 'done' for this 'do'."
   def sc1062 := err 1062 "Expected 'done' matching previously mentioned 'do'."
   def sc1063 := err 1063 "You need a line feed or semicolon before the 'do'."
   def sc1074 := err 1074 "Did you forget the `;;` after the previous case item?"
   def sc1075 := err 1075 "Use 'elif' instead of 'else if'."
-  def sc1076 := err 1076 "Trying to do math? Use $((expression)) instead."
+  def sc1076 := err 1076 "Trying to do math? Use [ $((i/2+7)) -ge 18 ] instead."
+  def sc1085 := err 1085 "Missing `;;` after extending case item with `;&` or `;;&`."
   def sc1131 := err 1131 "Use `elif` to start another branch."
 end ControlFlow
 
 namespace Functions
   def sc1064 := err 1064 "Expected a { to open the function definition."
   def sc1065 := err 1065 "Trying to declare parameters? Don't. Use () and refer to params as $1, $2."
-  def sc1085 := err 1085 "Expected function body but got something else."
-  def sc1092 := err 1092 "Function name expected but got something else."
-  def sc1093 := err 1093 "Expected '()' or '{}' for function definition."
 end Functions
 
 namespace Variables
@@ -164,11 +163,8 @@ namespace Variables
   def sc1067 := err 1067 "For indirection, use arrays, `declare \"var$n=value\"`, or read/eval."
   def sc1086 := err 1086 "Don't use $ on the iterator name in for loops."
   def sc1087 := err 1087 "Use braces when expanding arrays, e.g. `${array[idx]}`."
-  def sc1096 := info 1096 "Comments are allowed in bash and other shells, but not in all shells."
   def sc1097 := err 1097 "Unexpected ==. For assignment, use =. For comparison, use `[`/`[[`."
-  def sc1103 := info 1103 "POSIX allows this. A specific shell may have stricter rules."
   def sc1116 := err 1116 "Missing $ on a `$((..))` expression? (or use `( (` for arrays)."
-  def sc1134 := err 1134 "Use `local var` or `typeset var` to declare variables."
 end Variables
 
 namespace HereDoc
@@ -177,21 +173,25 @@ namespace HereDoc
   def sc1040 := err 1040 "When using <<-, you can only indent with tabs."
   def sc1041 := err 1041 "Found 'eof' further down, but not on a separate line."
   def sc1042 := warn 1042 "Close matches include '-eof' (!= 'eof')."
-  def sc1043 := err 1043 "Invalid use of single quotes in here-document terminator."
+  def sc1043 := err 1043 "End token has wrong casing. Did you mean 'EOF' instead of 'eof'?"
   def sc1044 := err 1044 "Couldn't find end token `EOF' in the here document."
   def sc1119 := err 1119 "Add a linefeed between end token and terminating ')'."
   def sc1120 := err 1120 "No comments allowed after here-doc token. Comment the next line instead."
   def sc1121 := err 1121 "Add ;/& terminators on the line with the <<, not here."
   def sc1122 := err 1122 "Nothing allowed after end token. Put continuation on the line with `<<`."
-  def sc1137 := err 1137 "Here-doc end token must be unquoted and match the opening token exactly."
-  def sc1138 := err 1138 "Invalid here-doc syntax. Use << or <<-."
 end HereDoc
 
 namespace Sourcing
   def sc1090 := warn 1090 "Can't follow non-constant source. Use a directive to specify location."
   def sc1091 := info 1091 "Not following: (error message here)"
+  def sc1092 := warn 1092 "Stopping at 100 source frames. Consider using a directive."
   def sc1094 := warn 1094 "Parsing of sourced file failed. Ignoring it."
 end Sourcing
+
+namespace Arithmetic
+  def sc1137 := err 1137 "Missing second `(` for arithmetic `((;;))` loop."
+  def sc1138 := err 1138 "Remove spaces between `((` in arithmetic for loop."
+end Arithmetic
 
 namespace Syntax
   def sc1056 := err 1056 "Expected a '}'. If you have one, try a ; or `\\n` in front of it."
@@ -230,6 +230,8 @@ namespace Directives
   def sc1126 := err 1126 "Place shellcheck directives before commands, not after."
   def sc1127 := err 1127 "Was this intended as a comment? Use `#` in sh."
   def sc1135 := info 1135 "Prefer escape over ending quote to make `$` literal."
+  def sc1144 := err 1144 "`external-sources` is only valid in a `.shellcheckrc` file."
+  def sc1145 := err 1145 "Unknown `external-sources` value. Expected `true` or `false`."
 end Directives
 
 /-!
@@ -245,9 +247,9 @@ def allParserErrors : List ParserError := [
   Whitespace.sc1007, Whitespace.sc1017, Whitespace.sc1018, Whitespace.sc1020,
   Whitespace.sc1021, Whitespace.sc1022, Whitespace.sc1023, Whitespace.sc1024,
   Whitespace.sc1025, Whitespace.sc1027, Whitespace.sc1035, Whitespace.sc1054,
-  Whitespace.sc1055, Whitespace.sc1068, Whitespace.sc1069, Whitespace.sc1095,
-  Whitespace.sc1099, Whitespace.sc1101, Whitespace.sc1108, Whitespace.sc1114,
-  Whitespace.sc1115, Whitespace.sc1118, Whitespace.sc1129, Whitespace.sc1130,
+  Whitespace.sc1068, Whitespace.sc1069, Whitespace.sc1095, Whitespace.sc1099,
+  Whitespace.sc1101, Whitespace.sc1108, Whitespace.sc1114, Whitespace.sc1115,
+  Whitespace.sc1118, Whitespace.sc1129, Whitespace.sc1130,
   -- Quoting
   Quoting.sc1011, Quoting.sc1015, Quoting.sc1016, Quoting.sc1078,
   Quoting.sc1079, Quoting.sc1110, Quoting.sc1111, Quoting.sc1112,
@@ -255,8 +257,8 @@ def allParserErrors : List ParserError := [
   TestBrackets.sc1019, TestBrackets.sc1026, TestBrackets.sc1028,
   TestBrackets.sc1029, TestBrackets.sc1030, TestBrackets.sc1031,
   TestBrackets.sc1032, TestBrackets.sc1033, TestBrackets.sc1034,
-  TestBrackets.sc1057, TestBrackets.sc1080, TestBrackets.sc1106,
-  TestBrackets.sc1139, TestBrackets.sc1140,
+  TestBrackets.sc1080, TestBrackets.sc1106, TestBrackets.sc1139,
+  TestBrackets.sc1140,
   -- Shebang
   Shebang.sc1008, Shebang.sc1071, Shebang.sc1082, Shebang.sc1084,
   Shebang.sc1104, Shebang.sc1113, Shebang.sc1128,
@@ -265,23 +267,24 @@ def allParserErrors : List ParserError := [
   ControlFlow.sc1045, ControlFlow.sc1046, ControlFlow.sc1047,
   ControlFlow.sc1048, ControlFlow.sc1049, ControlFlow.sc1050,
   ControlFlow.sc1051, ControlFlow.sc1052, ControlFlow.sc1053,
-  ControlFlow.sc1058, ControlFlow.sc1060, ControlFlow.sc1061,
+  ControlFlow.sc1055, ControlFlow.sc1057, ControlFlow.sc1058,
+  ControlFlow.sc1059, ControlFlow.sc1060, ControlFlow.sc1061,
   ControlFlow.sc1062, ControlFlow.sc1063, ControlFlow.sc1074,
-  ControlFlow.sc1075, ControlFlow.sc1076, ControlFlow.sc1131,
+  ControlFlow.sc1075, ControlFlow.sc1076, ControlFlow.sc1085,
+  ControlFlow.sc1131,
   -- Functions
-  Functions.sc1064, Functions.sc1065, Functions.sc1085, Functions.sc1092,
-  Functions.sc1093,
+  Functions.sc1064, Functions.sc1065,
   -- Variables
   Variables.sc1036, Variables.sc1037, Variables.sc1066, Variables.sc1067,
-  Variables.sc1086, Variables.sc1087, Variables.sc1096, Variables.sc1097,
-  Variables.sc1103, Variables.sc1116, Variables.sc1134,
+  Variables.sc1086, Variables.sc1087, Variables.sc1097, Variables.sc1116,
   -- HereDoc
   HereDoc.sc1038, HereDoc.sc1039, HereDoc.sc1040, HereDoc.sc1041,
   HereDoc.sc1042, HereDoc.sc1043, HereDoc.sc1044, HereDoc.sc1119,
-  HereDoc.sc1120, HereDoc.sc1121, HereDoc.sc1122, HereDoc.sc1137,
-  HereDoc.sc1138,
+  HereDoc.sc1120, HereDoc.sc1121, HereDoc.sc1122,
   -- Sourcing
-  Sourcing.sc1090, Sourcing.sc1091, Sourcing.sc1094,
+  Sourcing.sc1090, Sourcing.sc1091, Sourcing.sc1092, Sourcing.sc1094,
+  -- Arithmetic
+  Arithmetic.sc1137, Arithmetic.sc1138,
   -- Syntax
   Syntax.sc1056, Syntax.sc1070, Syntax.sc1072, Syntax.sc1073,
   Syntax.sc1077, Syntax.sc1081, Syntax.sc1083, Syntax.sc1088,
@@ -294,7 +297,7 @@ def allParserErrors : List ParserError := [
   -- Directives
   Directives.sc1107, Directives.sc1123, Directives.sc1124,
   Directives.sc1125, Directives.sc1126, Directives.sc1127,
-  Directives.sc1135
+  Directives.sc1135, Directives.sc1144, Directives.sc1145
 ]
 
 /-!
