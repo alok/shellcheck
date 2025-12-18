@@ -2169,11 +2169,12 @@ partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat
                 | some (startPos, _) => (startPos.posLine, startPos.posColumn + 2)  -- +2 for "$("
                 | none => (1, 1)  -- Fallback
               let (parsedCmds, newNextId, newPositions) := parseSubshellContent content filename nextId offsetLine offsetCol
-              -- Recursively expand any nested $() in the parsed commands
-              let (expandedCmds, finalNextId, allPositions) := parsedCmds.foldl (init := ([], newNextId, newPositions))
-                fun (acc, nid, pos) cmd =>
-                  let (expCmd, newNid, newPos) := expandDollarExpansions cmd filename nid origPositions
-                  (acc ++ [expCmd], newNid, pos.fold (init := newPos) fun m k v => m.insert k v)
+              -- Recursively expand any nested $() in the parsed commands.
+              -- IMPORTANT: include the newly created positions so nested expansions can compute offsets.
+              let positionsForNested := mergePositions origPositions newPositions
+              let (expandedCmds, finalNextId, extraPositions) :=
+                expandChildren parsedCmds filename newNextId positionsForNested
+              let allPositions := mergePositions newPositions extraPositions
               (⟨t.id, .T_DollarExpansion expandedCmds⟩, finalNextId, allPositions)
           | _ =>
               -- Already parsed, just recurse into children
@@ -2207,6 +2208,19 @@ partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat
   | .T_DoubleQuoted parts =>
       let (expanded, newNextId, positions) := expandChildren parts filename nextId origPositions
       (⟨t.id, .T_DoubleQuoted expanded⟩, newNextId, positions)
+  | .T_Array elems =>
+      let (expanded, newNextId, positions) := expandChildren elems filename nextId origPositions
+      (⟨t.id, .T_Array expanded⟩, newNextId, positions)
+  | .T_FdRedirect fd redir =>
+      let (expandedRedir, newNextId, positions) := expandDollarExpansions redir filename nextId origPositions
+      (⟨t.id, .T_FdRedirect fd expandedRedir⟩, newNextId, positions)
+  | .T_IoFile op file =>
+      let (expandedOp, nid1, pos1) := expandDollarExpansions op filename nextId origPositions
+      let (expandedFile, nid2, pos2) := expandDollarExpansions file filename nid1 origPositions
+      (⟨t.id, .T_IoFile expandedOp expandedFile⟩, nid2, mergePositions pos1 pos2)
+  | .T_IoDuplicate op fd =>
+      let (expandedOp, newNextId, positions) := expandDollarExpansions op filename nextId origPositions
+      (⟨t.id, .T_IoDuplicate expandedOp fd⟩, newNextId, positions)
   | .T_Assignment mode name indices val =>
       let (expandedVal, newNextId, positions) := expandDollarExpansions val filename nextId origPositions
       (⟨t.id, .T_Assignment mode name indices expandedVal⟩, newNextId, positions)
@@ -2240,11 +2254,12 @@ partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat
                 | some (startPos, _) => (startPos.posLine, startPos.posColumn + 1)  -- +1 for "`"
                 | none => (1, 1)  -- Fallback
               let (parsedCmds, newNextId, newPositions) := parseSubshellContent content filename nextId offsetLine offsetCol
-              -- Recursively expand any nested $() in the parsed commands
-              let (expandedCmds, finalNextId, allPositions) := parsedCmds.foldl (init := ([], newNextId, newPositions))
-                fun (acc, nid, pos) cmd =>
-                  let (expCmd, newNid, newPos) := expandDollarExpansions cmd filename nid origPositions
-                  (acc ++ [expCmd], newNid, pos.fold (init := newPos) fun m k v => m.insert k v)
+              -- Recursively expand any nested $() in the parsed commands.
+              -- IMPORTANT: include the newly created positions so nested expansions can compute offsets.
+              let positionsForNested := mergePositions origPositions newPositions
+              let (expandedCmds, finalNextId, extraPositions) :=
+                expandChildren parsedCmds filename newNextId positionsForNested
+              let allPositions := mergePositions newPositions extraPositions
               (⟨t.id, .T_Backticked expandedCmds⟩, finalNextId, allPositions)
           | _ =>
               let (expanded, newNextId, positions) := expandChildren cmds filename nextId origPositions
@@ -2252,6 +2267,27 @@ partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat
       | _ =>
           let (expanded, newNextId, positions) := expandChildren cmds filename nextId origPositions
           (⟨t.id, .T_Backticked expanded⟩, newNextId, positions)
+  | .T_ProcSub dir cmds =>
+      match cmds with
+      | [child] =>
+          match child.inner with
+          | .T_Literal content =>
+              -- Unparsed procsub content - parse it like $().
+              let (offsetLine, offsetCol) := match origPositions.get? t.id with
+                | some (startPos, _) => (startPos.posLine, startPos.posColumn + 2)  -- +2 for "<(" or ">("
+                | none => (1, 1)  -- Fallback
+              let (parsedCmds, newNextId, newPositions) := parseSubshellContent content filename nextId offsetLine offsetCol
+              let positionsForNested := mergePositions origPositions newPositions
+              let (expandedCmds, finalNextId, extraPositions) :=
+                expandChildren parsedCmds filename newNextId positionsForNested
+              let allPositions := mergePositions newPositions extraPositions
+              (⟨t.id, .T_ProcSub dir expandedCmds⟩, finalNextId, allPositions)
+          | _ =>
+              let (expanded, newNextId, positions) := expandChildren cmds filename nextId origPositions
+              (⟨t.id, .T_ProcSub dir expanded⟩, newNextId, positions)
+      | _ =>
+          let (expanded, newNextId, positions) := expandChildren cmds filename nextId origPositions
+          (⟨t.id, .T_ProcSub dir expanded⟩, newNextId, positions)
   | .T_IfExpression conditions elseBody =>
       -- Each condition is (condList, bodyList)
       let init : List (List Token × List Token) × Nat × Std.HashMap Id (Position × Position) := ([], nextId, {})
@@ -2292,6 +2328,9 @@ partial def expandDollarExpansions (t : Token) (filename : String) (nextId : Nat
       (⟨t.id, .T_CaseExpression expWord expCases⟩, nid2, pos1.fold (init := pos2) fun m k v => m.insert k v)
   | _ => (t, nextId, {})
 where
+  mergePositions (base extra : Std.HashMap Id (Position × Position)) : Std.HashMap Id (Position × Position) :=
+    extra.fold (init := base) fun m k v => m.insert k v
+
   expandChildren (children : List Token) (filename : String) (nextId : Nat) (origPos : Std.HashMap Id (Position × Position)) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
     children.foldl (init := ([], nextId, {})) fun (acc, nid, pos) child =>
       let (expanded, newNid, newPos) := expandDollarExpansions child filename nid origPos

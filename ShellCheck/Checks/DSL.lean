@@ -252,7 +252,7 @@ def sc2xxxMissing : List SCCode := [
   { code := 2309, severity := .error, message := "-eq is for comparing integers. Use = for strings." },
   { code := 2310, severity := .info, message := "This function is invoked in a conditional so set -e will be disabled." },
   { code := 2311, severity := .info, message := "Bash implicitly disabled set -e for this function invocation because it's inside a command substitution." },
-  { code := 2312, severity := .warn, message := "Consider using dirname \"$path\" instead." },
+  { code := 2312, severity := .info, message := "Consider invoking this command separately to avoid masking its return value (or use '|| true' to ignore)." },
   { code := 2313, severity := .warn, message := "Consider using basename \"$path\" instead." },
   { code := 2314, severity := .warn, message := "Consider using realpath \"$path\" instead." },
   { code := 2315, severity := .error, message := "In Bats, ! does not cause test failure. Use run/negate." },

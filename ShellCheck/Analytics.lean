@@ -4272,6 +4272,125 @@ where
       | _ => []
     go path
 
+/-- SC2312: Consider invoking this command separately to avoid masking its return value. -/
+def checkExtraMaskedReturns (params : Parameters) (root : Token) : List TokenComment :=
+  runNodeAnalysis findMaskingNodes params (removeTransparentCommands root)
+where
+  msg : String :=
+    "Consider invoking this command separately to avoid masking its return value (or use '|| true' to ignore)."
+
+  /-- Drop transparent `time` wrappers (best-effort), mirroring ShellCheck's `removeTransparentCommands`. -/
+  removeTransparentCommands (t : Token) : Token :=
+    doTransform (fun tok =>
+      match tok.inner with
+      | .T_SimpleCommand assigns (cmd :: args) =>
+        if getCommandBasename tok == some "time" && !args.isEmpty then
+          ⟨tok.id, .T_SimpleCommand assigns args⟩
+        else
+          tok
+      | _ => tok
+    ) t
+
+  containsSimpleCommand (t : Token) : Bool :=
+    (collectTokens t).any fun tok =>
+      match tok.inner with
+      | .T_SimpleCommand .. => true
+      | _ => false
+
+  /-- Filter to list elements that contain simple commands, then drop the last one. -/
+  allButLastSimpleCommands (xs : List Token) : List Token :=
+    let simple := xs.filter containsSimpleCommand
+    match simple.reverse with
+    | [] => []
+    | _ :: rest => rest.reverse
+
+  getSingleCmdBasename (t : Token) : Option String :=
+    match t.inner with
+    | .T_Pipeline _ cmds =>
+      match cmds with
+      | [only] => getCommandBasename only
+      | _ => Option.none
+    | _ => getCommandBasename t
+
+  isOrIfIgnore (t : Token) : Bool :=
+    match t.inner with
+    | .T_OrIf _ rhs =>
+      match getSingleCmdBasename rhs with
+      | some "true" => true
+      | some ":" => true
+      | _ => false
+    | _ => false
+
+  /-- Determine if a command's return code appears to be intentionally ignored (e.g. `cmd || true`). -/
+  isMaskDeliberate (p : Parameters) (t : Token) : Bool :=
+    (getPath p.parentMap t).any isOrIfIgnore
+
+  declaringCommands : List String := ["local", "readonly", "declare", "export", "typeset"]
+
+  isDeclaringCommand (t : Token) : Bool :=
+    match getCommandBasename t with
+    | some "local" =>
+      -- local -r x=$(false) is intentionally ignored for SC2155 in upstream
+      if hasFlag t "r" then
+        false
+      else
+        true
+    | some base =>
+      base ∈ declaringCommands
+    | Option.none => false
+
+  /-- Are we already checking this masked return elsewhere (e.g., SC2155 for declaring commands)? -/
+  isCheckedElsewhere (p : Parameters) (t : Token) : Bool :=
+    let parents := (getPath p.parentMap t).drop 1
+    parents.any isDeclaringCommand
+
+  isHarmlessCommand (t : Token) : Bool :=
+    match getCommandBasename t with
+    | some base =>
+      base ∈ ["echo", "basename", "dirname", "printf", "set", "shopt"]
+    | Option.none => false
+
+  isMaskedNode (p : Parameters) (t : Token) : Bool :=
+    !(isHarmlessCommand t || isCheckedElsewhere p t || isMaskDeliberate p t)
+
+  findMaskedNodes (p : Parameters) (t : Token) : List TokenComment :=
+    let toks := collectTokens t
+    toks.foldl (fun acc node =>
+      match node.inner with
+      | .T_SimpleCommand _ (_ :: _) =>
+        if isMaskedNode p node then
+          makeComment .infoC node.id 2312 msg :: acc
+        else
+          acc
+      | .T_Condition .. =>
+        if isMaskedNode p node then
+          makeComment .infoC node.id 2312 msg :: acc
+        else
+          acc
+      | _ => acc
+    ) []
+
+  findMaskedNodesInList (p : Parameters) (xs : List Token) : List TokenComment :=
+    xs.flatMap (findMaskedNodes p)
+
+  findMaskingNodes (p : Parameters) (t : Token) : List TokenComment :=
+    match t.inner with
+    | .T_Arithmetic expr => findMaskedNodesInList p [expr]
+    | .T_Array xs => findMaskedNodesInList p (allButLastSimpleCommands xs)
+    | .T_Condition _ cond => findMaskedNodesInList p [cond]
+    | .T_DoubleQuoted xs => findMaskedNodesInList p (allButLastSimpleCommands xs)
+    | .T_HereDoc _ _ _ xs => findMaskedNodesInList p xs
+    | .T_HereString w => findMaskedNodesInList p [w]
+    | .T_NormalWord xs => findMaskedNodesInList p (allButLastSimpleCommands xs)
+    | .T_Pipeline _ cmds =>
+      if p.hasPipefail then [] else findMaskedNodesInList p (allButLastSimpleCommands cmds)
+    | .T_ProcSub _ cmds => findMaskedNodesInList p cmds
+    | .T_SimpleCommand assigns [] =>
+      findMaskedNodesInList p (allButLastSimpleCommands assigns)
+    | .T_SimpleCommand assigns (_cmd :: args) =>
+      findMaskedNodesInList p (assigns ++ args)
+    | _ => []
+
 /-!
 ## Function Scope Analysis
 
@@ -4622,6 +4741,7 @@ def treeChecks : List (Parameters → Token → List TokenComment) := [
   checkArrayValueUsedAsIndex,
   checkArrayAssignmentIndices,
   checkSetESuppressed,
+  checkExtraMaskedReturns,
   checkSubshellAssignments,
   checkUnassignedReferences,
   checkShebangParameters,
