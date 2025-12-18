@@ -1603,6 +1603,139 @@ def checkDashBashisms : CommandCheck := {
     else []
 }
 
+
+/-!
+## Portability Checks (SC3xxx series)
+
+These checks warn about non-POSIX shell features.
+-/
+
+/-- SC3001: ((...)) is not POSIX -/
+def checkArithmeticParensPosix : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match t.inner with
+      | .T_Arithmetic _ =>
+        [warnCmd t 3001
+          "((...)) is not POSIX. For portability, use $((..)) instead."]
+      | _ => []
+    else []
+}
+
+/-- SC3003: [[ ]] is not POSIX -/
+def checkDoubleBracketPosix : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match t.inner with
+      | .T_Condition .doubleBracket _ =>
+        [warnCmd t 3003
+          "[[ ]] is not POSIX. Use [ ] or 'test' instead."]
+      | _ => []
+    else []
+}
+
+/-- SC3006: Arrays are not POSIX -/
+def checkArraysPosix : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match t.inner with
+      | .T_Array _ =>
+        [warnCmd t 3006
+          "Arrays are not POSIX. Use separate variables or positional parameters."]
+      | _ => []
+    else []
+}
+
+/-- SC3010: $'...' string is not POSIX -/
+def checkDollarSingleQuotePosix : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match t.inner with
+      | .T_DollarSingleQuoted _ =>
+        [warnCmd t 3010
+          "$'...' is not POSIX. Use regular quoting with escape sequences."]
+      | _ => []
+    else []
+}
+
+/-- SC3011: mapfile/readarray is bash-only -/
+def checkMapfilePosix : CommandCheck := {
+  name := .anyExactly ["mapfile", "readarray"]
+  check := fun params t =>
+    if params.shellType == .Sh then
+      [errorCmd t 3011
+        "mapfile/readarray is not POSIX. Use a read loop instead."]
+    else []
+}
+
+/-- SC3014: local is not defined in POSIX sh -/
+def checkLocalPosix : CommandCheck := {
+  name := .exactly "local"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      [warnCmd t 3014
+        "'local' is not POSIX. Use function scope or global variables."]
+    else []
+}
+
+/-- SC3020: >>= is not POSIX (simplified check for literal ">>=" in arithmetic) -/
+def checkRightShiftEqualPosix : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match t.inner with
+      | .T_DollarArithmetic inner =>
+        checkForOp inner
+      | .T_Arithmetic inner =>
+        checkForOp inner
+      | _ => []
+    else []
+}
+where
+  checkForOp (tok : Token) : List TokenComment :=
+    match tok.inner with
+    | .T_Literal s =>
+      if s == ">>=" then
+        [warnCmd tok 3020
+          ">>= is not POSIX. Use explicit assignment with $((var = var >> n))."]
+      else []
+    | _ => []
+
+/-- SC3030: declare is not POSIX -/
+def checkDeclarePosix : CommandCheck := {
+  name := .anyExactly ["declare", "typeset"]
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandName t with
+      | some "declare" =>
+        [warnCmd t 3030
+          "'declare' is not POSIX. Use direct assignment or export/readonly."]
+      | some "typeset" =>
+        [warnCmd t 3030
+          "'typeset' is not POSIX. Use direct assignment or export/readonly."]
+      | _ => []
+    else []
+}
+
+/-- SC3037: echo -n is not portable -/
+def checkEchoNPosix : CommandCheck := {
+  name := .basename "echo"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        if args.any fun a => getLiteralString a == some "-n" then
+          [warnCmd t 3037
+            "echo -n is not portable. Use printf '%s' instead."]
+        else []
+      | Option.none => []
+    else []
+}
+
 /-- All command checks -/
 def commandChecks : List CommandCheck := [
   checkLsGrep,
