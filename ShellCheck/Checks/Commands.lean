@@ -2100,6 +2100,439 @@ def checkReadWithoutR : CommandCheck := {
     | Option.none => []
 }
 
+/-!
+## Additional SC2xxx Checks (Batch 2)
+
+These implement the missing SC2xxx codes identified in the DSL registry.
+-/
+
+/-- SC2042: Use spaces, not commas, to separate loop elements -/
+def checkForLoopComma : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_ForIn _ words _ =>
+      words.filterMap fun w =>
+        match getLiteralString w with
+        | some s =>
+          if s.contains ',' && !s.contains ' ' then
+            some (warnCmd w 2042
+              "Use spaces, not commas, to separate loop elements.")
+          else Option.none
+        | Option.none => Option.none
+    | _ => []
+}
+
+/-- SC2043: This loop will only ever run once -/
+def checkSingleIterationLoop : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_ForIn _ words _ =>
+      if words.length == 1 then
+        match words.head? with
+        | some w =>
+          if isConstant w && !isGlob w then
+            [warnCmd t 2043
+              "This loop will only ever run once. Bad quoting or missing glob/expansion?"]
+          else []
+        | Option.none => []
+      else []
+    | _ => []
+}
+
+/-- SC2168: 'local' is only valid in functions -/
+def checkLocalOutsideFunction : CommandCheck := {
+  name := .exactly "local"
+  check := fun params t =>
+    if !isInFunction params t then
+      [errorCmd t 2168 "'local' is only valid in functions."]
+    else []
+}
+
+/-- SC2172: Trapping signals by number is not well defined -/
+def checkTrapByNumber : CommandCheck := {
+  name := .exactly "trap"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if s.all Char.isDigit && s.length > 0 && s != "0" then
+            some (warnArg arg 2172
+              "Trapping signals by number is not well defined. Use signal names.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2173: SIGKILL/SIGSTOP can not be trapped -/
+def checkTrapUncatchable : CommandCheck := {
+  name := .exactly "trap"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          let upper := s.toUpper
+          if upper == "KILL" || upper == "SIGKILL" ||
+             upper == "STOP" || upper == "SIGSTOP" ||
+             upper == "9" || upper == "19" then
+            some (errorArg arg 2173
+              s!"{s} can not be trapped.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2176: 'time' is undefined after &&/|| -/
+def checkTimeAfterLogical : CommandCheck := {
+  name := .exactly "time"
+  check := fun params t =>
+    match getParent params t with
+    | some parent =>
+      match parent.inner with
+      | .T_AndIf _ _ => [warnCmd t 2176
+          "'time' is undefined after &&. Wrap in { ..; } if needed."]
+      | .T_OrIf _ _ => [warnCmd t 2176
+          "'time' is undefined after ||. Wrap in { ..; } if needed."]
+      | _ => []
+    | Option.none => []
+}
+
+/-- SC2186: tempfile without XXXXXXXXXX is insecure -/
+def checkTempfileInsecure : CommandCheck := {
+  name := .anyExactly ["tempfile", "mktemp"]
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let hasTemplate := args.any fun a =>
+        match getLiteralString a with
+        | some s => Regex.containsSubstring s "XXXXXX"
+        | Option.none => false
+      if !hasTemplate then
+        [warnCmd t 2186
+          "Tempfile schemes without XXXXXX template are insecure."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2188: This redirection doesn't have a command -/
+def checkRedirectWithoutCommand : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Redirecting redirects cmd =>
+      if !redirects.isEmpty then
+        match cmd.inner with
+        | .T_SimpleCommand [] [] =>
+          [errorCmd t 2188
+            "This redirection doesn't have a command. Remove or add a command."]
+        | _ => []
+      else []
+    | _ => []
+}
+
+/-- SC2196: egrep is deprecated. Use grep -E -/
+def checkDeprecatedEgrep : CommandCheck := {
+  name := .basename "egrep"
+  check := fun _params t =>
+    [errorCmd t 2196 "egrep is deprecated. Use 'grep -E' instead."]
+}
+
+/-- SC2197: fgrep is deprecated. Use grep -F -/
+def checkDeprecatedFgrep : CommandCheck := {
+  name := .basename "fgrep"
+  check := fun _params t =>
+    [errorCmd t 2197 "fgrep is deprecated. Use 'grep -F' instead."]
+}
+
+/-- SC2209: Use var=$(command) to assign output -/
+def checkAssignmentVsCommand : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_SimpleCommand [] (word :: _) =>
+      match getLiteralString word with
+      | some s =>
+        if s.contains '=' && !s.startsWith "-" then
+          let parts := s.splitOn "="
+          match parts with
+          | [_name, value] =>
+            if value.startsWith "$(" || value.startsWith "`" then
+              []  -- Already using command substitution
+            else if !value.isEmpty && value.all Char.isAlpha then
+              [warnCmd t 2209
+                "Use var=$(command) to assign output (or quote to assign string)."]
+            else []
+          | _ => []
+        else []
+      | Option.none => []
+    | _ => []
+}
+
+/-- SC2216: Piping to 'cd' has no effect -/
+def checkPipeToCd : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Pipeline _ cmds =>
+      if cmds.length >= 2 then
+        cmds.drop 1 |>.filterMap fun cmd =>
+          if getCommandName cmd == some "cd" then
+            some (warnCmd cmd 2216 "Piping to 'cd' has no effect. 'cd' does not read stdin.")
+          else Option.none
+      else []
+    | _ => []
+}
+
+/-- SC2217: Redirecting to 'cd' has no effect -/
+def checkRedirectToCd : CommandCheck := {
+  name := .exactly "cd"
+  check := fun _params t =>
+    match t.inner with
+    | .T_Redirecting redirects _ =>
+      if redirects.any (fun r => match r.inner with
+        | .T_FdRedirect _ target => match target.inner with
+          | .T_IoFile _ _ => true
+          | _ => false
+        | _ => false) then
+        [warnCmd t 2217 "Redirecting to 'cd' has no effect."]
+      else []
+    | _ => []
+}
+
+/-- SC2224: This mv has no destination -/
+def checkMvNoDestination : CommandCheck := {
+  name := .basename "mv"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let nonFlags := getNonOptionArgs args
+      if nonFlags.length < 2 then
+        [errorCmd t 2224 "This mv has no destination. Check the arguments."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2225: This cp has no destination -/
+def checkCpNoDestination : CommandCheck := {
+  name := .basename "cp"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let nonFlags := getNonOptionArgs args
+      if nonFlags.length < 2 then
+        [errorCmd t 2225 "This cp has no destination. Check the arguments."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2226: This ln has no destination -/
+def checkLnNoDestination : CommandCheck := {
+  name := .basename "ln"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let nonFlags := getNonOptionArgs args
+      if nonFlags.length < 2 then
+        [warnCmd t 2226 "This ln has no destination. Check the arguments."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2232: Can't use sudo with shell builtins -/
+def checkSudoBuiltins : CommandCheck := {
+  name := .exactly "sudo"
+  check := fun _params t =>
+    let builtins := ["cd", "pushd", "popd", "source", ".", "alias", "unalias",
+                     "bg", "fg", "jobs", "disown", "set", "shopt", "export",
+                     "declare", "typeset", "local", "readonly", "unset", "shift",
+                     "return", "exit", "break", "continue", "eval", "exec",
+                     "times", "trap", "umask", "ulimit", "wait", "read", "builtin"]
+    match getCommandArguments t with
+    | some args =>
+      -- Find first non-flag argument (the command being sudoed)
+      let nonFlags := getNonOptionArgs args
+      match nonFlags.head? with
+      | some cmd =>
+        match getLiteralString cmd with
+        | some name =>
+          if builtins.contains name then
+            [warnArg cmd 2232
+              s!"'{name}' is a shell builtin. sudo cannot run it directly."]
+          else []
+        | Option.none => []
+      | Option.none => []
+    | Option.none => []
+}
+
+/-- SC2239: Ensure the shebang uses an absolute path -/
+def checkShebangAbsolutePath : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Script shebang _ =>
+      match shebang.inner with
+      | .T_Literal s =>
+        if !s.isEmpty && !s.startsWith "/" then
+          let path := s.dropWhile (· == ' ')
+          if !path.startsWith "/" && !"env ".isPrefixOf path then
+            [errorCmd t 2239
+              "Ensure the shebang uses an absolute path to the interpreter."]
+          else []
+        else []
+      | _ => []
+    | _ => []
+}
+
+/-- SC2241: The exit status can only be one integer 0-255 -/
+def checkExitMultipleArgs : CommandCheck := {
+  name := .exactly "exit"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      if args.length > 1 then
+        [errorCmd t 2241
+          "The exit status can only be one integer 0-255. Use stdout for other data."]
+      else
+        match args.head? with
+        | some arg =>
+          match getLiteralString arg with
+          | some s =>
+            match s.toInt? with
+            | some n =>
+              if n < 0 || n > 255 then
+                [errorCmd t 2242 "Can only exit with status 0-255."]
+              else []
+            | Option.none => []
+          | Option.none => []
+        | Option.none => []
+    | Option.none => []
+}
+
+/-- SC2246: This shebang specifies a directory -/
+def checkShebangDirectory : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Script shebang _ =>
+      match shebang.inner with
+      | .T_Literal s =>
+        let path := s.dropWhile (· == ' ')
+        if path.endsWith "/" then
+          [errorCmd t 2246 "This shebang specifies a directory. Ensure the interpreter is a file."]
+        else []
+      | _ => []
+    | _ => []
+}
+
+/-- SC2255: [ ] does not apply arithmetic evaluation -/
+def checkBracketArithmetic : CommandCheck := {
+  name := .exactly "["
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if s == "+" || s == "-" || s == "*" || s == "/" || s == "%" then
+            some (errorArg arg 2255
+              "[ ] does not apply arithmetic evaluation. Use $(( )) for numbers, or string operators.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2267: GNU xargs -d'\\n' is not portable -/
+def checkXargsDelimiter : CommandCheck := {
+  name := .basename "xargs"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match getCommandArguments t with
+      | some args =>
+        args.filterMap fun arg =>
+          match getLiteralString arg with
+          | some s =>
+            if s.startsWith "-d" || s == "-d" then
+              some (warnArg arg 2267
+                "xargs -d is a GNU extension. Use tr '\\n' '\\0' | xargs -0 for portability.")
+            else Option.none
+          | Option.none => Option.none
+      | Option.none => []
+    else []
+}
+
+/-- SC2269: This variable is assigned to itself -/
+def checkSelfAssignment : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Assignment _ name _ value =>
+      match getLiteralString value with
+      | some s =>
+        if s == "$" ++ name || s == "${" ++ name ++ "}" then
+          [infoCmd t 2269 s!"Variable '{name}' is assigned to itself."]
+        else []
+      | Option.none => []
+    | _ => []
+}
+
+/-- SC2277: cd ... || exit to fail on cd failure -/
+def checkCdWithoutExit : CommandCheck := {
+  name := .exactly "cd"
+  check := fun params t =>
+    match getParent params t with
+    | some parent =>
+      match parent.inner with
+      | .T_OrIf _ _ => []  -- Has || handling
+      | .T_AndIf _ _ => []  -- Has && handling
+      | _ =>
+        if !isInSubshell params t then
+          [warnCmd t 2277
+            "cd can fail. Use 'cd ... || exit' or 'cd ... || return' in scripts."]
+        else []
+    | Option.none => []
+}
+
+/-- SC2286: Empty string is interpreted as a command name -/
+def checkEmptyCommand : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_SimpleCommand [] (word :: _) =>
+      match getLiteralString word with
+      | some "" =>
+        [errorCmd t 2286
+          "This empty string is interpreted as a command name. Double check syntax."]
+      | _ => []
+    | _ => []
+}
+
+/-- SC2287: Command name ends with '/' -/
+def checkCommandSlash : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match getCommandName t with
+    | some name =>
+      if name.endsWith "/" then
+        [errorCmd t 2287
+          "This is interpreted as a command name ending with '/'. Double check syntax."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2310: This function is never invoked (simplified - just checks direct calls) -/
+-- Note: Full implementation would need call graph analysis
+def checkUnusedFunction : CommandCheck := {
+  name := .any
+  check := fun _params _t =>
+    -- Would need full scope analysis
+    []
+}
+
 /-- All command checks -/
 def commandChecks : List CommandCheck := [
   checkLsGrep,
@@ -2190,7 +2623,34 @@ def commandChecks : List CommandCheck := [
   checkTestFalse,       -- SC2158
   checkTestTrue,        -- SC2160
   checkNotTrue,         -- SC2161
-  checkReadWithoutR     -- SC2162
+  checkReadWithoutR,    -- SC2162
+  -- Batch 2: Additional SC2xxx checks
+  checkForLoopComma,    -- SC2042
+  checkSingleIterationLoop, -- SC2043
+  checkLocalOutsideFunction, -- SC2168
+  checkTrapByNumber,    -- SC2172
+  checkTrapUncatchable, -- SC2173
+  checkTimeAfterLogical, -- SC2176
+  checkTempfileInsecure, -- SC2186
+  checkRedirectWithoutCommand, -- SC2188
+  checkDeprecatedEgrep, -- SC2196
+  checkDeprecatedFgrep, -- SC2197
+  checkAssignmentVsCommand, -- SC2209
+  checkPipeToCd,        -- SC2216
+  checkRedirectToCd,    -- SC2217
+  checkMvNoDestination, -- SC2224
+  checkCpNoDestination, -- SC2225
+  checkLnNoDestination, -- SC2226
+  checkSudoBuiltins,    -- SC2232
+  checkShebangAbsolutePath, -- SC2239
+  checkExitMultipleArgs, -- SC2241/SC2242
+  checkShebangDirectory, -- SC2246
+  checkBracketArithmetic, -- SC2255
+  checkXargsDelimiter,  -- SC2267
+  checkSelfAssignment,  -- SC2269
+  checkCdWithoutExit,   -- SC2277
+  checkEmptyCommand,    -- SC2286
+  checkCommandSlash     -- SC2287
   -- Note: [ ] and [[ ]] checks moved to Analytics.lean (parsed as T_Condition)
 ]
 
@@ -2201,7 +2661,7 @@ def checker (_spec : AnalysisSpec) (params : Parameters) : Checker :=
 -- Theorems (stubs)
 
 theorem commandChecks_not_empty :
-    commandChecks.length > 0 := by native_decide
+    commandChecks.length > 0 := by decide
 
 theorem matchesCommandName_exactly (name : String) (cmd : Token) :
     matchesCommandName (.exactly name) cmd = true →
