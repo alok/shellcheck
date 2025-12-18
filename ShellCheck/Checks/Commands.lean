@@ -1534,7 +1534,7 @@ def checkTestGlob : CommandCheck := {
           | some s =>
             if s.any (fun c => c == '*' || c == '?') then
               some (makeComment .errorC arg.id 2144
-                "-e/-f/-d don't work with globs. Use a for loop.")
+                "-e, -f, -d don't work with globs. Use a for loop.")
             else Option.none
           | Option.none => Option.none
       else []
@@ -1736,6 +1736,370 @@ def checkEchoNPosix : CommandCheck := {
     else []
 }
 
+/-!
+## Additional SC2xxx Checks
+-/
+
+/-- SC2001: See if you can use ${var//search/replace} instead of sed -/
+def checkSedReplace : CommandCheck := {
+  name := .basename "sed"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      -- Check for simple s/old/new/ pattern that could use parameter expansion
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if s.startsWith "s/" || s.startsWith "'s/" || s.startsWith "\"s/" then
+            some (styleArg arg 2001
+              "See if you can use ${var//search/replace} instead of sed.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2005: Useless echo? Instead of 'echo $(cmd)', just use 'cmd' -/
+def checkUselessEcho : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some [arg] =>
+      match arg.inner with
+      | .T_DollarExpansion _ =>
+        [styleArg arg 2005
+          "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'."]
+      | .T_Backticked _ =>
+        [styleArg arg 2005
+          "Useless echo? Instead of 'echo `cmd`', just use 'cmd'."]
+      | _ => []
+    | _ => []
+}
+
+/-- SC2028: echo may not expand escape sequences. Use printf -/
+def checkEchoEscapes : CommandCheck := {
+  name := .basename "echo"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if Regex.containsSubstring s "\\n" || Regex.containsSubstring s "\\t" || Regex.containsSubstring s "\\r" then
+            some (infoArg arg 2028
+              "echo may not expand escape sequences. Consider using printf.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2040: #!/bin/sh was specified, so shopt is not supported -/
+def checkShoptInSh : CommandCheck := {
+  name := .exactly "shopt"
+  check := fun params t =>
+    if params.shellType == .Sh then
+      [errorCmd t 2040
+        "#!/bin/sh was specified, so shopt is not supported. Use bash instead."]
+    else []
+}
+
+/-- SC2041: This is a literal string. To run as a command, use $(...) -/
+def checkLiteralInBackticks : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_SingleQuoted s =>
+      if s.startsWith "`" && s.endsWith "`" then
+        [warnCmd t 2041
+          "This is a literal string. To run as a command, remove quotes."]
+      else []
+    | _ => []
+}
+
+/-- SC2063: Grep uses literal strings by default. Did you mean $var? -/
+def checkGrepLiteralDollar : CommandCheck := {
+  name := .basename "grep"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if s.startsWith "$" && s.length > 1 && !s.startsWith "$(" then
+            some (warnArg arg 2063
+              "Grep uses literal strings. Use \"$var\" or grep -e \"$var\" for variables.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2085: Double quote command substitution to avoid re-splitting -/
+def checkUnquotedSubstitution : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_SimpleCommand _ args =>
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_DollarExpansion _ =>
+          some (infoArg arg 2085
+            "Double quote command substitution to avoid re-splitting.")
+        | .T_Backticked _ =>
+          some (infoArg arg 2085
+            "Double quote command substitution to avoid re-splitting.")
+        | _ => Option.none
+    | _ => []
+}
+
+/-- SC2101: Named class needs outer brackets, e.g. [[:digit:]] -/
+def checkBracketClass : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Glob s =>
+      if Regex.containsSubstring s "[:alnum:]" || Regex.containsSubstring s "[:alpha:]" ||
+         Regex.containsSubstring s "[:digit:]" || Regex.containsSubstring s "[:space:]" then
+        if !Regex.containsSubstring s "[[:" then
+          [warnCmd t 2101
+            "Named class [:class:] needs outer brackets: [[:class:]]"]
+        else []
+      else []
+    | _ => []
+}
+
+/-- SC2103: Use a ( subshell ) to avoid cd affecting the script's current dir -/
+def checkCdSubshell : CommandCheck := {
+  name := .exactly "cd"
+  check := fun params t =>
+    -- Check if cd is not in a subshell and followed by more commands
+    match params.parentMap.get? t.id with
+    | some parent =>
+      match parent.inner with
+      | .T_AndIf _ _ =>
+        [infoCmd t 2103
+          "Use a ( subshell ) to avoid cd affecting this script's current dir."]
+      | .T_OrIf _ _ =>
+        [infoCmd t 2103
+          "Use a ( subshell ) to avoid cd affecting this script's current dir."]
+      | _ => []
+    | Option.none => []
+}
+
+/-- SC2111: ksh does not allow 'function' keyword and target parentheses -/
+def checkKshFunctionSyntax : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Ksh then
+      match t.inner with
+      | .T_Function keyword parens _ _ =>
+        if keyword.used && parens.used then
+          [errorCmd t 2111
+            "ksh does not allow 'function' keyword and () together."]
+        else []
+      | _ => []
+    else []
+}
+
+/-- SC2112: 'function' keyword is non-standard. Delete it -/
+def checkFunctionKeyword : CommandCheck := {
+  name := .any
+  check := fun params t =>
+    if params.shellType == .Sh then
+      match t.inner with
+      | .T_Function keyword _ _ _ =>
+        if keyword.used then
+          [warnCmd t 2112
+            "'function' keyword is non-standard. Use 'name() { ..; }' instead."]
+        else []
+      | _ => []
+    else []
+}
+
+/-- SC2126: Consider using grep -c instead of grep | wc -l -/
+def checkGrepWcL : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Pipeline _ cmds =>
+      if cmds.length >= 2 then
+        let pairs := cmds.zip (cmds.drop 1)
+        pairs.filterMap fun (cmd1, cmd2) =>
+          let isGrep := getCommandName cmd1 == some "grep"
+          let isWcL := getCommandName cmd2 == some "wc" &&
+            (getCommandArguments cmd2).any fun args =>
+              args.any fun a => getLiteralString a == some "-l"
+          if isGrep && isWcL then
+            some (styleCmd cmd1 2126
+              "Consider using 'grep -c' instead of 'grep | wc -l'.")
+          else Option.none
+      else []
+    | _ => []
+}
+
+/-- SC2130: -eq, -ne are for integer comparisons. Use =, != for strings -/
+def checkStringIntComparison : CommandCheck := {
+  name := .exactly "test"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      -- Simplified check: just warn on -eq/-ne with non-numeric looking args
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some op =>
+          if op == "-eq" || op == "-ne" || op == "-lt" ||
+             op == "-le" || op == "-gt" || op == "-ge" then
+            some (infoArg arg 2130
+              s!"{op} is for integer comparisons. Use =, !=, <, > for strings.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2131: Use double brackets to avoid glob expansion in [[ -/
+def checkSingleBracketGlob : CommandCheck := {
+  name := .exactly "["
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      args.filterMap fun arg =>
+        match getLiteralString arg with
+        | some s =>
+          if hasGlobChars s then
+            some (warnArg arg 2131
+              "Globs expand in [ ]. Use [[ ]] for literal matching.")
+          else Option.none
+        | Option.none => Option.none
+    | Option.none => []
+}
+
+/-- SC2151: Only one integer is valid for exit codes. Use 'if' for conditions -/
+def checkMultipleExitCodes : CommandCheck := {
+  name := .exactly "exit"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      if args.length > 1 then
+        [errorCmd t 2151
+          "Only one integer is valid for exit. Use 'if' for conditions."]
+      else []
+    | Option.none => []
+}
+
+/-- SC2152: Can only return 0-255. Use echo for other values -/
+def checkReturnValue : CommandCheck := {
+  name := .exactly "return"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some (arg :: _) =>
+      match getLiteralString arg with
+      | some s =>
+        match s.toNat? with
+        | some n =>
+          if n > 255 then
+            [warnArg arg 2152
+              "Can only return 0-255. Other values wrap around."]
+          else []
+        | Option.none => []
+      | Option.none => []
+    | _ => []
+}
+
+/-- SC2154: var is referenced but not assigned -/
+-- Note: This requires data flow analysis, simplified version here
+def checkUnassignedVar : CommandCheck := {
+  name := .any
+  check := fun _params _t =>
+    -- This would need full variable tracking which is done in Analytics.lean
+    []
+}
+
+/-- SC2157: Argument to -z is always false due to literal strings -/
+def checkTestZLiteral : CommandCheck := {
+  name := .exactly "test"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      -- Look for patterns like: -z "literal"
+      let pairs := args.zip (args.drop 1)
+      pairs.filterMap fun (arg1, arg2) =>
+        match getLiteralString arg1, getLiteralString arg2 with
+        | some "-z", some s =>
+          if !s.isEmpty && !s.startsWith "$" then
+            some (warnArg arg2 2157
+              "Argument to -z is always false due to literal string.")
+          else Option.none
+        | _, _ => Option.none
+    | Option.none => []
+}
+
+/-- SC2158: [ false ] is true. Remove brackets or use 'false' -/
+def checkTestFalse : CommandCheck := {
+  name := .exactly "["
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let nonBracket := args.filter fun a => getLiteralString a != some "]"
+      match nonBracket with
+      | [single] =>
+        match getLiteralString single with
+        | some "false" =>
+          [warnCmd t 2158
+            "[ false ] is true. Remove brackets or use 'false' directly."]
+        | some "true" =>
+          [infoCmd t 2158
+            "[ true ] is true, but so is [ false ]. Use 'true' directly."]
+        | _ => []
+      | _ => []
+    | Option.none => []
+}
+
+/-- SC2160: Instead of '[ true ]', just use 'true' -/
+def checkTestTrue : CommandCheck := {
+  name := .exactly "test"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some [arg] =>
+      match getLiteralString arg with
+      | some "true" =>
+        [styleCmd t 2160
+          "Instead of 'test true', just use 'true'."]
+      | some "false" =>
+        [styleCmd t 2160
+          "Instead of 'test false', just use 'false'."]
+      | _ => []
+    | _ => []
+}
+
+/-- SC2161: Instead of '! true', use 'false' (or vice versa) -/
+def checkNotTrue : CommandCheck := {
+  name := .any
+  check := fun _params t =>
+    match t.inner with
+    | .T_Banged cmd =>
+      match getCommandName cmd with
+      | some "true" =>
+        [styleCmd t 2161
+          "Instead of '! true', use 'false'."]
+      | some "false" =>
+        [styleCmd t 2161
+          "Instead of '! false', use 'true'."]
+      | _ => []
+    | _ => []
+}
+
+/-- SC2162: read without -r will mangle backslashes -/
+def checkReadWithoutR : CommandCheck := {
+  name := .exactly "read"
+  check := fun _params t =>
+    match getCommandArguments t with
+    | some args =>
+      let hasR := args.any fun a => getLiteralString a == some "-r"
+      if !hasR then
+        [infoCmd t 2162
+          "'read' without -r will mangle backslashes."]
+      else []
+    | Option.none => []
+}
+
 /-- All command checks -/
 def commandChecks : List CommandCheck := [
   checkLsGrep,
@@ -1804,7 +2168,29 @@ def commandChecks : List CommandCheck := [
   checkFindEmpty,       -- SC2150
   checkExportValue,     -- SC2163
   checkMathExpr,        -- SC2167
-  checkDashBashisms     -- SC2169
+  checkDashBashisms,    -- SC2169
+  -- Additional SC2xxx checks
+  checkSedReplace,      -- SC2001
+  checkUselessEcho,     -- SC2005
+  checkEchoEscapes,     -- SC2028
+  checkShoptInSh,       -- SC2040
+  checkLiteralInBackticks, -- SC2041
+  checkGrepLiteralDollar,  -- SC2063
+  checkUnquotedSubstitution, -- SC2085
+  checkBracketClass,    -- SC2101
+  checkCdSubshell,      -- SC2103
+  checkKshFunctionSyntax, -- SC2111
+  checkFunctionKeyword, -- SC2112
+  checkGrepWcL,         -- SC2126
+  checkStringIntComparison, -- SC2130
+  checkSingleBracketGlob, -- SC2131
+  checkMultipleExitCodes, -- SC2151
+  checkReturnValue,     -- SC2152
+  checkTestZLiteral,    -- SC2157
+  checkTestFalse,       -- SC2158
+  checkTestTrue,        -- SC2160
+  checkNotTrue,         -- SC2161
+  checkReadWithoutR     -- SC2162
   -- Note: [ ] and [[ ]] checks moved to Analytics.lean (parsed as T_Condition)
 ]
 

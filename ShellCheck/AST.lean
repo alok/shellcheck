@@ -165,14 +165,14 @@ inductive InnerToken (t : Type) where
   | T_DollarBracket (expr : t)
   | T_DollarDoubleQuoted (parts : List t)
   | T_DollarExpansion (cmds : List t)
-  | T_DollarBraceCommandExpansion (piped : Piped) (cmds : List t)
+  | T_DollarBraceCommandExpansion (isPiped : Piped) (cmds : List t)
   | T_DoubleQuoted (parts : List t)
   | T_Extglob (pattern : String) (parts : List t)
   | T_FdRedirect (fd : String) (target : t)
   | T_ForArithmetic (init cond incr : t) (body : List t)
   | T_ForIn (var : String) (words : List t) (body : List t)
   | T_Function (keyword : FunctionKeyword) (parens : FunctionParentheses) (name : String) (body : t)
-  | T_HereDoc (dashed : Dashed) (quoted : Quoted) (delimiter : String) (content : List t)
+  | T_HereDoc (isDashed : Dashed) (isQuoted : Quoted) (delimiter : String) (content : List t)
   | T_HereString (word : t)
   | T_IfExpression (conditions : List (List t × List t)) (elseBody : List t)
   | T_IoFile (op : t) (file : t)
@@ -383,7 +383,7 @@ theorem inner_eq_implies_semantic_eq (t1 t2 : Token) (h : t1.inner = t2.inner) :
   simp_all
 
 /-- doTransform applies transform to leaves -/
-theorem doTransform_applies (transform : Token → Token) (t : Token) :
+theorem doTransform_applies (_transform : Token → Token) (_t : Token) :
     True := trivial  -- Placeholder for actual property
 
 end ShellCheck.AST
