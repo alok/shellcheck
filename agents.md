@@ -231,6 +231,22 @@ diff <(.lake/build/bin/shellcheck4 -f json script.sh | jq) <(shellcheck -f json 
 3. **Position tracking**: Fixed `parseSubshellContent` to offset positions correctly
 4. **Recursive `$()` parsing**: Added `expandDollarExpansions` for nested command substitution
 
+## Recent Agent Work (Dec 2025)
+
+1. **Core variable-flow parsing aligned with upstream**:
+   - `ShellCheck/AnalyzerLib.lean` now handles `read`, `declare/typeset`, `export/local/readonly`,
+     `printf -v`, `wait -p`, `mapfile/readarray`, `set --`, and `DEFINE_*` variable assignments.
+   - References for `export/declare/typeset/local` respect `getAllFlags` semantics (`-f/-x/-p`).
+2. **SC2154 accuracy improvements** (`ShellCheck/Analytics.lean`):
+   - Builds read/write maps from `variableFlow`, respects `internalVariables`,
+     and mirrors upstream typo suggestions + command-name hinting.
+   - Guarded expansions are excluded (e.g. `${var?}`, `${var:?}`, `${var:+...}`, `${var:-...}`).
+3. **Hard-case tests added**:
+   - `test_scripts/test_unassigned_and_subshell.sh` covers SC2030/SC2031, SC2154/SC2153,
+     guarded parameter expansions, `mapfile`, `wait -p`, and `DEFINE_*`.
+   - `test_scripts/test_ksh_pipeline.sh` ensures no SC2030/SC2031 for ksh pipelines.
+   - Added Bash `lastpipe` suppression case to `test_unassigned_and_subshell.sh`.
+
 ## Next Steps (Priority Order)
 
 ### 1. Migrate Parser to New Parsec Infrastructure
@@ -266,9 +282,8 @@ Compare with original shellcheck:
 grep -o "SC[0-9]\+" src/ShellCheck/Analytics.hs | sort -u | wc -l
 ```
 Priority missing checks:
-- SC2030/SC2031 (subshell variable modification)
 - SC2145 (array as argument)
-- SC2154 (referenced but not assigned)
+- SC2154 (referenced but not assigned) -- now implemented; add more edge-case tests if needed.
 
 ### 5. Performance Optimization
 - Profile with `lake build -KreleaseFast`
