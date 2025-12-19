@@ -669,63 +669,148 @@ where
 
   getModifiedVariableCommand (base : Token) (words : List Token) :
       List (Token × Token × String × DataType) :=
+    let flags := (getAllFlags base).map (·.2)
     match words with
     | [] => []
     | cmd :: rest =>
       match getLiteralString cmd with
+      | some "builtin" => getModifiedVariableCommand base rest
       | some "read" => getReadVariables base rest
-      | some "export" => getModifierParams DataType.DataString rest
-      | some "declare" => getDeclareVariables base rest
-      | some "typeset" => getDeclareVariables base rest
-      | some "local" => getModifierParams DataType.DataString rest
-      | some "readonly" => getModifierParams DataType.DataString rest
-      | some "let" => getLetVariables base rest
-      | some "printf" => getPrintfVariable base rest
-      | some "mapfile" => getMapfileVariable base rest
-      | some "readarray" => getMapfileVariable base rest
       | some "getopts" =>
         match rest with
         | _ :: var :: _ => getLiteralVariable base var
         | _ => []
+      | some "let" => getLetVariables base rest
+      | some "export" =>
+        if flags.any (· == "f") then [] else getModifierParamString base rest
+      | some "declare" => getDeclareVariables base rest
+      | some "typeset" => getDeclareVariables base rest
+      | some "local" => getModifierParamString base rest
+      | some "readonly" =>
+        if flags.any (· == "f") || flags.any (· == "p") then [] else getModifierParamString base rest
+      | some "set" =>
+        match getSetParams rest with
+        | some params => [(base, base, "@", .DataString (.SourceFrom params))]
+        | none => []
+      | some "printf" =>
+        match getPrintfVariable base rest with
+        | some v => [v]
+        | none => []
+      | some "wait" =>
+        match getWaitVariable base rest with
+        | some v => [v]
+        | none => []
+      | some "mapfile" =>
+        match getMapfileArray base rest with
+        | some v => [v]
+        | none => []
+      | some "readarray" =>
+        match getMapfileArray base rest with
+        | some v => [v]
+        | none => []
+      | some "DEFINE_boolean" => getFlagVariable base rest
+      | some "DEFINE_float" => getFlagVariable base rest
+      | some "DEFINE_integer" => getFlagVariable base rest
+      | some "DEFINE_string" => getFlagVariable base rest
       | _ => []
+
+  dataTypeFrom (defaultType : DataSource → DataType) (value : Token) : DataType :=
+    match value.inner with
+    | .T_Array _ => DataType.DataArray (DataSource.SourceFrom [value])
+    | _ => defaultType (DataSource.SourceFrom [value])
+
+  getLiteralOfDataType (base : Token) (t : Token) (d : DataType) :
+      Option (Token × Token × String × DataType) := do
+    let s ← getLiteralString t
+    if s.startsWith "-" then
+      none
+    else
+      some (base, t, s, d)
+
+  getLiteral (base : Token) (t : Token) :
+      Option (Token × Token × String × DataType) :=
+    getLiteralOfDataType base t (.DataString .SourceExternal)
+
+  getLiteralArray (base : Token) (t : Token) :
+      Option (Token × Token × String × DataType) :=
+    getLiteralOfDataType base t (.DataArray .SourceExternal)
+
+  getModifierParam (base : Token) (defaultType : DataSource → DataType) (t : Token) :
+      List (Token × Token × String × DataType) :=
+    match t.inner with
+    | .T_Assignment _ name _ value =>
+      [(base, t, name, dataTypeFrom defaultType value)]
+    | _ =>
+      match getLiteralString t with
+      | some name =>
+        if isVariableName name then
+          [(base, t, name, defaultType .SourceDeclaration)]
+        else []
+      | none => []
+
+  getModifierParamString (base : Token) (args : List Token) :
+      List (Token × Token × String × DataType) :=
+    args.flatMap (getModifierParam base DataType.DataString)
+
+  getDeclareVariables (base : Token) (args : List Token) :
+      List (Token × Token × String × DataType) :=
+    let flags := (getAllFlags base).map (·.2)
+    let hasFOrP := flags.any (· == "F") || flags.any (· == "f") || flags.any (· == "p")
+    if hasFOrP then
+      []
+    else
+      let defaultType : DataSource → DataType :=
+        if flags.any (· == "a") || flags.any (· == "A") then
+          DataType.DataArray
+        else
+          DataType.DataString
+      args.flatMap (getModifierParam base defaultType)
 
   getReadVariables (base : Token) (args : List Token) :
       List (Token × Token × String × DataType) :=
-    -- Simplified: get last non-flag arguments as variable names
-    args.reverse.take 1 |>.filterMap fun arg =>
-      match getLiteralString arg with
-      | some s =>
-        if not (s.startsWith "-") && isVariableName s then
-          some (base, arg, s, .DataString .SourceExternal)
-        else none
-      | none => none
+    let fallback :=
+      let candidates := args.reverse.map (getLiteral base)
+      candidates.takeWhile (fun c => c.isSome) |>.filterMap id
+    match getGnuOpts flagsForRead args with
+    | some parsed =>
+      match parsed.find? (fun (f, _) => f == "a") with
+      | some (_, (_, varTok)) =>
+        match getLiteralArray base varTok with
+        | some v => [v]
+        | none => []
+      | none =>
+        parsed.filter (fun (f, _) => f == "")
+          |>.filterMap (fun (_, (_, tok)) => getLiteral base tok)
+    | none => fallback
 
-  getDeclareVariables (_base : Token) (args : List Token) :
-      List (Token × Token × String × DataType) :=
-    -- `declare -a/-A` defines arrays.
-    -- This is important for checks like SC2178/SC2179 (array ↔ string confusion).
-    let flags : List String := args.filterMap fun arg =>
-      match getLiteralString arg with
-      | some s => if s.startsWith "-" then some s else none
-      | none => none
-    let isArrayDecl := flags.any fun f => f.any (· == 'a') || f.any (· == 'A')
-    let defaultType : DataSource → DataType :=
-      if isArrayDecl then DataType.DataArray else DataType.DataString
-    getModifierParams defaultType args
+  stripEquals (s : String) : String :=
+    let rec go : List Char → List Char
+      | [] => []
+      | '=' :: rest => rest
+      | _ :: rest => go rest
+    String.ofList (go s.toList)
 
-  getModifierParams (defaultType : DataSource → DataType) (args : List Token) :
-      List (Token × Token × String × DataType) :=
-    args.filterMap fun arg =>
-      match arg.inner with
-      | .T_Assignment _ name _ value =>
-        some (arg, arg, name, defaultType (DataSource.SourceFrom [value]))
-      | _ =>
-        match getLiteralString arg with
-        | some s =>
-          if isVariableName s then
-            some (arg, arg, s, defaultType DataSource.SourceDeclaration)
-          else none
-        | none => none
+  stripEqualsFrom (t : Token) : Token :=
+    match t.inner with
+    | .T_NormalWord parts =>
+      match parts with
+      | first :: rest =>
+        match first.inner with
+        | .T_Literal s =>
+          let newFirst : Token := ⟨first.id, .T_Literal (stripEquals s)⟩
+          ⟨t.id, .T_NormalWord (newFirst :: rest)⟩
+        | _ => t
+      | [] => t
+    | .T_DoubleQuoted parts =>
+      match parts with
+      | [inner] =>
+        match inner.inner with
+        | .T_Literal s =>
+          let newInner : Token := ⟨inner.id, .T_Literal (stripEquals s)⟩
+          ⟨t.id, .T_DoubleQuoted [newInner]⟩
+        | _ => t
+      | _ => t
+    | _ => t
 
   getLetVariables (base : Token) (args : List Token) :
       List (Token × Token × String × DataType) :=
@@ -734,50 +819,96 @@ where
       let varName := s.dropWhile (fun c => c == '+' || c == '-')
                       |>.takeWhile isVariableChar
       if varName.isEmpty then none
-      else some (base, arg, varName, .DataString (.SourceFrom [arg]))
+      else some (base, arg, varName, .DataString (.SourceFrom [stripEqualsFrom arg]))
+
+  getSetParams : List Token → Option (List Token)
+    | [] => none
+    | t :: rest =>
+      match getLiteralString t with
+      | some "-o" =>
+        match rest with
+        | _ :: rest2 => getSetParams rest2
+        | [] => none
+      | some "--" => some rest
+      | some s =>
+        if s.startsWith "-" then
+          getSetParams rest
+        else
+          match getSetParams rest with
+          | some more => some (t :: more)
+          | none => some [t]
+      | none =>
+        match getSetParams rest with
+        | some more => some (t :: more)
+        | none => some [t]
+
+  getFlagAssignedVariable (base : Token) (flag : String) (source : DataSource)
+      (flags? : Option (List (String × (Token × Token)))) :
+      Option (Token × Token × String × DataType) := do
+    let flags ← flags?
+    let (_, (_, value)) ← flags.find? (fun (f, _) => f == flag)
+    let variableName ← getLiteralStringExt (fun _ => some "!") value
+    let baseName := variableName.takeWhile (· != '[')
+    let index := variableName.drop baseName.length
+    let dtype :=
+      if index.isEmpty then
+        DataType.DataString source
+      else
+        DataType.DataArray source
+    some (base, value, baseName, dtype)
 
   getPrintfVariable (base : Token) (args : List Token) :
-      List (Token × Token × String × DataType) :=
-    -- Look for -v flag
-    match findFlag "-v" args with
-    | some (_, valueToken) =>
-      match getLiteralString valueToken with
-      | some varName =>
-        let baseName := varName.takeWhile (· != '[')
-        [(base, valueToken, baseName, .DataString (.SourceFrom args))]
-      | none => []
-    | none => []
+      Option (Token × Token × String × DataType) :=
+    getFlagAssignedVariable base "v" (.SourceFrom args) (getBsdOpts "v:" args)
 
-  getMapfileVariable (base : Token) (args : List Token) :
+  getWaitVariable (base : Token) (args : List Token) :
+      Option (Token × Token × String × DataType) :=
+    getFlagAssignedVariable base "p" .SourceInteger (some (getGenericOpts args))
+
+  getLastVariableName (args : List Token) : Option (Token × String) :=
+    match args with
+    | [] => none
+    | t :: rest =>
+      match getLastVariableName rest with
+      | some found => some found
+      | none =>
+        match getLiteralString t with
+        | some name => if isVariableName name then some (t, name) else none
+        | none => none
+
+  getMapfileArray (base : Token) (args : List Token) :
+      Option (Token × Token × String × DataType) :=
+    let parsed : Option (Token × Token × String × DataType) := do
+      let flags ← getGnuOpts "d:n:O:s:u:C:c:t" args
+      match flags.find? (fun (f, _) => f == "") with
+      | none => some (base, base, "MAPFILE", .DataArray .SourceExternal)
+      | some (_, (_, first)) =>
+        let name ← getLiteralString first
+        if isVariableName name then
+          some (base, first, name, .DataArray .SourceExternal)
+        else
+          none
+    match parsed with
+    | some v => some v
+    | none =>
+      match getLastVariableName args with
+      | some (tok, name) => some (base, tok, name, .DataArray .SourceExternal)
+      | none => none
+
+  getFlagVariable (base : Token) (args : List Token) :
       List (Token × Token × String × DataType) :=
-    -- Last non-flag argument is array name, default is MAPFILE
-    let nonFlags := args.filter fun a =>
-      match getLiteralString a with
-      | some s => not (s.startsWith "-")
-      | none => true
-    match nonFlags.getLast? with
-    | some arg =>
-      match getLiteralString arg with
-      | some name =>
-        if isVariableName name then [(base, arg, name, .DataArray .SourceExternal)]
-        else [(base, base, "MAPFILE", .DataArray .SourceExternal)]
-      | none => [(base, base, "MAPFILE", .DataArray .SourceExternal)]
-    | none => [(base, base, "MAPFILE", .DataArray .SourceExternal)]
+    match args with
+    | nameTok :: _ =>
+      match getLiteralString nameTok with
+      | some name => [(base, nameTok, "FLAGS_" ++ name, .DataString .SourceExternal)]
+      | none => []
+    | [] => []
 
   getLiteralVariable (base : Token) (arg : Token) :
       List (Token × Token × String × DataType) :=
-    match getLiteralString arg with
-    | some s =>
-      if isVariableName s then [(base, arg, s, .DataString .SourceExternal)]
-      else []
+    match getLiteral base arg with
+    | some v => [v]
     | none => []
-
-  findFlag (flag : String) : List Token → Option (Token × Token)
-  | [] => none
-  | [_] => none
-  | f :: v :: rest =>
-    if getLiteralString f == some flag then some (f, v)
-    else findFlag flag (v :: rest)
 
 /-- Get referenced variables from a token -/
 partial def getReferencedVariablesImpl (parents : Std.HashMap Id Token) (t : Token) :
