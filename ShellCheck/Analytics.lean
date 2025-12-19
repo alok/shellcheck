@@ -4911,7 +4911,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkArithmeticBadOctal,
   checkBackticks,
   checkDollarBrackets,
-  checkUncheckedCdPushdPopd,
+  -- checkUncheckedCdPushdPopd, -- SC2164 - handled by Commands.checkCdNoCheck
   checkMaskedReturns,
   checkArrayExpansions,
   checkRmGlob,
