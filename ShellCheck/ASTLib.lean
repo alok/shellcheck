@@ -179,6 +179,20 @@ def isQuotes (t : Token) : Bool :=
   | .T_SingleQuoted .. => true
   | _ => false
 
+/-- Get the last unquoted literal token in a word, if any. -/
+def getTrailingUnquotedLiteral (t : Token) : Option Token :=
+  match t.inner with
+  | .T_NormalWord parts =>
+      let rec go : List Token → Option Token
+        | [] => none
+        | [last] =>
+            match last.inner with
+            | .T_Literal _ => some last
+            | _ => none
+        | _ :: rest => go rest
+      go parts
+  | _ => none
+
 /-- Is this an array expansion like ${arr[@]}? -/
 def isArrayExpansion (t : Token) : Bool :=
   match t.inner with
@@ -186,6 +200,25 @@ def isArrayExpansion (t : Token) : Bool :=
       let s := String.join (oversimplify content)
       s.startsWith "@" || (not (s.startsWith "#") && Regex.containsSubstring s "[@]")
   | _ => false
+
+/-- Can this token become multiple args (e.g. arrays or unquoted expansions)? -/
+partial def mayBecomeMultipleArgs (t : Token) : Bool :=
+  willBecomeMultipleArgs t || go false t
+where
+  go (quoted : Bool) (tok : Token) : Bool :=
+    if isArrayExpansion tok then
+      true
+    else
+      match tok.inner with
+      | .T_DollarBraced _ content =>
+          let s := String.join (oversimplify content)
+          let hasBang := s.toList.any (· == '!')
+          (!quoted) || hasBang || s.startsWith "!"
+      | .T_DoubleQuoted parts => parts.any (go true)
+      | .T_DollarDoubleQuoted parts => parts.any (go true)
+      | .T_NormalWord parts => parts.any (go quoted)
+      | .T_Annotation _ inner => go quoted inner
+      | _ => false
 
 /-- Is this a command substitution? -/
 def isCommandSubstitution (t : Token) : Bool :=

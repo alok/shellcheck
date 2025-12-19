@@ -151,17 +151,67 @@ where
     | c :: _ => c.isAlpha || c == '_'
     | [] => false
 
-/-- SC2046: Quote this to prevent word splitting (for-in specific) -/
+/-- SC2041/SC2042/SC2043/SC2066/SC2258: for-in loop quoting pitfalls. -/
 def checkForInQuoted (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_ForIn _ words _ =>
-    words.filterMap fun word =>
-      match word.inner with
-      | .T_DollarExpansion _ =>
-          some (makeComment .warningC word.id 2046
-            "Quote this to prevent word splitting.")
-      | _ => none
+      match words with
+      | [single] =>
+          match single.inner with
+          | .T_NormalWord [inner] =>
+              match inner.inner with
+              | .T_DoubleQuoted parts =>
+                  let shouldWarn :=
+                    (parts.any willSplit && !mayBecomeMultipleArgs inner) ||
+                    (match getLiteralString inner with
+                    | some s => wouldHaveBeenGlob s
+                    | Option.none => false)
+                  if shouldWarn then
+                    [makeComment .errorC inner.id 2066
+                      "Since you double quoted this, it will not word split, and the loop will only run once."]
+                  else
+                    []
+              | .T_SingleQuoted _ =>
+                  [makeComment .warningC inner.id 2041
+                    "This is a literal string. To run as a command, use $(..) instead of '..' . "]
+              | _ => checkSingleWord single
+          | _ => checkSingleWord single
+      | _ =>
+          words.flatMap fun arg =>
+            match getTrailingUnquotedLiteral arg with
+            | some suffix =>
+                match getLiteralString suffix with
+                | some s =>
+                    if s.endsWith "," then
+                      [makeComment .warningC arg.id 2258
+                        "The trailing comma is part of the value, not a separator. Delete or quote it."]
+                    else []
+                | Option.none => []
+            | Option.none => []
   | _ => []
+where
+  wouldHaveBeenGlob (s : String) : Bool :=
+    s.toList.any (· == '*')
+
+  checkSingleWord (single : Token) : List TokenComment :=
+    let hasGlob :=
+      match getLiteralString single with
+      | some s => wouldHaveBeenGlob s
+      | Option.none => false
+    match getUnquotedLiteral single with
+    | some s =>
+        if s.toList.any (· == ',') then
+          [makeComment .warningC single.id 2042
+            "Use spaces, not commas, to separate loop elements."]
+        else if !hasGlob && !(willSplit single || mayBecomeMultipleArgs single) then
+          [makeComment .warningC single.id 2043
+            "This loop will only ever run once. Bad quoting or missing glob/expansion?"]
+        else []
+    | Option.none =>
+        if !hasGlob && !(willSplit single || mayBecomeMultipleArgs single) then
+          [makeComment .warningC single.id 2043
+            "This loop will only ever run once. Bad quoting or missing glob/expansion?"]
+        else []
 
 /-- SC2012: Use find instead of ls to better handle non-alphanumeric filenames -/
 def checkForInLs (_params : Parameters) (t : Token) : List TokenComment :=
@@ -4836,7 +4886,6 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkDollarBrackets,
   checkUncheckedCdPushdPopd,
   checkMaskedReturns,
-  checkDoubleQuotedWordSplit,
   checkArrayExpansions,
   checkRmGlob,
   checkMultipleRedirects,
@@ -4939,7 +4988,6 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkStderrRedirect,
   -- Various command checks
   checkTrapQuoting,
-  checkSingleLoopIteration,
   checkTildeInQuotes,
   checkLonelyDotDash,
   checkQuotesForExpansion,
