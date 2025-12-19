@@ -658,7 +658,7 @@ partial def readProcSubFull : FullParser Token := do
   -- Read content until matching )
   let content ← readProcSubContent 1 []
   let _ ← charFull ')'
-  let dirStr := String.mk [dir]
+  let dirStr := String.ofList [dir]
   -- For now, create a T_ProcSub with the raw content as a literal
   let contentTok ← mkTokenFullAt (.T_Literal content) startLine startCol
   mkTokenFullAt (.T_ProcSub dirStr [contentTok]) startLine startCol

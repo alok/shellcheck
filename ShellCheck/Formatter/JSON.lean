@@ -71,7 +71,7 @@ def formatOutput (comments : List PositionedComment) : String :=
 /-- Create JSON formatter -/
 def format [Monad m] : Formatter m := {
   header := pure ()
-  onResult := fun cr _sys => pure ()  -- Would collect results
+  onResult := fun _cr _sys => pure ()  -- Would collect results
   onFailure := fun _file _msg => pure ()
   footer := pure ()  -- Would output collected JSON
 }
@@ -87,16 +87,16 @@ def formatResults (results : List CheckResult) : String :=
 
 -- Theorems (stubs)
 
-theorem formatOutput_valid_json (comments : List PositionedComment) :
+theorem formatOutput_valid_json (_comments : List PositionedComment) :
     True := trivial  -- Would verify output is valid JSON
 
-theorem toJson_preserves_code (pc : PositionedComment) :
+theorem toJson_preserves_code (_pc : PositionedComment) :
     True := trivial  -- Would verify code is preserved
 
-theorem toJson_preserves_message (pc : PositionedComment) :
+theorem toJson_preserves_message (_pc : PositionedComment) :
     True := trivial  -- Would verify message is preserved
 
-theorem formatResults_includes_all (results : List CheckResult) :
+theorem formatResults_includes_all (_results : List CheckResult) :
     True := trivial  -- Would verify all comments included
 
 end ShellCheck.Formatter.JSON

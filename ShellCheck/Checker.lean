@@ -135,10 +135,10 @@ def mockedSystemInterface [Monad m] (_includes : List (String × String)) : Syst
 
 -- Theorems (stubs)
 
-theorem checkScript_parses_first [Monad m] (sys : SystemInterface m) (spec : CheckSpec) :
+theorem checkScript_parses_first [Monad m] (_sys : SystemInterface m) (_spec : CheckSpec) :
     True := trivial  -- Would verify parsing happens first
 
-theorem checkScript_filters_by_severity (spec : CheckSpec) :
+theorem checkScript_filters_by_severity (_spec : CheckSpec) :
     True := trivial  -- Would verify severity filtering
 
 theorem shellFromFilename_ksh :

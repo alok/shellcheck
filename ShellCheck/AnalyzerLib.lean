@@ -1195,7 +1195,7 @@ def whenShell (shells : List Shell) (analysis : Analysis) : Analysis := do
 
 /-- Check if regex looks like confused glob -/
 def isConfusedGlobRegex (s : String) : Bool :=
-  match s.data with
+  match s.toList with
   | '*' :: _ => true
   | [x, '*'] => x != '\\' && x != '.'
   | _ => false
@@ -1269,7 +1269,7 @@ where
     | _ :: rest, s, acc => go rest s acc
 
 /-- Check if default assignment pattern ${var:-default} -/
-def isDefaultAssignment (tree : Std.HashMap Id Token) (t : Token) : Bool :=
+def isDefaultAssignment (_tree : Std.HashMap Id Token) (t : Token) : Bool :=
   match t.inner with
   | .T_DollarBraced _ content =>
     let s := String.join (oversimplify content)
@@ -1481,7 +1481,7 @@ def makeParameters (spec : AnalysisSpec) : Parameters :=
 theorem runChecker_empty (params : Parameters) :
     runChecker params emptyChecker = [] := sorry
 
-theorem composeAnalyzers_assoc (f g h : Token → Analysis) (t : Token) :
+theorem composeAnalyzers_assoc (_f _g _h : Token → Analysis) (_t : Token) :
     True := trivial
 
 theorem makeComment_has_severity (sev : Severity) (id : Id) (code : Code) (msg : String) :
@@ -1496,10 +1496,10 @@ theorem filterByAnnotation_subset (spec : AnalysisSpec) (params : Parameters) (c
 theorem isOptionSet_or (opt : String) (root : Token) :
     isOptionSet opt root = (containsShopt opt root || containsSetOption opt root) := rfl
 
-theorem determineShell_with_fallback (fb : Shell) (root : Token) :
+theorem determineShell_with_fallback (_fb : Shell) (_root : Token) :
     True := trivial
 
-theorem getParentTree_contains_children (root : Token) :
+theorem getParentTree_contains_children (_root : Token) :
     True := trivial
 
 theorem getTokenMap_contains_root (root : Token) :

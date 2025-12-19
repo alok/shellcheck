@@ -667,7 +667,7 @@ where
 
   /-- Haskell `checkGrepRe` emits SC2022 for patterns like `Foo*` that often come from glob intuition. -/
   getSuspiciousRegexWildcard (s : String) : Option Char :=
-    let chars := s.data
+    let chars := s.toList
     -- Contra: bail if the pattern includes regex-ish hints, or other uses of `*`.
     if chars.any (fun c => c == ']' || c == '^' || c == '$' || c == '+' || c == '\\') then
       Option.none
@@ -677,7 +677,7 @@ where
       findAlphaNumStar chars
 
   capitalizeFirst (s : String) : String :=
-    match s.data with
+    match s.toList with
     | [] => s
     | c :: cs => String.ofList (c.toUpper :: cs)
 

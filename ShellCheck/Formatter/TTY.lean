@@ -107,7 +107,7 @@ def formatWikiLinks (codes : List Nat) : List String :=
     codes.map fun c => s!"  {wikiLink}SC{c}"
 
 /-- Create TTY formatter -/
-def format [Monad m] (options : Format.FormatterOptions) : Format.Formatter m := {
+def format [Monad m] (_options : Format.FormatterOptions) : Format.Formatter m := {
   header := pure ()
   onResult := fun _cr _sys => pure ()  -- Would print formatted output
   onFailure := fun _file _msg => pure ()  -- Would print error

@@ -63,10 +63,10 @@ def optionalChecks : List CheckDescription :=
 
 -- Theorems (stubs)
 
-theorem analyzeScript_produces_result (spec : AnalysisSpec) :
+theorem analyzeScript_produces_result (_spec : AnalysisSpec) :
     True := trivial  -- Would verify result is valid
 
-theorem checkers_combine_all (spec : AnalysisSpec) (params : Parameters) :
+theorem checkers_combine_all (_spec : AnalysisSpec) (_params : Parameters) :
     True := trivial  -- Would verify all checkers are included
 
 theorem optionalChecks_includes_all :

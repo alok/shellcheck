@@ -863,7 +863,7 @@ theorem newCFContext_defaults (params : CFGParameters) :
     (newCFContext params).cfIsFunction = false ∧
     (newCFContext params).cfLoopStack = [] := ⟨rfl, rfl, rfl⟩
 
-theorem build_registers_node (t : Token) :
+theorem build_registers_node (_t : Token) :
     True := trivial
 
 theorem subshell_creates_entry_and_exit :
@@ -872,7 +872,7 @@ theorem subshell_creates_entry_and_exit :
 theorem cfg_has_finite_nodes (params : CFGParameters) (root : Token) :
     (buildGraph params root).cfGraph.nodes.size > 0 := sorry
 
-theorem cfg_edges_connect_existing_nodes (params : CFGParameters) (root : Token) :
+theorem cfg_edges_connect_existing_nodes (_params : CFGParameters) (_root : Token) :
     True := trivial  -- simplified
 
 theorem postdom_reflexive (result : CFGResult) (n : Node) :
@@ -885,7 +885,7 @@ theorem effect_tracking_covers_assignments :
 theorem effect_tracking_covers_reads :
     True := trivial
 
-theorem pipeline_creates_subshells (t : Token) :
+theorem pipeline_creates_subshells (_t : Token) :
     True := trivial
 
 theorem conditional_has_both_branches :

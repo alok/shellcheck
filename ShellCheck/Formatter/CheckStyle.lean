@@ -97,7 +97,7 @@ theorem escape_preserves_safe_chars (c : Char) :
   -- The condition includes c.isAlpha, so it's true
   simp only [h, Bool.true_or, ↓reduceIte]
 
-theorem formatComment_valid_xml (c : PositionedComment) :
+theorem formatComment_valid_xml (_c : PositionedComment) :
     True := trivial  -- Would verify valid XML
 
 -- String concatenation prefix proofs are tedious with interpolation

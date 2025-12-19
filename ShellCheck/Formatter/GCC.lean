@@ -38,7 +38,7 @@ def formatResultWithContents (cr : CheckResult) (contents : String) : List Strin
 def format [Monad m] : Formatter m := {
   header := pure ()
   onResult := fun _cr _sys => pure ()  -- Would print each formatted line
-  onFailure := fun file msg => pure ()  -- Would print error to stderr
+  onFailure := fun _file _msg => pure ()  -- Would print error to stderr
   footer := pure ()
 }
 
@@ -56,7 +56,7 @@ theorem formatComment_includes_filename (filename : String) (c : PositionedComme
   simp only [String.startsWith]
   sorry  -- Requires proving s!"{a}:{b}" starts with a, which is true but tedious
 
-theorem formatComment_includes_code (filename : String) (c : PositionedComment) :
+theorem formatComment_includes_code (_filename : String) (_c : PositionedComment) :
     True := trivial  -- Would verify SC code is included
 
 theorem formatResult_count (cr : CheckResult) :

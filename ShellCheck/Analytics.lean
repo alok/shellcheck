@@ -274,7 +274,7 @@ where
 /-- SC2015: Note that A && B || C is not if-then-else -/
 def checkShorthandIf (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_OrIf left right =>
+  | .T_OrIf left _right =>
     match left.inner with
     | .T_AndIf _ _ => [makeComment .infoC t.id 2015
         "Note that A && B || C is not if-then-else. C may run when A is true."]
@@ -357,7 +357,7 @@ def checkDollarBrackets (_params : Parameters) (t : Token) : List TokenComment :
   | .none => []
 
 /-- SC2034: Variable appears to be unused -/
-def checkUnusedAssignments (params : Parameters) (t : Token) : List TokenComment :=
+def checkUnusedAssignments (params : Parameters) (_t : Token) : List TokenComment :=
   let flow := params.variableFlow
   let assigned := getAssignedVariables flow
   let referenced := getReferencedVariables flow
@@ -579,7 +579,7 @@ def checkUncheckedCdPushdPopd (params : Parameters) (t : Token) : List TokenComm
   match t.inner with
   | .T_SimpleCommand _ words =>
     match words with
-    | cmd :: _ =>
+    | _cmd :: _ =>
       if isCommand t "cd" || isCommand t "pushd" || isCommand t "popd" then
         -- Check if in a context where exit status is checked
         if not (isCheckedContext params t) then
@@ -650,7 +650,7 @@ def checkMaskedReturns (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_SimpleCommand _ words =>
     match words with
-    | cmd :: rest =>
+    | _cmd :: rest =>
       let cmdName := getCommandName t |>.getD ""
       if cmdName ∈ ["local", "export", "declare", "typeset"] then
         rest.filterMap fun arg =>
@@ -2103,7 +2103,7 @@ where
 /-- SC2055: You probably wanted -a here, otherwise it's always true -/
 def checkOrNeq (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .TC_Or condType op lhs rhs =>
+  | .TC_Or condType _op lhs rhs =>
     match lhs.inner, rhs.inner with
     | .TC_Binary _ op1 lhs1 rhs1, .TC_Binary _ op2 lhs2 rhs2 =>
       if (op1 == "-ne" || op1 == "!=") && op1 == op2 then
@@ -3018,15 +3018,15 @@ def checkSshHereDoc (_params : Parameters) (t : Token) : List TokenComment :=
       if isCommand t "ssh" then
         redirects.filterMap fun r =>
           match r.inner with
-          | .T_HereDoc _ quoted delim _ =>
-              if quoted == .unquoted then
+          | .T_HereDoc _ quoteStyle delim _ =>
+              if quoteStyle == .unquoted then
                 some (makeComment .warningC r.id 2087
                   s!"Quote '{delim}' to make here document expansions happen on the server side rather than on the client.")
               else none
           | .T_FdRedirect _ target =>
               match target.inner with
-              | .T_HereDoc _ quoted delim _ =>
-                  if quoted == .unquoted then
+              | .T_HereDoc _ quoteStyle delim _ =>
+                  if quoteStyle == .unquoted then
                     some (makeComment .warningC target.id 2087
                       s!"Quote '{delim}' to make here document expansions happen on the server side rather than on the client.")
                   else none
@@ -3655,7 +3655,7 @@ def checkSpuriousExec (_params : Parameters) (t : Token) : List TokenComment :=
   | _ => []
 
 /-- SC2094: File being read and written in same pipeline -/
-def checkReadWriteSameFile (params : Parameters) (t : Token) : List TokenComment :=
+def checkReadWriteSameFile (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_Redirecting redirects cmd =>
     let files := getRedirectedFiles redirects
@@ -3677,7 +3677,7 @@ where
     []  -- Complex check requiring command analysis
 
 /-- SC2095: Add -n to ssh/scp or command may not run properly in while loop -/
-def checkWhileReadSsh (params : Parameters) (t : Token) : List TokenComment :=
+def checkWhileReadSsh (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_WhileExpression cond body =>
     if isReadCommand cond then
@@ -4548,7 +4548,7 @@ where
   removeTransparentCommands (t : Token) : Token :=
     doTransform (fun tok =>
       match tok.inner with
-      | .T_SimpleCommand assigns (cmd :: args) =>
+      | .T_SimpleCommand assigns (_cmd :: args) =>
         if getCommandBasename tok == some "time" && !args.isEmpty then
           ⟨tok.id, .T_SimpleCommand assigns args⟩
         else
@@ -5165,7 +5165,7 @@ def checker (spec : AnalysisSpec) (params : Parameters) : Checker :=
 
 -- Theorems (stubs)
 
-theorem checker_produces_valid_ids (spec : AnalysisSpec) (params : Parameters) :
+theorem checker_produces_valid_ids (_spec : AnalysisSpec) (_params : Parameters) :
     True := trivial
 
 theorem nodeChecks_comprehensive :
@@ -5175,22 +5175,21 @@ theorem nodeChecks_comprehensive :
 theorem optionalChecks_all_mapped (name : String) :
     name ∈ optionalChecks → optionalCheckMap.contains name := sorry
 
-theorem checkUnquotedDollarAt_on_at (params : Parameters) (id : Id) :
+theorem checkUnquotedDollarAt_on_at (_params : Parameters) (_id : Id) :
     True := trivial  -- Would verify SC2086 triggers on $@
 
-theorem checkBackticks_on_backtick (params : Parameters) (id : Id) :
+theorem checkBackticks_on_backtick (_params : Parameters) (_id : Id) :
     True := trivial  -- Would verify SC2006 triggers on backticks
 
-theorem mkChecker_includes_optional (spec : AnalysisSpec) (params : Parameters) :
-    spec.asOptionalChecks.contains "all" →
-    True := fun _ => trivial  -- Would verify all optional checks included
+theorem mkChecker_includes_optional (_spec : AnalysisSpec) (_params : Parameters) :
+    True := trivial  -- Would verify all optional checks included
 
 theorem treeChecks_not_empty :
     treeChecks.length > 0 := by
   simp [treeChecks]
 
-theorem runNodeAnalysis_collects_all (f : Parameters → Token → List TokenComment)
-    (p : Parameters) (t : Token) :
+theorem runNodeAnalysis_collects_all (_f : Parameters → Token → List TokenComment)
+    (_p : Parameters) (_t : Token) :
     True := trivial  -- Would verify all nodes visited
 
 end ShellCheck.Analytics

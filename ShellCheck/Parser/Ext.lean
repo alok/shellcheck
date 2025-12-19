@@ -298,10 +298,10 @@ theorem many_returns_list (p : Parser α) (input : String) :
 theorem option_never_fails (default : α) (p : Parser α) (input : String) :
     ∃ a, run (option default p) input = .ok a := sorry
 
-theorem attempt_backtracks (p : Parser α) :
+theorem attempt_backtracks (_p : Parser α) :
     True := trivial  -- placeholder
 
-theorem sepBy_empty_on_fail (p : Parser α) (sep : Parser β) (input : String) :
+theorem sepBy_empty_on_fail (_p : Parser α) (_sep : Parser β) (_input : String) :
     True := trivial  -- placeholder
 
 end ShellCheck.Parser.Ext

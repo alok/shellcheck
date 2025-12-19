@@ -216,12 +216,15 @@ def applyFix (fix : Fix) (fileLines : Array String) : List String :=
 
 -- Theorems (stubs)
 
+-- overlap is symmetric by commutativity of && and the symmetric structure of the conditions
 theorem overlap_symmetric [Ranged α] (x y : α) :
     overlap x y = overlap y x := sorry
 
+-- overlap_self requires start < end which isn't always true
 theorem overlap_self [Ranged α] (x : α) :
     overlap x x = true := sorry
 
+-- Symmetry follows from overlap_symmetric
 theorem fixesOverlap_symmetric (f1 f2 : Fix) :
     fixesOverlap f1 f2 = fixesOverlap f2 f1 := sorry
 
@@ -239,7 +242,8 @@ theorem emptyFix_right_identity (f : Fix) :
   simp
 
 theorem mapPositions_identity (fix : Fix) :
-    mapPositions id fix = fix := sorry
+    mapPositions id fix = fix := by
+  simp only [mapPositions, id, List.map_id']
 
 theorem mapPositions_composition (f g : Position → Position) (fix : Fix) :
     mapPositions f (mapPositions g fix) = mapPositions (f ∘ g) fix := sorry
