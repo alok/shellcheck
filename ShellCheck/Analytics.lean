@@ -441,54 +441,81 @@ where
         findSubshelled rest scopes deadVars acc
 
 /-- SC2154: Variable is referenced but not assigned -/
-def checkUnassignedReferences (params : Parameters) (t : Token) : List TokenComment :=
+def checkUnassignedReferences (params : Parameters) (_t : Token) : List TokenComment :=
+  let includeGlobals := false
   let flow := params.variableFlow
-  let assigned := getAssignedVariables flow
-  let referenced := getReferencedVariables flow
-  let writtenVars := assigned.map (fun (_, name, _) => name) |>.filter isVariableName
-  -- Find variables that are referenced but never assigned
-  referenced.filterMap fun (place, name) =>
-    if isSpecialVar name then
-      Option.none
-    else if not (assigned.any fun (_, n, _) => n == name) then
-      if isGlobalVar name then
-        match getBestMatch writtenVars name with
-        | .some matchName =>
-            some (makeComment .infoC place.id 2153
-              s!"Possible misspelling: {name} may not be assigned. Did you mean {matchName}?")
-        | .none => none
-      else
-        some (makeComment .warningC place.id 2154
-          s!"{name} is referenced but not assigned.")
+  let (readMap, writeMap) := flow.foldl (fun (read, written) entry =>
+    match entry with
+    | .Assignment (_, _, name, _) =>
+      (read, written.insert name ())
+    | .Reference (_, place, name) =>
+      let read := if read.contains name then read else read.insert name place
+      (read, written)
+    | _ =>
+      (read, written)
+  ) (({} : Std.HashMap String Token), ({} : Std.HashMap String Unit))
+
+  let defaultAssigned : Std.HashMap String Unit :=
+    internalVariables.foldl (fun m v => m.insert v ()) {}
+
+  let unassigned : List (String × Token) :=
+    readMap.toList.filterMap fun (name, place) =>
+      if writeMap.contains name || defaultAssigned.contains name then none else some (name, place)
+
+  let writtenVars := writeMap.toList.map (·.1) |>.filter isVariableName
+
+  unassigned.filterMap fun (var, place) =>
+    if !isVariableName var then
+      none
+    else if isException var place || isGuarded place then
+      none
+    else if includeGlobals || isLocal var then
+      warningForLocals writtenVars var place
     else
-      Option.none
+      warningForGlobals writtenVars var place
 where
-  getAssignedVariables (flow : List StackData) : List (Token × String × DataType) :=
-    flow.filterMap fun s =>
-      match s with
-      | .Assignment (token, _, name, dt) => some (token, name, dt)
-      | _ => Option.none
+  isLocal (name : String) : Bool :=
+    name.toList.any Char.isLower
 
-  getReferencedVariables (flow : List StackData) : List (Token × String) :=
-    flow.filterMap fun s =>
-      match s with
-      | .Reference (_, place, name) => some (place, name)
-      | _ => Option.none
+  warningForGlobals (writtenVars : List String) (var : String) (place : Token) : Option TokenComment := do
+    let matchName ← getBestMatch writtenVars var
+    some (makeComment .infoC place.id 2153
+      s!"Possible misspelling: {var} may not be assigned. Did you mean {matchName}?")
 
-  isSpecialVar (name : String) : Bool :=
-    name ∈ ["_", "OPTARG", "OPTIND", "REPLY", "RANDOM", "LINENO",
-            "SECONDS", "BASH_VERSION", "BASH_VERSINFO", "PWD", "OLDPWD",
-            "IFS", "PATH", "HOME", "USER", "SHELL", "TERM", "LANG",
-            "LC_ALL", "PS1", "PS2", "PS3", "PS4", "PROMPT_COMMAND",
-            "@", "*", "#", "?", "-", "$", "!", "0", "1", "2", "3", "4",
-            "5", "6", "7", "8", "9"]
-    || name.startsWith "_"
+  warningForLocals (writtenVars : List String) (var : String) (place : Token) : Option TokenComment :=
+    let optionalTip :=
+      if commonCommands.contains var then
+        s!" (for output from commands, use \"$({var} ... )\")"
+      else
+        match getBestMatch writtenVars var with
+        | some matchName => s!" (did you mean '{matchName}'?)"
+        | Option.none => ""
+    some (makeComment .warningC place.id 2154
+      s!"{var} is referenced but not assigned{optionalTip}.")
 
-  isGlobalVar (name : String) : Bool :=
-    -- In ShellCheck terminology, "globals" are typically all-caps environment variables.
-    -- In practice these may contain digits/underscores too, so just look for the
-    -- absence of lowercase letters.
-    !(name.toList.any Char.isLower)
+  isException (var : String) (t : Token) : Bool :=
+    (getPath params.parentMap t).any fun anc =>
+      match anc.inner with
+      | .T_DollarBraced _ content =>
+        let str := String.join (oversimplify content)
+        let ref := ASTLib.getBracedReference str
+        let mod := getBracedModifier str
+        ref != var || mod.startsWith "+" || mod.startsWith ":+"
+      | _ => false
+
+  isGuarded (t : Token) : Bool :=
+    match t.inner with
+    | .T_DollarBraced _ content =>
+      let name := String.join (oversimplify content)
+      let rest :=
+        name.toList
+          |>.dropWhile (fun c => c == '#' || c == '!')
+          |>.dropWhile isVariableChar
+      let restStr := String.ofList rest
+      Regex.isMatch restStr guardRegex
+    | _ => false
+
+  guardRegex : Regex := mkRegex "^(\\[.*\\])?:?[-?]"
 
   /-- Levenshtein edit distance (used for SC2153 typo suggestions). -/
   min3 (x y z : Nat) : Nat :=

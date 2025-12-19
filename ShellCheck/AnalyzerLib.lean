@@ -1003,6 +1003,7 @@ where
       | some "export" => getExportReferences t rest
       | some "declare" => getDeclareReferences t rest
       | some "typeset" => getDeclareReferences t rest
+      | some "local" => getLocalReferences t rest
       | some "trap" =>
         match rest with
         | handler :: _ => getVariablesFromLiteralToken handler |>.map fun x => (t, handler, x)
@@ -1013,25 +1014,35 @@ where
     | _ => []
 
   getExportReferences (base : Token) (args : List Token) : List (Token × Token × String) :=
-    -- Check if -f flag is present
-    let hasF := args.any fun a => getLiteralString a == some "-f"
-    if hasF then []
-    else args.filterMap fun arg =>
-      match arg.inner with
-      | .T_Assignment _ name _ _ => some (arg, arg, name)
-      | _ =>
-        match getLiteralString arg with
-        | some s => if isVariableName s && not (s.startsWith "-") then some (arg, arg, s) else none
-        | none => none
+    let flags := (getAllFlags base).map (·.2)
+    if flags.any (· == "f") then
+      []
+    else
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_Assignment _ name _ _ => some (arg, arg, name)
+        | _ =>
+          match getLiteralString arg with
+          | some s => if isVariableName s && not (s.startsWith "-") then some (arg, arg, s) else none
+          | none => none
 
   getDeclareReferences (base : Token) (args : List Token) : List (Token × Token × String) :=
-    let flags := args.filterMap fun a =>
-      match getLiteralString a with
-      | some s => if s.startsWith "-" then some s else none
-      | none => none
-    let hasXorP := flags.any fun f => f.any (· == 'x') || f.any (· == 'p')
-    let hasFOrBigF := flags.any fun f => f.any (· == 'f') || f.any (· == 'F')
+    let flags := (getAllFlags base).map (·.2)
+    let hasXorP := flags.any (· == "x") || flags.any (· == "p")
+    let hasFOrBigF := flags.any (· == "f") || flags.any (· == "F")
     if hasXorP && not hasFOrBigF then
+      args.filterMap fun arg =>
+        match arg.inner with
+        | .T_Assignment _ name _ _ => some (arg, arg, name)
+        | _ =>
+          match getLiteralString arg with
+          | some s => if isVariableName s && not (s.startsWith "-") then some (arg, arg, s) else none
+          | none => none
+    else []
+
+  getLocalReferences (base : Token) (args : List Token) : List (Token × Token × String) :=
+    let flags := (getAllFlags base).map (·.2)
+    if flags.any (· == "x") then
       args.filterMap fun arg =>
         match arg.inner with
         | .T_Assignment _ name _ _ => some (arg, arg, name)
