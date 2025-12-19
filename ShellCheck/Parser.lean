@@ -794,21 +794,138 @@ The word-level parsers (`readWordFull`, `readDoubleQuotedFull`, …) live in
 ### Command Parsing (mutually recursive)
 -/
 
+/-- Read an unparsed array index `[ ... ]`.
+
+We keep the raw content as a string because array indices are interpreted
+differently for associative arrays vs indexed arrays, and because reparsing them
+(with proper tokenization) is a separate post-pass in the upstream
+implementation. -/
+partial def readArrayIndexFull : FullParser Token := do
+  let (startLine, startCol) ← currentPos
+  let _ ← charFull '['
+  let (contentLine, contentCol) ← currentPos
+  let st ← ShellCheck.Parser.Parsec.getState
+  let pos : ShellCheck.AST.SourcePos :=
+    { sourceName := st.filename, sourceLine := contentLine, sourceColumn := contentCol }
+  let content ← readIndexContent [] 0 false false false false
+  let _ ← charFull ']'
+  mkTokenFullAt (.T_UnparsedIndex pos content) startLine startCol
+where
+  /-- Read the payload inside an array index, stopping at the matching `]`.
+
+  This is intentionally a string-level reader (not a full word parser) so it
+  can represent nested brackets like `x[y[z=1]]=1` without prematurely stopping
+  at the inner `]`. -/
+  readIndexContent (acc : List Char) (depth : Nat)
+      (inSingle inDouble inBacktick escaped : Bool) : FullParser String := do
+    match ← peekFull with
+    | none => pure (String.ofList acc.reverse)
+    | some c =>
+        if escaped then
+          let _ ← anyCharFull
+          readIndexContent (c :: acc) depth inSingle inDouble inBacktick false
+        else if inSingle then
+          let _ ← anyCharFull
+          if c == '\'' then
+            readIndexContent (c :: acc) depth false inDouble inBacktick false
+          else
+            readIndexContent (c :: acc) depth true inDouble inBacktick false
+        else if inDouble then
+          if c == '\\' then
+            let _ ← anyCharFull
+            readIndexContent ('\\' :: acc) depth false true inBacktick true
+          else
+            let _ ← anyCharFull
+            if c == '"' then
+              readIndexContent (c :: acc) depth false false inBacktick false
+            else
+              readIndexContent (c :: acc) depth false true inBacktick false
+        else if inBacktick then
+          if c == '\\' then
+            let _ ← anyCharFull
+            readIndexContent ('\\' :: acc) depth false false true true
+          else
+            let _ ← anyCharFull
+            if c == '`' then
+              readIndexContent (c :: acc) depth false false false false
+            else
+              readIndexContent (c :: acc) depth false false true false
+        else if c == '\\' then
+          let _ ← anyCharFull
+          readIndexContent ('\\' :: acc) depth false false false true
+        else if c == '\'' then
+          let _ ← anyCharFull
+          readIndexContent (c :: acc) depth true false false false
+        else if c == '"' then
+          let _ ← anyCharFull
+          readIndexContent (c :: acc) depth false true false false
+        else if c == '`' then
+          let _ ← anyCharFull
+          readIndexContent (c :: acc) depth false false true false
+        else if c == '[' then
+          let _ ← anyCharFull
+          readIndexContent (c :: acc) (depth + 1) false false false false
+        else if c == ']' then
+          if depth == 0 then
+            pure (String.ofList acc.reverse)
+          else
+            let _ ← anyCharFull
+            readIndexContent (c :: acc) (depth - 1) false false false false
+        else
+          let _ ← anyCharFull
+          readIndexContent (c :: acc) depth false false false false
+
 /-- Read an array value: (elem1 elem2 ...) -/
 partial def readArrayFull : FullParser Token := do
+  let (startLine, startCol) ← currentPos
   let _ ← charFull '('
+  skipAllSpaceFull
   let elems ← readArrayElements []
   let _ ← charFull ')'
-  mkTokenFull (.T_Array elems)
+  mkTokenFullAt (.T_Array elems) startLine startCol
 where
   readArrayElements (acc : List Token) : FullParser (List Token) := do
-    skipHSpaceFull
+    skipAllSpaceFull
     match ← peekFull with
     | none => pure acc.reverse
     | some ')' => pure acc.reverse
     | some _ =>
-        let elem ← readWordFull
+        let elem ← readArrayElement
         readArrayElements (elem :: acc)
+
+  readArrayElement : FullParser Token := do
+    skipAllSpaceFull
+    match ← peekFull with
+    | some '[' =>
+        match ← optionalFull (attemptFull readIndexedElement) with
+        | some indexed => pure indexed
+        | none => readRegularElement
+    | _ => readRegularElement
+
+  readRegularElement : FullParser Token := do
+    match ← peekFull with
+    | some '(' => readArrayFull
+    | _ => readWordFull
+
+  readIndexedElement : FullParser Token := do
+    let (startLine, startCol) ← currentPos
+    let indices ← readIndices []
+    let _ ← charFull '='
+    let value ← match ← peekFull with
+      | some '(' => readArrayFull
+      | some c =>
+          if c.isWhitespace || c == ')' then
+            mkTokenFull (.T_Literal "")
+          else
+            readWordFull
+      | none => mkTokenFull (.T_Literal "")
+    mkTokenFullAt (.T_IndexedElement indices value) startLine startCol
+
+  readIndices (acc : List Token) : FullParser (List Token) := do
+    let idx ← readArrayIndexFull
+    match ← peekFull with
+    | some '[' => readIndices (idx :: acc)
+    | _ => pure (idx :: acc).reverse
 
 /-- Read an assignment: VAR=value or VAR=(array) or VAR+=value -/
 partial def readAssignmentFull : FullParser Token := do
@@ -816,6 +933,8 @@ partial def readAssignmentFull : FullParser Token := do
   let (startLine, startCol) ← currentPos
   -- Read variable name
   let varName ← takeWhile1Full (fun c => variableChar c || c == '_')
+  -- Optional array indices, e.g. `var[0]=x` or `var[key]+=y`
+  let indices ← manyFull (attemptFull readArrayIndexFull)
   -- Check for += or =
   let isAppend ← match ← peekFull with
     | some '+' =>
@@ -835,10 +954,7 @@ partial def readAssignmentFull : FullParser Token := do
         | some v => pure v
         | none => mkTokenFull (.T_Literal "")
   let mode := if isAppend then AST.AssignmentMode.append else .assign
-  -- Create token at the START position
-  let id ← freshIdFull
-  recordPosition id startLine startCol startLine startCol
-  return ⟨id, .T_Assignment mode varName [] value⟩
+  mkTokenFullAt (.T_Assignment mode varName indices value) startLine startCol
 
 /-- Read a simple command (assignments + words), with redirects -/
 partial def readSimpleCommandFull : FullParser Token := do
