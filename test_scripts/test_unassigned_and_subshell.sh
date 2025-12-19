@@ -37,3 +37,8 @@ printf '%s\n' "$MY_VARIABLE_NMAE"
 
 # SC2154 tip for command-looking locals
 printf '%s\n' "$ls"
+
+# SC2030/SC2031 should be suppressed with lastpipe in bash
+shopt -s lastpipe
+printf 'lastpipe\n' | read lastpipe_var
+printf '%s\n' "$lastpipe_var"
