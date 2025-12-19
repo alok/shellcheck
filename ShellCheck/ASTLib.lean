@@ -143,6 +143,14 @@ partial def getLiteralString (t : Token) : Option String :=
 def getLiteralStringDef (default : String) (t : Token) : String :=
   getLiteralString t |>.getD default
 
+/-- Maybe get the literal string of this token, allowing globs to pass through. -/
+partial def getGlobOrLiteralString (t : Token) : Option String :=
+  getLiteralStringExt (fun tok =>
+    match tok.inner with
+    | .T_Glob s => some s
+    | _ => none
+  ) t
+
 /-- Get a literal string, but only if it is entirely unquoted.
 
 This corresponds to ShellCheck's `getUnquotedLiteral`: it succeeds only for plain
@@ -296,20 +304,9 @@ partial def getCommand (t : Token) : Option Token :=
   | .T_Annotation _ inner => getCommand inner
   | _ => none
 
-/-- Get the command name string -/
-def getCommandName (t : Token) : Option String := do
-  let cmd ← getCommand t
-  match cmd.inner with
-  | .T_SimpleCommand _ (w::_) => getLiteralString w
-  | _ => none
-
 /-- Get basename of a path -/
 def basename (s : String) : String :=
   s.splitOn "/" |>.getLast!
-
-/-- Get the command basename -/
-def getCommandBasename (t : Token) : Option String :=
-  basename <$> getCommandName t
 
 /-- Check if a name is a valid variable start char -/
 def isVariableStartChar (c : Char) : Bool :=
@@ -612,12 +609,16 @@ partial def getFlagsUntil (stop : String → Bool) (t : Token) : List (Token × 
     | _ => []
   | none => []
 where
+  listToArgs (rest : List Token) : List (Token × String) :=
+    rest.map (fun x => (x, ""))
+
   extractFlags (stop : String → Bool) : List Token → List (Token × String)
     | [] => []
     | arg :: rest =>
       match getLiteralString arg with
       | some s =>
-        if stop s then []
+        if stop s then
+          (arg, "") :: listToArgs rest
         else if s.startsWith "--" && s.length > 2 then
           -- Long flag like --flag
           let flagName := s.drop 2
@@ -627,12 +628,16 @@ where
           let chars := (s.drop 1).toList
           chars.map (fun c => (arg, String.singleton c)) ++ extractFlags stop rest
         else
-          extractFlags stop rest
+          (arg, "") :: extractFlags stop rest
       | none => extractFlags stop rest
 
 /-- Get all flags from a command token (returns list of (token, flag_char) pairs) -/
 partial def getAllFlags (t : Token) : List (Token × String) :=
   getFlagsUntil (· == "--") t
+
+/-- Get leading flags until first non-flag argument or `--`. -/
+partial def getLeadingFlags (t : Token) : List (Token × String) :=
+  getFlagsUntil (fun s => s == "--" || !s.startsWith "-") t
 
 /-- Check if a command has a specific flag -/
 def hasFlag (t : Token) (flag : String) : Bool :=
@@ -668,12 +673,18 @@ def getCommandArgv (t : Token) : Option (List Token) :=
 partial def getLeadingUnquotedString (t : Token) : Option String :=
   match t.inner with
   | .T_NormalWord parts =>
+    let rec go (acc : List Char) : List Token → Option String
+      | [] => some (String.ofList acc.reverse)
+      | part :: rest =>
+          match part.inner with
+          | .T_Literal s => go (s.toList.reverse ++ acc) rest
+          | _ => some (String.ofList acc.reverse)
     match parts with
-    | first :: _ =>
-      match first.inner with
-      | .T_Literal s => some s
-      | _ => none
-    | [] => some ""
+    | first :: rest =>
+        match first.inner with
+        | .T_Literal s => go (s.toList.reverse) rest
+        | _ => none
+    | [] => none
   | .T_Literal s => some s
   | _ => none
 
@@ -786,6 +797,106 @@ def getGnuOpts (spec : String) (args : List Token) : Option (List (String × (To
 /-- BSD-style option parsing (stops at the first non-flag argument). -/
 def getBsdOpts (spec : String) (args : List Token) : Option (List (String × (Token × Token))) :=
   getOpts false false spec [] args
+
+/-- Generic option parsing that makes a best-effort guess without a spec string. -/
+partial def getGenericOpts : List Token → List (String × (Token × Token))
+  | [] => []
+  | token :: rest =>
+      let s := getLiteralStringDef "∅" token
+      if s == "--" then
+        rest.map (fun c => ("", (c, c)))
+      else if s.startsWith "--" && s.length > 2 then
+        let name := s.drop 2 |>.takeWhile (fun c => c != '=' && c != '\x00')
+        (name, (token, token)) :: getGenericOpts rest
+      else if s.startsWith "-" && s.length > 1 then
+        let opts := (s.drop 1).toList.takeWhile (fun c => c != '\x00')
+        match rest with
+        | next :: remainder =>
+            if (getLiteralStringDef "∅" next).startsWith "-" then
+              opts.map (fun c => (String.singleton c, (token, token))) ++ getGenericOpts rest
+            else
+              match opts.reverse with
+              | [] => getGenericOpts remainder
+              | last :: initial =>
+                  (initial.reverse.map (fun c => (String.singleton c, (token, token))))
+                  ++ [(String.singleton last, (token, next))]
+                  ++ getGenericOpts remainder
+        | [] =>
+            opts.map (fun c => (String.singleton c, (token, token)))
+      else
+        ("", (token, token)) :: getGenericOpts rest
+
+/-- Given a command, get the string and token that represents the command name.
+    If `direct`, return the actual command word (e.g. `exec` in `exec ls`).
+    If not, return the logical command (e.g. `ls` in `exec ls`). -/
+def getCommandNameAndToken (direct : Bool) (t : Token) : (Option String × Token) :=
+  match getCommand t with
+  | some cmd =>
+      match cmd.inner with
+      | .T_SimpleCommand _ (w :: rest) =>
+          match getLiteralString w with
+          | some s =>
+              if direct then
+                (some s, w)
+              else
+                match getEffectiveCommandToken s cmd rest with
+                | some actual => (getLiteralString actual, actual)
+                | none => (some s, w)
+          | Option.none => (none, t)
+      | _ => (none, t)
+  | none => (none, t)
+where
+  getEffectiveCommandToken (name : String) (_cmd : Token) (args : List Token) : Option Token :=
+    let firstArg : Option Token :=
+      match args with
+      | arg :: _ => if isFlag arg then none else some arg
+      | [] => none
+    match name with
+    | "busybox" => firstArg
+    | "builtin" => firstArg
+    | "command" => firstArg
+    | "run" => firstArg
+    | "exec" =>
+        match getBsdOpts "cla:" args with
+        | some opts =>
+            match opts.find? (fun (flag, _) => flag == "") with
+            | some (_, (tok, _)) => some tok
+            | none => none
+        | Option.none => none
+    | _ => none
+
+/-- Maybe get the command name string of a token representing a command. -/
+def getCommandName (t : Token) : Option String :=
+  (getCommandNameAndToken false t).1
+
+/-- Get the command name token from a command, or the original token if unknown. -/
+def getCommandTokenOrThis (t : Token) : Token :=
+  (getCommandNameAndToken false t).2
+
+/-- If a command substitution is a single command, get its name. -/
+def getCommandNameFromExpansion (t : Token) : Option String :=
+  let extract : Token → Option String
+    | ⟨_, .T_Pipeline _ [cmd]⟩ => getCommandName cmd
+    | _ => none
+  match t.inner with
+  | .T_DollarExpansion [c] => extract c
+  | .T_Backticked [c] => extract c
+  | .T_DollarBraceCommandExpansion _ [c] => extract c
+  | _ => none
+
+/-- Get the command basename. -/
+def getCommandBasename (t : Token) : Option String :=
+  basename <$> getCommandName t
+
+/-- Get the `extended-analysis` directive from annotations (if any). -/
+def getExtendedAnalysisDirective (root : Token) : Option Bool :=
+  let rec go : List Annotation → Option Bool
+    | [] => none
+    | Annotation.extendedAnalysis b :: _ => some b
+    | _ :: rest => go rest
+  match root.inner with
+  | .T_Annotation annots _ => go annots
+  | _ => none
 
 -- Theorems (stubs)
 
