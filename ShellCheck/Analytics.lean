@@ -4925,8 +4925,8 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkArithmeticOpCommand,
   checkWrongArithmeticAssignment,
   checkUuoc,
-  checkPsGrep,
-  checkLsGrep,
+  -- checkPsGrep, -- SC2009 - handled by Commands.checkPsGrepPipeline
+  -- checkLsGrep, -- SC2010 - handled by Commands.checkLsGrepPipeline
   checkLsXargs,
   checkFindXargs,
   checkFindExec,
