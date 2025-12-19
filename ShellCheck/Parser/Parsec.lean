@@ -374,7 +374,9 @@ def run (p : ShellParser α) (input : String) (filename : String := "<stdin>")
   let st := mkShellState filename
   match p st it with
   | .success _ (a, st') => (some a, st'.positions, st'.errors)
-  | .error _ _ => (none, {}, [])
+  | .error it' err =>
+      let msg := s!"{filename}:{it'.line}:{it'.column}: {err}"
+      (none, {}, [msg])
 
 /-- Run a shell parser, returning Except -/
 def runExcept (p : ShellParser α) (input : String) (filename : String := "<stdin>")

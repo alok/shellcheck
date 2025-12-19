@@ -773,7 +773,7 @@ This is a best-effort parser intended to improve `case` pattern coverage without
 rewriting the full word lexer. -/
 partial def readPatternWordFull : FullParser Token := do
   let (startLine, startCol) ← currentPos
-  let parts ← readParts [] none [] 0 false 0 false
+  let parts ← readParts [] none [] 0 false 0 false false
   if parts.isEmpty then
     failure
   else
@@ -810,12 +810,8 @@ where
       else
         (false, 0, false)
 
-  updateDepth (parenDepth : Nat) (inClass : Bool) (c : Char) : Nat :=
-    if inClass then
-      parenDepth
-    else if c == '(' then
-      parenDepth + 1
-    else if c == ')' then
+  updateDepth (parenDepth : Nat) (_inClass : Bool) (c : Char) : Nat :=
+    if c == ')' then
       match parenDepth with
       | 0 => 0
       | d + 1 => d
@@ -832,6 +828,7 @@ where
       (inClass : Bool)
       (classChars : Nat)
       (sawNegation : Bool)
+      (extglobPending : Bool)
       : FullParser (List Token) := do
     match ← peekFull with
     | none => do
@@ -839,52 +836,69 @@ where
         pure acc.reverse
     | some c =>
         -- Stop on case-pattern separators only when not nested.
-        if parenDepth == 0 && !inClass && (c == '|' || c == ')') then
+        if parenDepth == 0 && (c == '|' || c == ')') then
           let acc ← flushLiteral acc litStart litRev
           pure acc.reverse
+        else if c == '(' && !inClass then
+          if extglobPending then
+            let (litLine, litCol) ← currentPos
+            let _ ← anyCharFull
+            let litStart := litStart <|> some (litLine, litCol)
+            readParts acc litStart (c :: litRev) (parenDepth + 1) inClass classChars sawNegation false
+          else
+            ShellCheck.Parser.Parsec.ShellParser.fail "case pattern: unexpected '('"
+        else if c == ')' && parenDepth > 0 && inClass then
+          ShellCheck.Parser.Parsec.ShellParser.fail "case pattern: unexpected ')'"
         else if c.isWhitespace || c == '#' ||
-            (isOperatorStart c && c != '(' && c != ')' && c != '|') then
+            (isOperatorStart c && c != ')' && c != '|') then
           let acc ← flushLiteral acc litStart litRev
           pure acc.reverse
         else if c == '\'' then
           let acc ← flushLiteral acc litStart litRev
           let tok ← readSingleQuotedFull
-          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation
+          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation false
         else if c == '"' then
           let acc ← flushLiteral acc litStart litRev
           let tok ← readDoubleQuotedFull
-          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation
+          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation false
         else if c == '`' then
           let acc ← flushLiteral acc litStart litRev
           let tok ← readBacktickFull
-          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation
+          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation false
         else if c == '$' then
           let acc ← flushLiteral acc litStart litRev
           let (dl, dc) ← currentPos
           let _ ← anyCharFull
           let tok ← readDollarFull dl dc
-          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation
+          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation false
         else if c == '\\' then
           let (escLine, escCol) ← currentPos
           let _ ← anyCharFull
           match ← peekFull with
           | some '\n' =>
               let _ ← anyCharFull
-              readParts acc litStart litRev parenDepth inClass classChars sawNegation
+              readParts acc litStart litRev parenDepth inClass classChars sawNegation false
           | some ec =>
               let _ ← anyCharFull
               let litStart := litStart <|> some (escLine, escCol)
-              readParts acc litStart (ec :: litRev) parenDepth inClass classChars sawNegation
+              readParts acc litStart (ec :: litRev) parenDepth inClass classChars sawNegation false
           | none =>
               let litStart := litStart <|> some (escLine, escCol)
-              readParts acc litStart ('\\' :: litRev) parenDepth inClass classChars sawNegation
+              readParts acc litStart ('\\' :: litRev) parenDepth inClass classChars sawNegation false
         else
           let (litLine, litCol) ← currentPos
           let _ ← anyCharFull
           let litStart := litStart <|> some (litLine, litCol)
           let (inClass', classChars', sawNegation') := updateBracket inClass classChars sawNegation c
           let parenDepth' := updateDepth parenDepth inClass c
-          readParts acc litStart (c :: litRev) parenDepth' inClass' classChars' sawNegation'
+          let extglobPending' :=
+            -- Recognize extglob operators only outside bracket classes; we use this
+            -- to decide whether a subsequent `(` should start an extglob group.
+            if inClass' then
+              false
+            else
+              c == '@' || c == '!' || c == '+' || c == '*' || c == '?'
+          readParts acc litStart (c :: litRev) parenDepth' inClass' classChars' sawNegation' extglobPending'
 /-- Read arithmetic content for `(( .. ))` / `for (( .. ))` (does not consume the closing `))`). -/
 @[inline] def readArithContentHelper : FullParser String :=
   readArithContent

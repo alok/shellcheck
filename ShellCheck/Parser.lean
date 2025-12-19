@@ -1820,6 +1820,30 @@ partial def readTermFull : FullParser (List Token) := do
   let first ← readAndOrFull
   readTermContinuation [first]
 where
+  /-- After a command separator (`;`, `&`, or newline), attempt to parse the next
+  command *only if* we're not at an end marker (EOF/`)/`}`) or a reserved
+  keyword that should terminate the surrounding construct (`then`, `fi`, `esac`,
+  `done`, ...).
+
+  This avoids silently truncating the parse when the next command exists but is
+  malformed (e.g. an invalid `case` pattern). -/
+  parseNextAfterSeparator : FullParser (Option Token) := do
+    let annots ← skipAllSpaceCollectAnnotations
+    match ← peekFull with
+    | none => pure none
+    | some ')' => pure none
+    | some '}' => pure none
+    | some _ =>
+        let reserved ← isReservedKeyword
+        if reserved then
+          pure none
+        else
+          let cmd ← readAndOrFull
+          if annots.isEmpty then
+            pure (some cmd)
+          else
+            some <$> mkTokenFull (.T_Annotation annots cmd)
+
   readTermContinuation (acc : List Token) : FullParser (List Token) := do
     skipHSpaceFull
     match ← peekFull with
@@ -1828,9 +1852,7 @@ where
         match ← peekFull with
         | some ';' => pure acc.reverse  -- This is ;; not ;
         | _ =>
-            -- Use attemptFull to backtrack if the next command fails
-            -- (readAndOrWithAnnotations consumes whitespace before parsing)
-            match ← optionalFull (attemptFull readAndOrWithAnnotations) with
+            match ← parseNextAfterSeparator with
             | some next => readTermContinuation (next :: acc)
             | none => pure acc.reverse
     | some '&' =>
@@ -1842,21 +1864,14 @@ where
             let last := acc.head!
             let rest := acc.tail!
             let bgLast ← mkTokenFull (.T_Backgrounded last)
-            match ← optionalFull (attemptFull readAndOrWithAnnotations) with
+            match ← parseNextAfterSeparator with
             | some next => readTermContinuation (next :: bgLast :: rest)
             | none => pure (bgLast :: rest).reverse
     | some '\n' =>
         let _ ← charFull '\n'
-        match ← optionalFull (attemptFull readAndOrWithAnnotations) with
+        match ← parseNextAfterSeparator with
         | some next => readTermContinuation (next :: acc)
-        | none =>
-            -- Check for end markers
-            skipAllSpaceFull
-            match ← peekFull with
-            | none => pure acc.reverse
-            | some ')' => pure acc.reverse  -- End of subshell
-            | some '}' => pure acc.reverse  -- End of brace group
-            | _ => pure acc.reverse
+        | none => pure acc.reverse
     | _ => pure acc.reverse
 
 /-!
@@ -2734,6 +2749,7 @@ def inferSCCode (msg : String) : Nat × Severity :=
   else if contains msg "for" && contains msg "in" && contains msg "missing" then (1079, .errorC)
   else if contains msg "case" && contains msg "'in'" && contains msg "missing" then (1072, .errorC)
   else if contains msg "case" && contains msg "pattern" && contains msg ")" then (1072, .errorC)
+  else if contains msg "case" && contains msg "pattern" && contains msg "(" then (1072, .errorC)
   else if contains msg "esac" && contains msg "missing" then (1072, .errorC)
   else if contains msg "couldn't find" && contains msg "esac" then (1072, .errorC)
   else if contains msg "unclosed case" then (1072, .errorC)
