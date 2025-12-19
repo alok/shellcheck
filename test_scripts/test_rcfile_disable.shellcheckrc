@@ -1,0 +1,3 @@
+# Used by `test_rcfile_disable.sh`
+disable=SC2192,SC2178,SC2179
+

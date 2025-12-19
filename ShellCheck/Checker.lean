@@ -7,6 +7,7 @@
 
 import ShellCheck.Analyzer
 import ShellCheck.ASTLib
+import ShellCheck.Config
 import ShellCheck.Interface
 import ShellCheck.Parser
 import Std.Data.HashMap
@@ -76,6 +77,17 @@ def shouldInclude (spec : CheckSpec) (pc : PositionedComment) : Bool :=
 
 /-- Check a shell script -/
 def checkScript [Monad m] (sys : SystemInterface m) (spec : CheckSpec) : m CheckResult := do
+  let spec ←
+    if spec.csIgnoreRC then
+      pure spec
+    else
+      match ← sys.siGetConfig spec.csFilename with
+      | some (_, rcContents) =>
+          let cfg := ShellCheck.Config.parseRcFile rcContents
+          pure (ShellCheck.Config.applyRcConfig cfg spec)
+      | none =>
+          pure spec
+
   -- Parse the script
   let parseSpec : ParseSpec := {
     psFilename := spec.csFilename

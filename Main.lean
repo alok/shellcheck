@@ -117,7 +117,7 @@ def shouldUseColor (opt : ColorOption) : IO Bool := do
 def flagsNamed (p : Parsed) (longName : String) : Array Parsed.Flag :=
   p.flags.filter (fun f => f.flag.longName = longName)
 
-def checkOneFile (filename : String) (cfg : RunConfig)
+def checkOneFile (sys : SystemInterface IO) (filename : String) (cfg : RunConfig)
     : IO (Option CheckedFile) := do
   let contents ←
     try
@@ -142,12 +142,16 @@ def checkOneFile (filename : String) (cfg : RunConfig)
     csOptionalChecks := cfg.optionalChecks
   }
 
-  let result ← checkScript ioSystemInterface spec
+  let result ← checkScript sys spec
 
   if cfg.debug then
     IO.eprintln s!"[DEBUG] Got {result.crComments.length} comments"
 
   return some { filename, contents, result }
+
+def withRcFile (sys : SystemInterface IO) (rcPath : String) : IO (SystemInterface IO) := do
+  let contents ← IO.FS.readFile rcPath
+  pure { sys with siGetConfig := fun _ => pure (some (rcPath, contents)) }
 
 def printOptionalChecks : IO Unit := do
   let fromAnalyzer : List CheckDescription := ShellCheck.Analyzer.optionalChecks
@@ -197,6 +201,8 @@ def runShellcheck4 (p : Parsed) : IO UInt32 := do
 
   let checkSourced := p.hasFlag "check-sourced"
   let ignoreRC := p.hasFlag "norc"
+  let rcfilePath? : Option String :=
+    p.flag? "rcfile" |>.map (fun f => f.as! String)
   let minSeverity : Severity :=
     (p.flag? "severity" |>.map (fun f => f.as! Severity)).getD .styleC
   let extendedAnalysis? : Option Bool :=
@@ -213,6 +219,24 @@ def runShellcheck4 (p : Parsed) : IO UInt32 := do
     return 1
 
   let mut checked : List CheckedFile := []
+  let sys? : Option (SystemInterface IO) ←
+    if ignoreRC then
+      pure (some ioSystemInterface)
+    else
+      match rcfilePath? with
+      | some rcPath =>
+          try
+            let sys ← withRcFile ioSystemInterface rcPath
+            pure (some sys)
+          catch e =>
+            p.printError s!"Error reading rcfile {rcPath}: {e}"
+            pure none
+      | none =>
+          pure (some ioSystemInterface)
+  let sys ←
+    match sys? with
+    | some sys => pure sys
+    | none => return (2 : UInt32)
   let cfg : RunConfig := {
     debug
     shellOverride?
@@ -226,7 +250,7 @@ def runShellcheck4 (p : Parsed) : IO UInt32 := do
   }
 
   for f in files do
-    if let some cf ← checkOneFile f cfg then
+    if let some cf ← checkOneFile sys f cfg then
       checked := cf :: checked
 
   let checkedFiles := checked.reverse
