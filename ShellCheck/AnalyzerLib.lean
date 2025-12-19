@@ -181,6 +181,7 @@ def getTokenChildren (t : Token) : List Token :=
   | .T_HereString inner => [inner]
   | .T_FdRedirect _ op => [op]
   | .T_Array list => list
+  | .T_IndexedElement indices value => indices ++ [value]
   | .T_Extglob _ list => list
   | _ => []
 
@@ -1020,35 +1021,27 @@ def annotationDisablesCode (ann : Annotation) (code : Code) : Bool :=
   | .disableComment fromCode toCode => isCodeInRange fromCode toCode code
   | _ => false
 
-/-- Filter comments by annotation (ignore directives) -/
-def filterByAnnotation (_spec : AnalysisSpec) (params : Parameters) (comments : List TokenComment) : List TokenComment :=
-  comments.filter fun note =>
-    not (shouldIgnore note)
-where
-  shouldIgnore (note : TokenComment) : Bool :=
-    -- Check for shellcheck disable annotations
-    match params.parentMap.get? note.tcId with
-    | some parent =>
-      match parent.inner with
-      | .T_Annotation annotations _ =>
-        annotations.any (annotationDisablesCode · note.tcComment.cCode)
-      | _ => false
-    | none => false
-
-/-- Check if annotation ignores a specific code -/
+/-- Check if an annotation token ignores a specific code. -/
 def isAnnotationIgnoringCode (code : Code) (t : Token) : Bool :=
   match t.inner with
   | .T_Annotation annotations _ =>
-    annotations.any (annotationDisablesCode · code)
+      annotations.any (annotationDisablesCode · code)
   | _ => false
 
-/-- Check if should ignore code for token -/
+/-- Check whether a code is disabled for a token by any enclosing annotations. -/
 partial def shouldIgnoreCode (params : Parameters) (code : Code) (t : Token) : Bool :=
-  -- Walk up parent tree checking for annotations
   match params.parentMap.get? t.id with
   | some parent =>
-    isAnnotationIgnoringCode code parent || shouldIgnoreCode params code parent
+      isAnnotationIgnoringCode code parent || shouldIgnoreCode params code parent
   | none => false
+
+/-- Filter comments by annotations (e.g. `# shellcheck disable=SCxxxx`). -/
+def filterByAnnotation (_spec : AnalysisSpec) (params : Parameters) (comments : List TokenComment) :
+    List TokenComment :=
+  comments.filter fun note =>
+    match params.idMap.get? note.tcId with
+    | some tok => !shouldIgnoreCode params note.tcComment.cCode tok
+    | none => true
 
 /-- Run when shell matches -/
 def whenShell (shells : List Shell) (analysis : Analysis) : Analysis := do

@@ -53,13 +53,8 @@ def analyzeScript (spec : AnalysisSpec) : AnalysisResult :=
   -- Run the checker on ALL tokens using runChecker for full AST traversal
   let comments := runChecker params checker
   -- Filter by annotations
-  let filtered := filterByAnnotation spec params comments
+  let filtered := ShellCheck.AnalyzerLib.filterByAnnotation spec params comments
   { newAnalysisResult with arComments := filtered }
-where
-  filterByAnnotation (_spec : AnalysisSpec) (_params : Parameters)
-      (comments : List TokenComment) : List TokenComment :=
-    -- Would filter based on annotations in the script
-    comments.eraseDups
 
 /-- Optional checks from all modules -/
 def optionalChecks : List CheckDescription :=
