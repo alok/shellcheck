@@ -42,3 +42,13 @@ printf '%s\n' "$ls"
 shopt -s lastpipe
 printf 'lastpipe\n' | read lastpipe_var
 printf '%s\n' "$lastpipe_var"
+
+# SC2154 should not warn for error/default guards
+printf '%s\n' "${guard1?}"  # error if unset
+printf '%s\n' "${guard2:?}"  # error if unset, colon variant
+
+arr=(a b)
+idx=1
+printf '%s\n' "${arr[idx]:-}"
+printf '%s\n' "${arr[$idx]:?}"
+printf '%s\n' "${arr[bar baz]:-}"
