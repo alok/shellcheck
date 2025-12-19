@@ -4554,6 +4554,60 @@ where
       | some st => !st.stateIsReachable
       | Option.none => false
 
+/-- SC2319/SC2320: `$?` may refer to a condition/echo instead of a previous command. -/
+def checkOverwrittenExitCode (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarBraced _ val =>
+    if getLiteralString val == some "?" then
+      check
+    else
+      []
+  | _ => []
+where
+  check : List TokenComment :=
+    match params.cfgAnalysis with
+    | Option.none => []
+    | some cfg =>
+      match getIncomingState cfg t.id with
+      | Option.none => []
+      | some state =>
+        let exitCodeIds := state.exitCodes.eraseDups
+        if exitCodeIds.isEmpty then
+          []
+        else
+          let exitCodeTokens := exitCodeIds.filterMap (fun id => params.idMap.get? id)
+          let warnCondition :=
+            if !exitCodeTokens.isEmpty && exitCodeTokens.all isCondition &&
+               !usedUnconditionally cfg t exitCodeIds then
+              [makeComment .warningC t.id 2319
+                "This $? refers to a condition, not a command. Assign to a variable to avoid it being overwritten."]
+            else
+              []
+          let warnPrinting :=
+            if !exitCodeTokens.isEmpty && exitCodeTokens.all isPrinting then
+              [makeComment .warningC t.id 2320
+                "This $? refers to echo/printf, not a previous command. Assign to variable to avoid it being overwritten."]
+            else
+              []
+          warnCondition ++ warnPrinting
+
+  isCondition (t : Token) : Bool :=
+    match t.inner with
+    | .T_Condition .. => true
+    | .T_SimpleCommand .. =>
+      getCommandBasename t == some "test"
+    | _ => false
+
+  isPrinting (t : Token) : Bool :=
+    match getCommandBasename t with
+    | some "echo" => true
+    | some "printf" => true
+    | _ => false
+
+  -- If `$?` runs on all paths after the condition token(s), assume we intended the condition itself.
+  usedUnconditionally (cfg : CFGAnalysis) (t : Token) (testIds : List Id) : Bool :=
+    testIds.all fun c => doesPostDominate cfg t.id c
+
 /-- SC2086: CFG-aware quoting check - checks if variable may contain spaces along any path -/
 def checkSpacefulnessCfg (params : Parameters) (t : Token) : List TokenComment :=
   match params.cfgAnalysis with
@@ -4730,6 +4784,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkLoopVariableReassignment,
   -- CFG-aware checks
   checkCommandIsUnreachable,
+  checkOverwrittenExitCode,
   checkSpacefulnessCfg
 ]
 
