@@ -2817,6 +2817,74 @@ def checkExecWithSubshell (_params : Parameters) (t : Token) : List TokenComment
     else []
   | _ => []
 
+/-- SC2327/SC2328: Command substitution output redirected away makes it empty. -/
+def checkExpansionWithRedirection (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_DollarExpansion [cmd] => check t.id cmd
+  | .T_Backticked [cmd] => check t.id cmd
+  | .T_DollarBraceCommandExpansion _ [cmd] => check t.id cmd
+  | _ => []
+where
+  check (captureId : Id) (pipe : Token) : List TokenComment :=
+    match pipe.inner with
+    | .T_Pipeline _ cmds =>
+      match cmds.getLast? with
+      | some last => checkCmd captureId last
+      | Option.none => []
+    | _ => checkCmd captureId pipe
+
+  checkCmd (captureId : Id) (cmd : Token) : List TokenComment :=
+    match cmd.inner with
+    | .T_Redirecting redirs _ =>
+      redirs.foldr (walk captureId) []
+    | _ => []
+
+  walk (captureId : Id) (redir : Token) (acc : List TokenComment) : List TokenComment :=
+    match redir.inner with
+    | .T_FdRedirect fd inner =>
+      match inner.inner with
+      -- e.g. 2>&1 (captures stderr into stdout) can make later stdout redirects irrelevant.
+      | .T_IoDuplicate _ "1" => []
+      -- e.g. 1>&2 etc: treat as deliberate and stop.
+      | .T_IoDuplicate .. =>
+        if fd == "1" then [] else acc
+      | .T_IoFile opTok file =>
+        if fd == "1" && isStdoutRedirectOp opTok then
+          emit redir.id captureId (shouldSuggestTee file)
+        else
+          acc
+      | _ => acc
+    | .T_IoDuplicate opTok _ =>
+      if isStdoutRedirectOp opTok then
+        emit redir.id captureId true
+      else
+        acc
+    | .T_IoFile opTok file =>
+      if isStdoutRedirectOp opTok then
+        emit redir.id captureId (shouldSuggestTee file)
+      else
+        acc
+    | _ => acc
+
+  isStdoutRedirectOp (opTok : Token) : Bool :=
+    match getLiteralString opTok with
+    | some op => op.startsWith ">"
+    | Option.none => false
+
+  shouldSuggestTee (file : Token) : Bool :=
+    getLiteralString file != some "/dev/null"
+
+  emit (redirectId captureId : Id) (suggestTee : Bool) : List TokenComment :=
+    let captureWarn :=
+      makeComment .warningC captureId 2327
+        "This command substitution will be empty because the command's output gets redirected away."
+    let redirMsg :=
+      "This redirection takes output away from the command substitution" ++
+        if suggestTee then " (use tee to duplicate)." else "."
+    let redirErr :=
+      makeComment .errorC redirectId 2328 redirMsg
+    captureWarn :: redirErr :: []
+
 /-- SC2087: Quote heredoc delimiter for ssh to avoid expanding on the client side -/
 def checkSshHereDoc (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -4755,6 +4823,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkQuotesForExpansion,
   checkExecuteCommandOutput,
   checkExecWithSubshell,
+  checkExpansionWithRedirection,
   checkSshHereDoc,
   checkSshInLoop,
   checkWhileReadSsh,
