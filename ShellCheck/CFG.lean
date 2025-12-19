@@ -287,12 +287,28 @@ partial def buildAssignment (scope : Option Scope) (t : Token) : CFM Range := do
         | .append => newNodeRange $ applySingle t.id (.CFReadVariable var)
         | .assign => none
 
-      let valueType :=
+      let baseValueType : CFValue :=
         if indices.isEmpty then
           match value.inner with
           | .T_Array _ => .CFValueArray
           | _ => .CFValueString
-        else .CFValueArray
+        else
+          .CFValueArray
+
+      -- Best-effort numeric inference for simple `var=123` assignments (used by
+      -- CFG-aware checks like SC2324). Avoid treating `var+=123` as numeric since
+      -- `+=` appends by default.
+      let valueType : CFValue :=
+        match baseValueType, mode with
+        | .CFValueString, .assign =>
+            match getUnquotedLiteral value with
+            | some s =>
+                if !s.isEmpty && s.toList.all Char.isDigit then
+                  .CFValueInteger
+                else
+                  .CFValueString
+            | Option.none => .CFValueString
+        | _, _ => baseValueType
 
       let writeEffect := match scope with
         | some .PrefixScope => CFEffect.CFWritePrefix var valueType
@@ -453,13 +469,80 @@ partial def build' (t : Token) : CFM Range := do
 
   | .T_SimpleCommand vars (cmd :: args) =>
       let argExpand ← sequentially (cmd :: args)
-      let assigns ← vars.mapM (buildAssignment (some .PrefixScope))
+
+      let cmdName := getLiteralString cmd
+      let isDeclBuiltin :=
+        match cmdName with
+        | some "declare" => true
+        | some "typeset" => true
+        | some "local" => true
+        | _ => false
+
+      -- In the AST, `vars` includes both prefix assignments (`FOO=1 cmd`) and
+      -- assignment arguments to declaration builtins (`declare x=1`). We
+      -- approximate the split using monotonically increasing token ids: prefix
+      -- assignments appear before the command word.
+      let (prefixVars, postVars) :=
+        if isDeclBuiltin then
+          let preVars := vars.filter (fun v => v.id.val < cmd.id.val)
+          let postVars := vars.filter (fun v => cmd.id.val < v.id.val)
+          (preVars, postVars)
+        else
+          (vars, [])
+
+      let hasIntegerFlag :=
+        if isDeclBuiltin then
+          args.any fun a =>
+            match getLiteralString a with
+            | some s => s.startsWith "-" && s.contains 'i'
+            | Option.none => false
+        else
+          false
+
+      let prefixAssigns ← prefixVars.mapM (buildAssignment (some .PrefixScope))
+
+      let declAssigns ←
+        if isDeclBuiltin then
+          postVars.mapM fun v => do
+            let assigned ← buildAssignment Option.none v
+            let props ←
+              if hasIntegerFlag then
+                match v.inner with
+                | .T_Assignment _ varName _ _ =>
+                    let setp ← newNodeRange $ applySingle v.id (.CFSetProps Option.none varName [.CFVPInteger])
+                    pure [setp]
+                | _ => pure []
+              else
+                pure []
+            pure (assigned :: props)
+        else
+          pure []
+
+      let declAssigns := declAssigns.foldl (· ++ ·) []
+
+      let declPropsFromArgs ←
+        if hasIntegerFlag then
+          args.mapM fun a => do
+            match getUnquotedLiteral a with
+            | some s =>
+                if !s.startsWith "-" && isVariableName s then
+                  let setp ← newNodeRange $ applySingle a.id (.CFSetProps Option.none s [.CFVPInteger])
+                  pure [setp]
+                else
+                  pure []
+            | Option.none => pure []
+        else
+          pure []
+
+      let declPropsFromArgs := declPropsFromArgs.foldl (· ++ ·) []
+
       let exe ← newNodeRange (.CFExecuteCommand (getLiteralString cmd))
       let status ← newNodeRange (.CFSetExitCode t.id)
-      let dropAssigns ← if vars.isEmpty then pure [] else do
+      let dropAssigns ← if prefixVars.isEmpty then pure [] else do
         let d ← newNodeRange .CFDropPrefixAssignments
         pure [d]
-      linkRanges ([argExpand] ++ assigns ++ [exe, status] ++ dropAssigns)
+
+      linkRanges ([argExpand] ++ prefixAssigns ++ declAssigns ++ declPropsFromArgs ++ [exe, status] ++ dropAssigns)
 
   | .T_IfExpression ifs elses =>
       let start ← newStructuralNode

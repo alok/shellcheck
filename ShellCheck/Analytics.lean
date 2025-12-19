@@ -2817,6 +2817,55 @@ def checkExecWithSubshell (_params : Parameters) (t : Token) : List TokenComment
     else []
   | _ => []
 
+/-- SC2324: `var+=1` appends rather than increments. -/
+def checkPlusEqualsNumber (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Assignment .append var indices word =>
+    if !indices.isEmpty then
+      []
+    else
+      match params.cfgAnalysis with
+      | Option.none => []
+      | some cfg =>
+        match getIncomingState cfg t.id with
+        | Option.none => []
+        | some state =>
+          if isNumber state word &&
+             !(variableMayBeDeclaredInteger state var |>.getD false) then
+            [makeComment .warningC t.id 2324
+              "var+=1 will append, not increment. Use (( var += 1 )), typeset -i var, or quote number to silence."]
+          else
+            []
+  | _ => []
+where
+  getUnmodifiedParameterExpansion (t : Token) : Option String := do
+    match t.inner with
+    | .T_DollarBraced _ content =>
+      let s ← getUnquotedLiteral content
+      if isVariableName s then
+        some s
+      else
+        Option.none
+    | _ => Option.none
+
+  isNumber (state : ProgramState) (word : Token) : Bool :=
+    let unquotedLiteral := getUnquotedLiteral word
+    let isEmpty := unquotedLiteral == some ""
+    let isUnquotedNumber :=
+      not isEmpty && (unquotedLiteral.map (fun s => s.toList.all Char.isDigit) |>.getD false)
+    let isNumericalVariableName :=
+      match unquotedLiteral with
+      | some s => variableMayBeAssignedInteger state s |>.getD false
+      | Option.none => false
+    let isNumericalVariableExpansion :=
+      match word.inner with
+      | .T_NormalWord [part] =>
+          match getUnmodifiedParameterExpansion part with
+          | some s => variableMayBeAssignedInteger state s |>.getD false
+          | Option.none => false
+      | _ => false
+    isUnquotedNumber || isNumericalVariableName || isNumericalVariableExpansion
+
 /-- SC2327/SC2328: Command substitution output redirected away makes it empty. -/
 def checkExpansionWithRedirection (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -4823,6 +4872,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkQuotesForExpansion,
   checkExecuteCommandOutput,
   checkExecWithSubshell,
+  checkPlusEqualsNumber,
   checkExpansionWithRedirection,
   checkSshHereDoc,
   checkSshInLoop,
