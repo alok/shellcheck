@@ -1426,7 +1426,7 @@ where
 
   readPatternsInPipe (acc : List Token) : FullParser (List Token) := do
     skipHSpaceFull
-    let pat ← readWordFull
+    let pat ← readPatternWordFull
     skipHSpaceFull
     match ← peekFull with
     | some '|' =>
@@ -1942,7 +1942,7 @@ where
 
   readPatterns (acc : List Token) : FullParser (List Token) := do
     skipHSpaceFull
-    let pat ← readWordFull
+    let pat ← readPatternWordFull
     skipHSpaceFull
     match ← peekFull with
     | some '|' =>

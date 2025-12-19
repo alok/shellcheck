@@ -757,6 +757,134 @@ where
         else
           let tok ← readLiteralFull
           readWordParts (tok :: acc)
+
+/-- Read a word as it appears in `case` patterns.
+
+Unlike normal words, `case` patterns may contain extglob syntax like `@(foo|bar)`,
+which uses parentheses and `|` in a way that should not be interpreted as shell
+operators. This reader:
+
+- stops on `|` or `)` only at the top level (outside bracket classes and
+  parenthesis nesting),
+- allows `(` / `)` to appear as literal characters inside the pattern, and
+- preserves normal handling of quotes, `$` expansions, backticks, and escapes.
+
+This is a best-effort parser intended to improve `case` pattern coverage without
+rewriting the full word lexer. -/
+partial def readPatternWordFull : FullParser Token := do
+  let (startLine, startCol) ← currentPos
+  let parts ← readParts [] none [] 0 false 0 false
+  if parts.isEmpty then
+    failure
+  else
+    mkTokenFullAt (.T_NormalWord parts) startLine startCol
+where
+  flushLiteral (acc : List Token) (litStart : Option (Nat × Nat)) (litRev : List Char) :
+      FullParser (List Token) := do
+    match litStart with
+    | none => pure acc
+    | some (line, col) =>
+        let s := String.ofList litRev.reverse
+        if s.isEmpty then
+          pure acc
+        else
+          let tok ← mkTokenFullAt (.T_Literal s) line col
+          pure (tok :: acc)
+
+  /-- State machine for bracket expressions (`[...]`) so that we don't treat `]`
+  immediately after `[`/`[!`/`[^` as a terminator. -/
+  updateBracket (inClass : Bool) (classChars : Nat) (sawNegation : Bool) (c : Char) :
+      Bool × Nat × Bool :=
+    if inClass then
+      if classChars == 0 && !sawNegation && (c == '!' || c == '^') then
+        (true, 0, true)
+      else if c == ']' && classChars == 0 then
+        (true, 1, sawNegation)
+      else if c == ']' then
+        (false, 0, false)
+      else
+        (true, classChars + 1, sawNegation)
+    else
+      if c == '[' then
+        (true, 0, false)
+      else
+        (false, 0, false)
+
+  updateDepth (parenDepth : Nat) (inClass : Bool) (c : Char) : Nat :=
+    if inClass then
+      parenDepth
+    else if c == '(' then
+      parenDepth + 1
+    else if c == ')' then
+      match parenDepth with
+      | 0 => 0
+      | d + 1 => d
+    else
+      parenDepth
+
+  /-- Read pattern parts, stopping before `|` / `)` that are part of the `case`
+  item syntax (but not those inside extglob/bracket expressions). -/
+  readParts
+      (acc : List Token)
+      (litStart : Option (Nat × Nat))
+      (litRev : List Char)
+      (parenDepth : Nat)
+      (inClass : Bool)
+      (classChars : Nat)
+      (sawNegation : Bool)
+      : FullParser (List Token) := do
+    match ← peekFull with
+    | none => do
+        let acc ← flushLiteral acc litStart litRev
+        pure acc.reverse
+    | some c =>
+        -- Stop on case-pattern separators only when not nested.
+        if parenDepth == 0 && !inClass && (c == '|' || c == ')') then
+          let acc ← flushLiteral acc litStart litRev
+          pure acc.reverse
+        else if c.isWhitespace || c == '#' ||
+            (isOperatorStart c && c != '(' && c != ')' && c != '|') then
+          let acc ← flushLiteral acc litStart litRev
+          pure acc.reverse
+        else if c == '\'' then
+          let acc ← flushLiteral acc litStart litRev
+          let tok ← readSingleQuotedFull
+          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation
+        else if c == '"' then
+          let acc ← flushLiteral acc litStart litRev
+          let tok ← readDoubleQuotedFull
+          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation
+        else if c == '`' then
+          let acc ← flushLiteral acc litStart litRev
+          let tok ← readBacktickFull
+          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation
+        else if c == '$' then
+          let acc ← flushLiteral acc litStart litRev
+          let (dl, dc) ← currentPos
+          let _ ← anyCharFull
+          let tok ← readDollarFull dl dc
+          readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation
+        else if c == '\\' then
+          let (escLine, escCol) ← currentPos
+          let _ ← anyCharFull
+          match ← peekFull with
+          | some '\n' =>
+              let _ ← anyCharFull
+              readParts acc litStart litRev parenDepth inClass classChars sawNegation
+          | some ec =>
+              let _ ← anyCharFull
+              let litStart := litStart <|> some (escLine, escCol)
+              readParts acc litStart (ec :: litRev) parenDepth inClass classChars sawNegation
+          | none =>
+              let litStart := litStart <|> some (escLine, escCol)
+              readParts acc litStart ('\\' :: litRev) parenDepth inClass classChars sawNegation
+        else
+          let (litLine, litCol) ← currentPos
+          let _ ← anyCharFull
+          let litStart := litStart <|> some (litLine, litCol)
+          let (inClass', classChars', sawNegation') := updateBracket inClass classChars sawNegation c
+          let parenDepth' := updateDepth parenDepth inClass c
+          readParts acc litStart (c :: litRev) parenDepth' inClass' classChars' sawNegation'
 /-- Read arithmetic content for `(( .. ))` / `for (( .. ))` (does not consume the closing `))`). -/
 @[inline] def readArithContentHelper : FullParser String :=
   readArithContent
