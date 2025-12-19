@@ -4933,7 +4933,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkPipePitfalls,
   checkRedirectedNowhere,
   checkGrepWc,
-  checkReadWithoutR,
+  -- checkReadWithoutR, -- SC2162 - handled by Commands.checkReadWithoutR
   checkMultipleRedirectsImpl,
   checkGlobAsCommand,
   checkForInCat,

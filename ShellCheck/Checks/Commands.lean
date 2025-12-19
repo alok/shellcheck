@@ -3765,7 +3765,7 @@ def commandChecks : List CommandCheck := [
   checkRmGlob,
   checkRmRoot,
   checkSetAssign,
-  checkReadR,
+  -- checkReadR, -- Duplicate of checkReadWithoutR (SC2162), removed
   checkReadExpansions,  -- SC2229/SC2313
   checkPrintfArgCount,
   checkArrayComma,
