@@ -117,6 +117,99 @@ def shouldUseColor (opt : ColorOption) : IO Bool := do
 def flagsNamed (p : Parsed) (longName : String) : Array Parsed.Flag :=
   p.flags.filter (fun f => f.flag.longName = longName)
 
+/-!
+Pre-process CLI args to allow repeated array-like flags.
+
+Lean's Cli library rejects duplicate flags by default. ShellCheck allows
+repeating include/exclude/enable, so we merge repeated occurrences into a
+single `--flag=...` with comma-separated values before parsing.
+-/
+private def repeatableShortToLong : String → Option String
+  | "e" => some "exclude"
+  | "i" => some "include"
+  | "o" => some "enable"
+  | _ => none
+
+private def repeatableLong : Std.HashSet String :=
+  ["exclude", "include", "enable"].foldl (fun s n => s.insert n) {}
+
+private def addRepeat (name value : String)
+    (out : Array String)
+    (seen : Std.HashMap String (Nat × String))
+    : Array String × Std.HashMap String (Nat × String) :=
+  match seen.get? name with
+  | Option.none =>
+      let idx := out.size
+      let out := out.push s!"--{name}={value}"
+      let seen := seen.insert name (idx, value)
+      (out, seen)
+  | some (idx, existing) =>
+      let newVal := if existing.isEmpty then value else existing ++ "," ++ value
+      let out := out.set! idx s!"--{name}={newVal}"
+      let seen := seen.insert name (idx, newVal)
+      (out, seen)
+
+private partial def preprocessArgsLoop (rest : List String)
+    (out : Array String)
+    (seen : Std.HashMap String (Nat × String)) : Array String :=
+  match rest with
+  | [] => out
+  | "--" :: tail =>
+      -- End of flags; keep remaining args as-is.
+      (out.push "--").append tail.toArray
+  | arg :: tail =>
+      if arg.startsWith "--" then
+        let content := arg.drop 2
+        let parts := content.splitOn "="
+        match parts with
+        | [] => preprocessArgsLoop tail (out.push arg) seen
+        | name :: restParts =>
+            if repeatableLong.contains name then
+              if restParts.isEmpty then
+                match tail with
+                | value :: tail2 =>
+                    let (out, seen) := addRepeat name value out seen
+                    preprocessArgsLoop tail2 out seen
+                | [] =>
+                    preprocessArgsLoop tail (out.push arg) seen
+              else
+                let value := String.intercalate "=" restParts
+                let (out, seen) := addRepeat name value out seen
+                preprocessArgsLoop tail out seen
+            else
+              preprocessArgsLoop tail (out.push arg) seen
+      else if arg.startsWith "-" && !arg.startsWith "--" then
+        let short := arg.drop 1
+        match short.toList with
+        | [] => preprocessArgsLoop tail (out.push arg) seen
+        | _ =>
+            if short.length == 1 then
+              match repeatableShortToLong short with
+              | some long =>
+                  match tail with
+                  | value :: tail2 =>
+                      let (out, seen) := addRepeat long value out seen
+                      preprocessArgsLoop tail2 out seen
+                  | [] =>
+                      preprocessArgsLoop tail (out.push arg) seen
+              | Option.none =>
+                  preprocessArgsLoop tail (out.push arg) seen
+            else
+              -- Support `-eVALUE` style for repeatable short flags.
+              let first := short.take 1
+              let restVal := short.drop 1
+              match repeatableShortToLong first with
+              | some long =>
+                  let (out, seen) := addRepeat long restVal out seen
+                  preprocessArgsLoop tail out seen
+              | Option.none =>
+                  preprocessArgsLoop tail (out.push arg) seen
+      else
+        preprocessArgsLoop tail (out.push arg) seen
+
+private def preprocessArgs (args : List String) : List String :=
+  preprocessArgsLoop args #[] {} |>.toList
+
 def checkOneFile (sys : SystemInterface IO) (filename : String) (cfg : RunConfig)
     : IO (Option CheckedFile) := do
   let contents ←
@@ -326,4 +419,4 @@ def shellcheck4Cmd : Cmd := `[Cli|
 ]
 
 def main (args : List String) : IO UInt32 :=
-  shellcheck4Cmd.validate args
+  shellcheck4Cmd.validate (preprocessArgs args)
