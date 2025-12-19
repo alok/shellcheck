@@ -4323,6 +4323,77 @@ def checkBashAsLogin (_params : Parameters) (t : Token) : List TokenComment :=
     else []
   | _ => []
 
+private def uselessBangMessage : String :=
+  "This ! is not on a condition and skips errexit. Use `&& exit 1` instead, or make sure $? is checked."
+
+private def dropLastList {α : Type} : List α → List α
+  | [] => []
+  | [_] => []
+  | x :: xs => x :: dropLastList xs
+
+private def isDirectFunctionBody (parents : Std.HashMap Id Token) (t : Token) : Bool :=
+  match parents.get? t.id with
+  | some parent =>
+      match parent.inner with
+      | .T_Function .. => true
+      | _ => false
+  | Option.none => false
+
+private def isConditionInPath (parents : Std.HashMap Id Token) (t : Token) : Bool :=
+  let path := getPath parents t
+  let rec go : List Token → Bool
+    | child :: parent :: rest =>
+        let here :=
+          match parent.inner with
+          | .T_AndIf lhs _ => child.id == lhs.id
+          | .T_OrIf lhs _ => child.id == lhs.id
+          | .T_IfExpression conditions _ =>
+              let condTokens := conditions.flatMap (fun (c, _) => c.getLast?.toList)
+              condTokens.any (fun tok => tok.id == child.id)
+          | .T_UntilExpression cond _ =>
+              cond.getLast?.elim false (fun tok => tok.id == child.id)
+          | .T_WhileExpression cond _ =>
+              cond.getLast?.elim false (fun tok => tok.id == child.id)
+          | _ => false
+        bif here then true else go (parent :: rest)
+    | _ => false
+  go path
+
+private partial def nonReturningCommandsForBang (parents : Std.HashMap Id Token) : Token → List Token
+  | t =>
+      match t.inner with
+      | .T_Script _ cmds => dropLastList cmds
+      | .T_BraceGroup cmds =>
+          if isDirectFunctionBody parents t then dropLastList cmds else cmds
+      | .T_Subshell cmds => dropLastList cmds
+      | .T_WhileExpression cond body => dropLastList cond ++ body
+      | .T_UntilExpression cond body => dropLastList cond ++ body
+      | .T_ForIn _ _ body => body
+      | .T_ForArithmetic _ _ _ body => body
+      | .T_IfExpression conds elses =>
+          (conds.flatMap (fun (c, _) => dropLastList c)) ++ (conds.flatMap (fun (_, b) => b)) ++ elses
+      | .T_Annotation _ inner => nonReturningCommandsForBang parents inner
+      | _ => []
+
+private partial def checkUselessBangAt (parents : Std.HashMap Id Token) : Token → List TokenComment
+  | t =>
+      match t.inner with
+      | .T_Banged _cmd =>
+          if isConditionInPath parents t then
+            []
+          else
+            [makeComment .infoC t.id 2251 uselessBangMessage]
+      | .T_Annotation _ inner => checkUselessBangAt parents inner
+      | _ => []
+
+/-- SC2251: `! cmd` is not a condition and skips errexit in `set -e` scripts. -/
+def checkUselessBang (params : Parameters) (root : Token) : List TokenComment :=
+  if !params.hasSetE then
+    []
+  else
+    let parents := params.parentMap
+    (nonReturningCommandsForBang parents root).flatMap (checkUselessBangAt parents)
+
 /-- SC2310/SC2311: `set -e` is disabled in conditionals and command substitutions. -/
 def checkSetESuppressed (params : Parameters) (root : Token) : List TokenComment :=
   if !params.hasSetE then
@@ -4847,6 +4918,8 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkForDecimals,
   checkUnnecessaryParens,
   checkDivBeforeMult,
+  -- set -e + ! checks
+  checkUselessBang,
   -- Path and IFS checks
   checkOverridingPath,
   checkTildeInPath,
