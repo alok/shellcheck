@@ -15,12 +15,9 @@ open ShellCheck.Formatter.Format
 
 /-- Format a single comment in GCC style -/
 def formatComment (filename : String) (c : PositionedComment) : String :=
-  let level := match severityText c with
-    | "error" => "error"
-    | "warning" => "warning"
-    | _ => "note"
-  let msg := messageText c |>.splitOn "\n" |> String.intercalate " "
-  s!"{filename}:{lineNo c}:{colNo c}: {level}: {msg} [SC{codeNo c}]"
+  let msg := normalizeMessage (messageText c)
+  let location := formatLocation filename (lineNo c) (colNo c)
+  s!"{location} {formatMessageWithCode (codeNo c) (severityText c) msg}"
 
 /-- Format all comments from a result -/
 def formatResult (cr : CheckResult) : List String :=

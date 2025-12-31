@@ -71,6 +71,26 @@ def severityText (pc : PositionedComment) : String :=
   | .infoC => "info"
   | .styleC => "style"
 
+/-- Normalize a message into a single line. -/
+def normalizeMessage (msg : String) : String :=
+  msg.splitOn "\n" |> String.intercalate " "
+
+/-- Format a ShellCheck code tag (e.g., SC2086). -/
+def formatCodeTag (code : Int) : String :=
+  s!"SC{code}"
+
+/-- Format a full message with code and severity. -/
+def formatMessageWithCode (code : Int) (severity : String) (msg : String) : String :=
+  s!"{formatCodeTag code} ({severity}): {msg}"
+
+/-- Format a location with line/column. -/
+def formatLocation (filename : String) (line : Nat) (col : Nat) : String :=
+  s!"{filename}:{line}:{col}:"
+
+/-- Format a location banner with filename and line. -/
+def formatLocationBanner (filename : String) (line : Nat) : String :=
+  s!"{filename}:{line}:"
+
 /-- Remove tab stops from a position (convert virtual column to real) -/
 def removeTabStops (pc : PositionedComment) (_fileLines : Array String) : PositionedComment :=
   -- Simplified: would properly handle tab stop conversion

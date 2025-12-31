@@ -305,6 +305,9 @@ def runShellcheck4 (p : Parsed) : IO UInt32 := do
   let useColor ← shouldUseColor colorOpt
 
   let wikiLinkCount : Nat := p.flag! "wiki-link-count" |>.as! Nat
+  let formatterOptions : ShellCheck.Formatter.Format.FormatterOptions := {
+    foWikiLinkCount := wikiLinkCount
+  }
 
   let files : Array String := p.variableArgsAs! String
   if files.isEmpty then
@@ -362,17 +365,8 @@ def runShellcheck4 (p : Parsed) : IO UInt32 := do
         let lines := ShellCheck.Formatter.TTY.formatResultWithSource color cf.result cf.contents
         for line in lines do
           IO.println line
-      let codes :=
-        checkedFiles.flatMap (fun cf => cf.result.crComments.map (·.pcComment.cCode))
-          |>.filter (· > 0)
-          |>.map (·.toNat)
-      let mut seen : Std.HashSet Nat := {}
-      let mut uniq : List Nat := []
-      for c in codes do
-        if uniq.length < wikiLinkCount && !seen.contains c then
-          seen := seen.insert c
-          uniq := uniq ++ [c]
-      for line in ShellCheck.Formatter.TTY.formatWikiLinks uniq do
+      let allComments := checkedFiles.flatMap (fun cf => cf.result.crComments)
+      for line in ShellCheck.Formatter.TTY.formatFooter color formatterOptions allComments do
         IO.println line
   | .json =>
       IO.println (ShellCheck.Formatter.JSON.formatResults results)

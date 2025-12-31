@@ -8,6 +8,7 @@
 import ShellCheck.Interface
 import ShellCheck.Fixer
 import ShellCheck.Formatter.Format
+import Std.Data.HashSet
 
 namespace ShellCheck.Formatter.TTY
 
@@ -47,9 +48,6 @@ def noColor (_level : String) (text : String) : String := text
 def getColorFunc (useColor : Bool) : ColorFunc :=
   if useColor then colorComment else noColor
 
-/-- Format error code -/
-def code (num : Int) : String := s!"SC{num}"
-
 /-- Create cute arrow indicator for error position -/
 def makeArrow (c : PositionedComment) : String :=
   let sameLine := lineNo c == endLineNo c
@@ -63,10 +61,9 @@ def makeArrow (c : PositionedComment) : String :=
 def cuteIndent (c : PositionedComment) : String :=
   let indent := String.ofList (List.replicate (colNo c - 1) ' ')
   let arrow := makeArrow c
-  let codeStr := code (codeNo c)
   let sev := severityText c
-  let msg := messageText c
-  s!"{indent}{arrow} {codeStr} ({sev}): {msg}"
+  let msg := formatMessageWithCode (codeNo c) sev (messageText c)
+  s!"{indent}{arrow} {msg}"
 
 /-- Format output for a single line group -/
 def formatLineGroup (color : ColorFunc) (filename : String) (lineNum : Nat)
@@ -74,7 +71,7 @@ def formatLineGroup (color : ColorFunc) (filename : String) (lineNum : Nat)
   let lineNoStr := toString lineNum
   let gutter := lineNoStr ++ " | "
   let pad := String.ofList (List.replicate lineNoStr.length ' ') ++ " | "
-  let header := color "message" s!"{filename}:{lineNum}:"
+  let header := color "message" (formatLocationBanner filename lineNum)
   let source := color "source" (gutter ++ sourceLine)
   let indicators := comments.map fun c =>
     color (severityText c) (pad ++ cuteIndent c)
@@ -101,7 +98,7 @@ def formatResultWithSource (color : ColorFunc) (cr : CheckResult) (contents : St
 def formatResultSimple (color : ColorFunc) (cr : CheckResult) : List String :=
   cr.crComments.flatMap fun c =>
     [color (severityText c)
-      s!"{cr.crFilename}:{lineNo c}:{colNo c}: [SC{codeNo c}] {severityText c}: {messageText c}"]
+      s!"{formatLocation cr.crFilename (lineNo c) (colNo c)} {formatMessageWithCode (codeNo c) (severityText c) (messageText c)}"]
 
 /-- Format wiki links for top errors -/
 def formatWikiLinks (codes : List Nat) : List String :=
@@ -109,6 +106,48 @@ def formatWikiLinks (codes : List Nat) : List String :=
   else
     ["For more information:"] ++
     codes.map fun c => s!"  {wikiLink}SC{c}"
+
+/-- Collect distinct wiki codes up to a limit, preserving order. -/
+def collectWikiCodes (limit : Nat) (comments : List PositionedComment) : List Nat :=
+  let codes := comments
+    |>.map (·.pcComment.cCode)
+    |>.filter (· > 0)
+    |>.map (·.toNat)
+  let (_, acc) := codes.foldl
+    (fun (seen, acc) c =>
+      if acc.length < limit && !seen.contains c then
+        (seen.insert c, acc ++ [c])
+      else
+        (seen, acc))
+    (({} : Std.HashSet Nat), [])
+  acc
+
+/-- Format a compact summary line for a list of comments. -/
+def formatSummaryLine (color : ColorFunc) (comments : List PositionedComment) : Option String :=
+  if comments.isEmpty then
+    none
+  else
+    let (errors, warnings, infos, styles) :=
+      comments.foldl
+        (fun (e, w, i, s) c =>
+          match severityText c with
+          | "error" => (e + 1, w, i, s)
+          | "warning" => (e, w + 1, i, s)
+          | "info" => (e, w, i + 1, s)
+          | _ => (e, w, i, s + 1))
+        (0, 0, 0, 0)
+    let total := errors + warnings + infos + styles
+    some (color "message" s!"Summary: {total} issues (E:{errors} W:{warnings} I:{infos} S:{styles})")
+
+/-- Format footer lines (summary + wiki links) for TTY output. -/
+def formatFooter (color : ColorFunc) (options : Format.FormatterOptions)
+    (comments : List PositionedComment) : List String :=
+  let summary :=
+    match formatSummaryLine color comments with
+    | some line => [line]
+    | none => []
+  let wikiCodes := collectWikiCodes options.foWikiLinkCount comments
+  summary ++ formatWikiLinks wikiCodes
 
 /-- Create TTY formatter -/
 def format [Monad m] (_options : Format.FormatterOptions) : Format.Formatter m := {

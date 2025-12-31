@@ -1,10 +1,12 @@
 import Plausible
 import ShellCheck.Tests.ParsecProps
 import ShellCheck.Tests.ParserRegression
+import ShellCheck.Tests.FormatterTTY
 
 open Plausible
 open ShellCheck.Tests.ParsecProps
 open ShellCheck.Tests.ParserRegression
+open ShellCheck.Tests.FormatterTTY
 
 def checkProp (name : String) (p : Prop) (cfg : Configuration := {}) [Testable p] : IO Bool := do
   IO.println s!"[Plausible] {name}"
@@ -60,5 +62,6 @@ def main : IO UInt32 := do
   ok := ok && (← checkRegression "`...` allows backtick in single quotes" test_backtick_backtick_in_singleQuotes_parses)
   ok := ok && (← checkRegression "${} allows nested ${}" test_bracedExpansion_nested_parameterExpansions_parses)
   ok := ok && (← checkRegression "${} allows nested {...}" test_bracedExpansion_nested_braceExpansions_parses)
+  ok := ok && (← checkRegression "tty format line group basic" test_tty_format_line_group_basic)
 
   pure (if ok then 0 else 1)
