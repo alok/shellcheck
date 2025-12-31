@@ -75,7 +75,7 @@ private def renderEchoScript (words : List String) : String :=
   String.intercalate " " ("echo" :: words)
 
 private def parseScriptOk (script : String) : Except String Token :=
-  let (root, _positions, errors) := runFullParser script "<test>"
+  let (root, _positions, errors) := runParser script "<test>"
   match root with
   | some t =>
       if errors.isEmpty then
@@ -149,7 +149,7 @@ private def positionsOk (positions : Std.HashMap Id (Position × Position)) : Bo
 
 private def simpleScriptPositionsOk (words : List SafeWord) : Bool :=
   let script := renderEchoScript (words.map (·.value))
-  let (root, positions, errors) := runFullParser script "<test>"
+  let (root, positions, errors) := runParser script "<test>"
   match root with
   | some _ => errors.isEmpty && positionsOk positions
   | none => false
@@ -312,7 +312,7 @@ abbrev prop_subshell_parses : Prop :=
 
 private def assignmentPositionsOk (name : SafeVar) (value : SafeWord) : Bool :=
   let script := assignmentScript name value
-  let (root, positions, errors) := runFullParser script "<test>"
+  let (root, positions, errors) := runParser script "<test>"
   match root with
   | some _ => errors.isEmpty && positionsOk positions
   | none => false
