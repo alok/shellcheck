@@ -409,15 +409,6 @@ where
       let lit ← mkToken (.T_Literal content) line col
       return [lit]
 
-/-- Parse a shell script (basic implementation) -/
-def parseScript [Monad m] (_sys : SystemInterface m) (spec : ParseSpec) : m ParseResult := do
-  let (root, positions) := tokenizeScript spec.psScript spec.psFilename
-  pure {
-    prComments := []
-    prTokenPositions := positions
-    prRoot := root
-  }
-
 -- Theorems (stubs)
 
 theorem variableStartChar_underscore :
@@ -2968,5 +2959,9 @@ def parseScriptFull [Monad m] (_sys : SystemInterface m) (spec : ParseSpec) : m 
     prTokenPositions := positions
     prRoot := root
   }
+
+/-- Parse a shell script using the full parser. -/
+def parseScript [Monad m] (sys : SystemInterface m) (spec : ParseSpec) : m ParseResult :=
+  parseScriptFull sys spec
 
 end ShellCheck.Parser
