@@ -7,7 +7,7 @@ open ShellCheck.Parser
 open ShellCheck.Parser.Core
 open ShellCheck.Parser.Parsec
 
-def parseOnlyFull (p : Parser α) (input : String) : Except String α :=
+def parseOnly (p : Parser α) (input : String) : Except String α :=
   match ShellCheck.Parser.Parsec.runExcept p input with
   | .ok (a, _) => .ok a
   | .error e => .error e
@@ -98,7 +98,7 @@ def firstBracedUseDefaultTriple? (t : Token) : Option (String × String × Strin
   found
 
 def parseScriptOk (script : String) : Except String Token :=
-  let (root, _positions, errors) := ShellCheck.Parser.runFullParser script "<test>"
+  let (root, _positions, errors) := ShellCheck.Parser.runParser script "<test>"
   match root with
   | some t =>
       if errors.isEmpty then
@@ -110,23 +110,23 @@ def parseScriptOk (script : String) : Except String Token :=
 
 def test_readUntil_doubleBracket_ignores_quoted_terminator : Except String Bool := do
   let p : Parser String := do
-    let _ ← stringFull "[["
-    readUntilStringFull "]]"
-  let out ← parseOnlyFull p "[[ \"]]\" ]]"
+    let _ ← string "[["
+    readUntilString "]]"
+  let out ← parseOnly p "[[ \"]]\" ]]"
   pure (out == " \"]]\" ")
 
 def test_readUntil_singleBracket_ignores_quoted_terminator : Except String Bool := do
   let p : Parser String := do
-    let _ ← charFull '['
-    readUntilStringFull "]"
-  let out ← parseOnlyFull p "[ \"]\" ]"
+    let _ ← char '['
+    readUntilString "]"
+  let out ← parseOnly p "[ \"]\" ]"
   pure (out == " \"]\" ")
 
 def test_readUntil_doubleBracket_ignores_escaped_terminator : Except String Bool := do
   let p : Parser String := do
-    let _ ← stringFull "[["
-    readUntilStringFull "]]"
-  let out ← parseOnlyFull p "[[ \\]] ]]"
+    let _ ← string "[["
+    readUntilString "]]"
+  let out ← parseOnly p "[[ \\]] ]]"
   pure (out == " \\]] ")
 
 def test_fdRedirect_parses_as_T_FdRedirect : Except String Bool := do

@@ -250,7 +250,7 @@ private def spanOf (t : Token) : Parser (Nat × Nat × Nat × Nat) := do
 private def mkSpan (inner : InnerToken Token) (first last : Token) : Parser Token := do
   let (startLine, startCol, _, _) ← spanOf first
   let (_, _, endLine, endCol) ← spanOf last
-  let id ← freshIdFull
+  let id ← freshId
   recordPosition id startLine startCol endLine endCol
   pure ⟨id, inner⟩
 
@@ -269,7 +269,7 @@ mutual
   partial def parsePrimary (ct : ConditionType) (ts : List Token) : Parser (Token × List Token) := do
     match ts with
     | [] =>
-        let empty ← mkTokenFull (.TC_Empty ct)
+        let empty ← mkToken (.TC_Empty ct)
         pure (empty, [])
     | t :: rest =>
         match bareWordString? t with
@@ -358,7 +358,7 @@ end
 end TokenParse
 
 /-- Parse a list of already-tokenized condition arguments into a `TC_*` tree. -/
-partial def parseConditionTokensFull (ct : ConditionType) (tokens : List Token) : Parser Token := do
+partial def parseConditionTokens (ct : ConditionType) (tokens : List Token) : Parser Token := do
   let (expr, rest) := (← TokenParse.parseOr ct tokens)
   if rest.isEmpty then
     pure expr

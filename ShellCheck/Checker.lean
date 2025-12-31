@@ -96,7 +96,7 @@ def checkScript [Monad m] (sys : SystemInterface m) (spec : CheckSpec) : m Check
     psIgnoreRC := spec.csIgnoreRC
     psShellTypeOverride := spec.csShellTypeOverride
   }
-  let parseResult ← parseScriptFull sys parseSpec
+  let parseResult ← parseScript sys parseSpec
 
   -- Collect parse messages
   let parseMessages := parseResult.prComments

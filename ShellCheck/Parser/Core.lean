@@ -2,9 +2,8 @@
   Core Parser infrastructure.
 
   This module used to define a bespoke monad with manual position tracking.
-  The parser is now migrating to the Parsec‑based `ShellParser` defined in
-  `ShellCheck.Parser.Parsec`. We keep the `*Full` helper names for now, but
-  the core parser type is `Parser`.
+  The parser now targets the Parsec‑based `ShellParser` defined in
+  `ShellCheck.Parser.Parsec`, with the core parser type aliased to `Parser`.
 -/
 
 import ShellCheck.Parser.Parsec
@@ -20,39 +19,39 @@ abbrev Parser (α : Type) := ShellParser α
 
 /-- Create initial parser state (input is handled by the iterator). -/
 @[inline]
-def mkFullState (_input : String) (filename : String := "<stdin>") : ParserState :=
+def mkState (_input : String) (filename : String := "<stdin>") : ParserState :=
   mkShellState filename
 
-@[inline] def freshIdFull : Parser Id := freshId
+@[inline] def freshId : Parser Id := ShellCheck.Parser.Parsec.freshId
 @[inline] def recordPosition (id : Id) (startLine startCol endLine endCol : Nat) : Parser Unit :=
   ShellCheck.Parser.Parsec.recordPosition id startLine startCol endLine endCol
-@[inline] def currentPos : Parser (Nat × Nat) := getPos
-@[inline] def isEofFull : Parser Bool := isEof
-@[inline] def peekFull : Parser (Option Char) := peek?
-@[inline] def anyCharFull : Parser Char := anyChar
-@[inline] def charFull (c : Char) : Parser Char := pchar c
-@[inline] def stringFull (s : String) : Parser String := pstring s
-@[inline] def takeWhileFull (p : Char → Bool) : Parser String := takeWhile p
-@[inline] def takeWhile1Full (p : Char → Bool) : Parser String := takeWhile1 p
-@[inline] def attemptFull (p : Parser α) : Parser α := attempt p
-@[inline] def peekStringFull (n : Nat) : Parser String := peekString n
-@[inline] def optionalFull (p : Parser α) : Parser (Option α) :=
+@[inline] def currentPos : Parser (Nat × Nat) := ShellCheck.Parser.Parsec.getPos
+@[inline] def isEof : Parser Bool := ShellCheck.Parser.Parsec.isEof
+@[inline] def peek? : Parser (Option Char) := ShellCheck.Parser.Parsec.peek?
+@[inline] def anyChar : Parser Char := ShellCheck.Parser.Parsec.anyChar
+@[inline] def char (c : Char) : Parser Char := ShellCheck.Parser.Parsec.pchar c
+@[inline] def string (s : String) : Parser String := ShellCheck.Parser.Parsec.pstring s
+@[inline] def takeWhile (p : Char → Bool) : Parser String := ShellCheck.Parser.Parsec.takeWhile p
+@[inline] def takeWhile1 (p : Char → Bool) : Parser String := ShellCheck.Parser.Parsec.takeWhile1 p
+@[inline] def attempt (p : Parser α) : Parser α := ShellCheck.Parser.Parsec.attempt p
+@[inline] def peekString (n : Nat) : Parser String := ShellCheck.Parser.Parsec.peekString n
+@[inline] def optionalP (p : Parser α) : Parser (Option α) :=
   ShellCheck.Parser.Parsec.optional p
 
-partial def manyFull (p : Parser α) : Parser (List α) := do
+partial def many (p : Parser α) : Parser (List α) := do
   let arr ← ShellCheck.Parser.Parsec.many p
   pure arr.toList
 
-def many1Full (p : Parser α) : Parser (List α) := do
+def many1 (p : Parser α) : Parser (List α) := do
   let arr ← ShellCheck.Parser.Parsec.many1 p
   pure arr.toList
 
-@[inline] def mkTokenFull (inner : InnerToken Token) : Parser Token := mkToken inner
-@[inline] def mkTokenFullAt (inner : InnerToken Token) (startLine startCol : Nat) : Parser Token :=
-  mkTokenAt inner startLine startCol
+@[inline] def mkToken (inner : InnerToken Token) : Parser Token := ShellCheck.Parser.Parsec.mkToken inner
+@[inline] def mkTokenAt (inner : InnerToken Token) (startLine startCol : Nat) : Parser Token :=
+  ShellCheck.Parser.Parsec.mkTokenAt inner startLine startCol
 
 /-- Run a full parser on a string, returning the value, positions map and errors. -/
-def runFullParser (p : Parser α) (input : String) (filename : String := "<stdin>")
+def runParser (p : Parser α) (input : String) (filename : String := "<stdin>")
     : Option α × Std.HashMap Id (Position × Position) × List String :=
   ShellCheck.Parser.Parsec.run p input filename
 
