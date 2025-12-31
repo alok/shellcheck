@@ -216,6 +216,24 @@ private def heredocScript (content : SafeWord) : String :=
 private def ifScript (cond body : SafeWord) : String :=
   s!"if echo {cond.value}; then echo {body.value}; fi"
 
+private def whileScript (cond body : SafeWord) : String :=
+  s!"while echo {cond.value}; do echo {body.value}; done"
+
+private def forInScript (name : SafeVar) (a b : SafeWord) : String :=
+  s!"for {name.value} in {a.value} {b.value}; do echo ${name.value}; done"
+
+private def pipelineScript (a b : SafeWord) : String :=
+  s!"echo {a.value} | cat {b.value}"
+
+private def andOrScript (a b : SafeWord) : String :=
+  s!"echo {a.value} && echo {b.value}"
+
+private def orOrScript (a b : SafeWord) : String :=
+  s!"echo {a.value} || echo {b.value}"
+
+private def caseScript (word pat body : SafeWord) : String :=
+  s!"case {word.value} in {pat.value}) echo {body.value} ;; esac"
+
 private def functionScript (name : SafeVar) (body : SafeWord) : String :=
   name.value ++ "() { echo " ++ body.value ++ "; }"
 
@@ -242,6 +260,44 @@ abbrev prop_if_parses : Prop :=
   Plausible.NamedBinder "cond" <| ∀ cond : SafeWord,
     Plausible.NamedBinder "body" <| ∀ body : SafeWord,
       parseOk (ifScript cond body) = true
+
+/-- While loops parse. -/
+abbrev prop_while_parses : Prop :=
+  Plausible.NamedBinder "cond" <| ∀ cond : SafeWord,
+    Plausible.NamedBinder "body" <| ∀ body : SafeWord,
+      parseOk (whileScript cond body) = true
+
+/-- For-in loops parse. -/
+abbrev prop_for_in_parses : Prop :=
+  Plausible.NamedBinder "name" <| ∀ name : SafeVar,
+    Plausible.NamedBinder "a" <| ∀ a : SafeWord,
+      Plausible.NamedBinder "b" <| ∀ b : SafeWord,
+        parseOk (forInScript name a b) = true
+
+/-- Pipelines parse. -/
+abbrev prop_pipeline_parses : Prop :=
+  Plausible.NamedBinder "a" <| ∀ a : SafeWord,
+    Plausible.NamedBinder "b" <| ∀ b : SafeWord,
+      parseOk (pipelineScript a b) = true
+
+/-- && chains parse. -/
+abbrev prop_and_or_parses : Prop :=
+  Plausible.NamedBinder "a" <| ∀ a : SafeWord,
+    Plausible.NamedBinder "b" <| ∀ b : SafeWord,
+      parseOk (andOrScript a b) = true
+
+/-- || chains parse. -/
+abbrev prop_or_or_parses : Prop :=
+  Plausible.NamedBinder "a" <| ∀ a : SafeWord,
+    Plausible.NamedBinder "b" <| ∀ b : SafeWord,
+      parseOk (orOrScript a b) = true
+
+/-- Case blocks parse. -/
+abbrev prop_case_parses : Prop :=
+  Plausible.NamedBinder "word" <| ∀ word : SafeWord,
+    Plausible.NamedBinder "pat" <| ∀ pat : SafeWord,
+      Plausible.NamedBinder "body" <| ∀ body : SafeWord,
+        parseOk (caseScript word pat body) = true
 
 /-- Function definitions parse. -/
 abbrev prop_function_definition_parses : Prop :=

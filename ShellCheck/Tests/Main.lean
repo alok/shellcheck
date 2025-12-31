@@ -57,6 +57,12 @@ def main : IO UInt32 := do
   ok := ok && (← checkProp "backtick parses" prop_backtick_parses cfg)
   ok := ok && (← checkProp "heredoc parses" prop_heredoc_parses cfg)
   ok := ok && (← checkProp "if parses" prop_if_parses cfg)
+  ok := ok && (← checkProp "while parses" prop_while_parses cfg)
+  ok := ok && (← checkProp "for-in parses" prop_for_in_parses cfg)
+  ok := ok && (← checkProp "pipelines parse" prop_pipeline_parses cfg)
+  ok := ok && (← checkProp "&& chains parse" prop_and_or_parses cfg)
+  ok := ok && (← checkProp "|| chains parse" prop_or_or_parses cfg)
+  ok := ok && (← checkProp "case parses" prop_case_parses cfg)
   ok := ok && (← checkProp "function definition parses" prop_function_definition_parses cfg)
   ok := ok && (← checkProp "subshell parses" prop_subshell_parses cfg)
 
