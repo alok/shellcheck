@@ -50,7 +50,7 @@ def many1 (p : Parser α) : Parser (List α) := do
 @[inline] def mkTokenAt (inner : InnerToken Token) (startLine startCol : Nat) : Parser Token :=
   ShellCheck.Parser.Parsec.mkTokenAt inner startLine startCol
 
-/-- Run a full parser on a string, returning the value, positions map and errors. -/
+/-- Run a parser on a string, returning the value, positions map and errors. -/
 def runParser (p : Parser α) (input : String) (filename : String := "<stdin>")
     : Option α × Std.HashMap Id (Position × Position) × List String :=
   ShellCheck.Parser.Parsec.run p input filename

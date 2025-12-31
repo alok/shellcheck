@@ -219,7 +219,7 @@ def parseSingleBracket (content : String) : Option Token :=
   parseCondition (tokenize content) .singleBracket
 
 /-
-  Token-based condition parsing (used by the full parser).
+  Token-based condition parsing (used by the shell parser).
 
   This is a substantial upgrade over the older `tokenize`-by-space approach:
   the full shell parser already tokenizes/quotes/escapes words into `Token`s.

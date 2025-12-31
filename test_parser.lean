@@ -14,7 +14,7 @@ done
 "
 
 #eval do
-  let (result, positions, errors) := runFullParser testScript "test.sh"
+  let (result, positions, errors) := runParser testScript "test.sh"
   match result with
   | some tok => IO.println s!"Parsed successfully! Token count: {positions.size}"
   | none => IO.println s!"Parse failed: {errors}"

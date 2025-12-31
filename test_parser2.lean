@@ -12,7 +12,7 @@ def script6 := "(subshell command)"
 #eval do
   for (name, script) in [("pipe", script1), ("andor", script2), ("while", script3), 
                          ("case", script4), ("brace", script5), ("subshell", script6)] do
-    let (result, positions, errors) := runFullParser script "test.sh"
+    let (result, positions, errors) := runParser script "test.sh"
     match result with
     | some _ => IO.println s!"{name}: OK ({positions.size} tokens)"
     | none => IO.println s!"{name}: FAILED - {errors.take 1}"

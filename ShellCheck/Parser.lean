@@ -2099,7 +2099,7 @@ where
       let (expanded, newNid, newPos) := expandDollarExpansions child filename nid origPos
       (acc ++ [expanded], newNid, pos.fold (init := newPos) fun m k v => m.insert k v)
 
-/-- Run the full parser on a script -/
+/-- Run the parser on a script -/
 def runParser (script : String) (filename : String := "<stdin>") : (Option Token × Std.HashMap Id (Position × Position) × List String) :=
   let initState : ParserState := ShellCheck.Parser.Parsec.mkShellState filename
   match ShellCheck.Parser.Parsec.runWithState readScript script initState with
@@ -2114,12 +2114,12 @@ def runParser (script : String) (filename : String := "<stdin>") : (Option Token
   | (none, errs) =>
       (none, {}, errs)
 
-/-- Tokenize a script using the full parser. -/
+/-- Tokenize a script using the parser. -/
 def tokenizeScript (script : String) (filename : String) : (Option Token × Std.HashMap Id (Position × Position)) :=
   let (root, positions, _errors) := runParser script filename
   (root, positions)
 
-/-- Parse a string into a token tree (full parser). -/
+/-- Parse a string into a token tree. -/
 def parseString (input : String) : Except String Token :=
   let (root, _positions, errors) := runParser input "<stdin>"
   match root with

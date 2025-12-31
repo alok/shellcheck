@@ -40,14 +40,14 @@ def benchmarkParse (name : String) (script : String) (iterations : Nat := 100) :
 
   -- Warmup
   for _ in [:5] do
-    let _ := ShellCheck.Parser.runFullParser script "<bench>"
+    let _ := ShellCheck.Parser.runParser script "<bench>"
 
   -- Timed runs
   let startTime ← IO.monoMsNow
   let mut success := true
 
   for _ in [:iterations] do
-    let (result, _, _) := ShellCheck.Parser.runFullParser script "<bench>"
+    let (result, _, _) := ShellCheck.Parser.runParser script "<bench>"
     if result.isNone then
       success := false
 
