@@ -38,28 +38,6 @@ export ShellCheck.Parser.Types (
   initialUserState initialSystemState
 )
 
-/-- Basic token parsers (ShellParser-backed). -/
-
-def backslash : Parser Char := char '\\'
-
-def linefeed : Parser Char := char '\n'
-
-def singleQuote : Parser Char := char '\''
-
-def doubleQuote : Parser Char := char '"'
-
-def variableStart : Parser Char :=
-  ShellCheck.Parser.Parsec.satisfy variableStartChar
-
-def variableChars : Parser Char :=
-  ShellCheck.Parser.Parsec.satisfy variableChar
-
-/-- Parse a variable name -/
-def variableName : Parser String := do
-  let first ← variableStart
-  let rest ← takeWhile variableChar
-  return String.ofList (first :: rest.toList)
-
 -- Theorems (stubs)
 
 theorem variableStartChar_underscore :
@@ -136,18 +114,6 @@ compound      → braceGroup | subshell | for | while | until | if | case | func
 simple        → [assignment]* word+ [redirection]*
 ```
 -/
-
-/-- Separator characters -/
-def isSeparatorChar (c : Char) : Bool :=
-  c == ';' || c == '&' || c == '\n'
-
-/-- Operator start characters -/
-def isOperatorStart (c : Char) : Bool :=
-  c == '|' || c == '&' || c == ';' || c == '<' || c == '>' || c == '(' || c == ')'
-
-/-- Check if character terminates a word -/
-def isWordTerminator (c : Char) : Bool :=
-  c.isWhitespace || isOperatorStart c || c == '#'
 
 /-- Parse a specific keyword -/
 def keyword (kw : String) : Parser String := do
@@ -239,46 +205,6 @@ def bgOp : Parser Unit := do
 def newlineSep : Parser Unit := do
   let _ ← char '\n'
   return ()
-
-/-!
-### Word Parsing (Enhanced)
--/
-
-/-- Characters that can start a glob pattern -/
-def isGlobChar (c : Char) : Bool :=
-  c == '*' || c == '?' || c == '['
-
-/-- Parse a glob pattern character -/
-def readGlobChar : Parser Char := do
-  let c ← anyChar
-  if isGlobChar c then return c
-  else ShellCheck.Parser.Parsec.ShellParser.fail "expected glob"
-
-/-- Read an unquoted word part (literal text) stopping at special chars -/
-partial def readUnquotedPart : Parser String := do
-  takeWhile1 fun c =>
-    ¬ (c.isWhitespace ||
-       c == '"' || c == '\'' || c == '`' ||
-       c == '$' || c == '\\' ||
-       c == '|' || c == '&' || c == ';' ||
-       c == '<' || c == '>' ||
-       c == '(' || c == ')' ||
-       c == '{' || c == '}' ||
-       c == '#' ||
-       isGlobChar c)
-
-/-- Parse an escape sequence in unquoted context -/
-def readUnquotedEscape : Parser Char := do
-  let _ ← char '\\'
-  match ← peek? with
-  | some '\n' =>
-      let _ ← char '\n'
-      ShellCheck.Parser.Parsec.ShellParser.fail "line continuation"
-  | some c =>
-      let _ ← anyChar
-      return c
-  | none =>
-      ShellCheck.Parser.Parsec.ShellParser.fail "unexpected end of input"
 
 /-!
 ### Parser with Token Generation
