@@ -11,7 +11,6 @@ import ShellCheck.Data
 import ShellCheck.Interface
 import ShellCheck.Regex
 import ShellCheck.Parser.Types
-import ShellCheck.Parser.Ext
 import ShellCheck.Parser.Core
 import ShellCheck.Parser.Lexer
 import ShellCheck.Parser.Word
@@ -27,7 +26,6 @@ open ShellCheck.ASTLib
 open ShellCheck.Data
 open ShellCheck.Interface
 open ShellCheck.Parser.Types
-open ShellCheck.Parser.Ext
 open ShellCheck.Parser.Core
 open ShellCheck.Parser.Lexer
 open ShellCheck.Parser.Word
@@ -40,108 +38,96 @@ export ShellCheck.Parser.Types (
   initialUserState initialSystemState
 )
 
--- Re-export parser combinators
-export ShellCheck.Parser.Ext (
-  Parser ParserState Result
-  mkState run
-  anyChar satisfy char oneOf noneOf string
-  attempt many many1 option optional
-  sepBy sepBy1 manyTill lookAhead notFollowedBy eof
-  upper lower letter digit alphaNum space spaces
-  choice label takeWhile takeWhile1
-)
+/-- Basic token parsers (ShellParser-backed). -/
 
-/-- Basic token parsers -/
+def backslash : FullParser Char := charFull '\\'
 
-def backslash : Parser Char := char '\\'
+def linefeed : FullParser Char := charFull '\n'
 
-def linefeed : Parser Char := char '\n'
+def singleQuote : FullParser Char := charFull '\''
 
-def singleQuote : Parser Char := char '\''
+def doubleQuote : FullParser Char := charFull '"'
 
-def doubleQuote : Parser Char := char '"'
+def variableStart : FullParser Char :=
+  ShellCheck.Parser.Parsec.satisfy variableStartChar
 
-def variableStart : Parser Char :=
-  satisfy variableStartChar "variable start character"
-
-def variableChars : Parser Char :=
-  satisfy variableChar "variable character"
+def variableChars : FullParser Char :=
+  ShellCheck.Parser.Parsec.satisfy variableChar
 
 /-- Parse a variable name -/
-def variableName : Parser String := do
+def variableName : FullParser String := do
   let first ← variableStart
-  let rest ← takeWhile variableChar
+  let rest ← takeWhileFull variableChar
   return String.ofList (first :: rest.toList)
 
 /-- Skip whitespace and comments -/
-partial def skipSpacing : Parser Unit := do
-  let _ ← many (satisfy (fun c => c == ' ' || c == '\t') "space")
-  match ← peek? with
+partial def skipSpacing : FullParser Unit := do
+  let _ ← manyFull (ShellCheck.Parser.Parsec.satisfy fun c => c == ' ' || c == '\t')
+  match ← peekFull with
   | some '#' =>
-      let _ ← takeWhile (· != '\n')
+      let _ ← takeWhileFull (· != '\n')
       pure ()
   | some '\\' =>
-      let _ ← getPos
-      let _ ← char '\\'
-      match ← peek? with
+      let _ ← charFull '\\'
+      match ← peekFull with
       | some '\n' =>
-          let _ ← char '\n'
+          let _ ← charFull '\n'
           skipSpacing
       | _ => pure ()  -- backtrack would be needed here
   | _ => pure ()
 
 /-- Parse a literal string (unquoted word part) -/
-partial def readLiteral : Parser String :=
-  takeWhile1 fun c =>
+partial def readLiteral : FullParser String :=
+  takeWhile1Full fun c =>
     ¬ (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
        c == '"' || c == '\'' || c == '$' || c == '`' ||
        c == '|' || c == '&' || c == ';' || c == '<' ||
        c == '>' || c == '(' || c == ')' || c == '#')
 
 /-- Parse a single-quoted string -/
-def readSingleQuoted : Parser String := do
+def readSingleQuoted : FullParser String := do
   let _ ← singleQuote
-  let content ← takeWhile (· != '\'')
+  let content ← takeWhileFull (· != '\'')
   let _ ← singleQuote
   return content
 
 /-- Parse a double-quoted string (simplified) -/
-partial def readDoubleQuoted : Parser String := do
+partial def readDoubleQuoted : FullParser String := do
   let _ ← doubleQuote
-  let rec go (acc : List Char) : Parser String := do
-    match ← peek? with
-    | none => failure
+  let rec go (acc : List Char) : FullParser String := do
+    match ← peekFull with
+    | none => ShellCheck.Parser.Parsec.ShellParser.fail "unexpected end of input"
     | some '"' =>
         let _ ← doubleQuote
         return String.ofList acc.reverse
     | some '\\' =>
         let _ ← backslash
-        match ← peek? with
+        match ← peekFull with
         | some c =>
-            let _ ← anyChar
+            let _ ← anyCharFull
             go (c :: acc)
-        | none => failure
+        | none => ShellCheck.Parser.Parsec.ShellParser.fail "unexpected end of input"
     | some c =>
-        let _ ← anyChar
+        let _ ← anyCharFull
         go (c :: acc)
   go []
 
 /-- Parse a simple word -/
-def readWord : Parser String := do
-  let parts ← many1 (readLiteral <|> readSingleQuoted <|> readDoubleQuoted)
+def readWord : FullParser String := do
+  let parts ← many1Full (readLiteral <|> readSingleQuoted <|> readDoubleQuoted)
   return String.join parts
 
 /-- Parse a simple command (simplified) -/
-def readSimpleCommand : Parser (List String) := do
+def readSimpleCommand : FullParser (List String) := do
   skipSpacing
   let cmd ← readWord
-  let args ← many (skipSpacing *> readWord)
+  let args ← manyFull (skipSpacing *> readWord)
   return cmd :: args
 
 /-- Parse a comment -/
-def readComment : Parser String := do
-  let _ ← char '#'
-  takeWhile (· != '\n')
+def readComment : FullParser String := do
+  let _ ← charFull '#'
+  takeWhileFull (· != '\n')
 
 /-- State monad for token generation -/
 structure TokenGenState where
@@ -424,24 +410,30 @@ theorem variableChar_includes_digit (c : Char) :
   intro h
   simp [variableChar, variableStartChar, h]
 
-theorem freshId_increments : True := trivial  -- placeholder
+theorem freshId_increments : True := by
+  sorry
 
 theorem mkLiteralToken_creates_literal (_s : String) :
-    True := trivial  -- placeholder
+    True := by
+  sorry
 
 theorem readLiteral_nonempty (input : String) :
     input.length > 0 →
     (¬ input.toList.head!.isWhitespace) →
-    True := fun _ _ => trivial  -- placeholder
+    True := by
+  sorry
 
 theorem skipSpacing_consumes_whitespace :
-    True := trivial  -- placeholder
+    True := by
+  sorry
 
 theorem readSingleQuoted_preserves_content (_s : String) :
-    True := trivial  -- placeholder
+    True := by
+  sorry
 
 theorem readDoubleQuoted_handles_escapes :
-    True := trivial  -- placeholder
+    True := by
+  sorry
 
 /-- Shell keywords -/
 def shellKeywords : List String :=
@@ -493,93 +485,94 @@ def isWordTerminator (c : Char) : Bool :=
   c.isWhitespace || isOperatorStart c || c == '#'
 
 /-- Parse a specific keyword -/
-def keyword (kw : String) : Parser String := do
-  let word ← takeWhile1 (fun c => c.isAlpha || c == '_')
+def keyword (kw : String) : FullParser String := do
+  let word ← takeWhile1Full (fun c => c.isAlpha || c == '_')
   if word == kw then return word
-  else failure
+  else ShellCheck.Parser.Parsec.ShellParser.fail s!"expected keyword {kw}"
 
 /-- Parse optional whitespace (spaces and tabs, not newlines) -/
-def hspace : Parser Unit := do
-  let _ ← takeWhile (fun c => c == ' ' || c == '\t')
+def hspace : FullParser Unit := do
+  let _ ← takeWhileFull (fun c => c == ' ' || c == '\t')
   return ()
 
 /-- Parse mandatory horizontal whitespace -/
-def hspace1 : Parser Unit := do
-  let _ ← takeWhile1 (fun c => c == ' ' || c == '\t')
+def hspace1 : FullParser Unit := do
+  let _ ← takeWhile1Full (fun c => c == ' ' || c == '\t')
   return ()
 
 /-- Parse line continuation (backslash followed by newline) -/
-def lineContinuation : Parser Unit := do
-  let _ ← char '\\'
-  let _ ← char '\n'
+def lineContinuation : FullParser Unit := do
+  let _ ← charFull '\\'
+  let _ ← charFull '\n'
   return ()
 
 /-- Skip horizontal whitespace and line continuations -/
-partial def skipHSpacing : Parser Unit := do
+partial def skipHSpacing : FullParser Unit := do
   hspace
-  match ← peek? with
+  match ← peekFull with
   | some '\\' =>
-      match ← optional lineContinuation with
+      match ← optionalFull lineContinuation with
       | some () => skipHSpacing
       | none => pure ()
   | some '#' =>
       -- Skip comments (but not newlines)
-      let _ ← takeWhile (· != '\n')
+      let _ ← takeWhileFull (· != '\n')
       pure ()
   | _ => pure ()
 
 /-- Skip all whitespace including newlines and comments -/
-partial def skipAllSpacing : Parser Unit := do
-  spaces
-  match ← peek? with
+partial def skipAllSpacing : FullParser Unit := do
+  let _ ← takeWhileFull (fun c => c == ' ' || c == '\t' || c == '\n' || c == '\r')
+  match ← peekFull with
   | some '#' =>
-      let _ ← takeWhile (· != '\n')
+      let _ ← takeWhileFull (· != '\n')
       skipAllSpacing
   | some '\\' =>
-      match ← optional lineContinuation with
+      match ← optionalFull lineContinuation with
       | some () => skipAllSpacing
       | none => pure ()
   | _ => pure ()
 
 /-- Parse && operator -/
-def andIf : Parser Unit := do
-  let _ ← string "&&"
+def andIf : FullParser Unit := do
+  let _ ← stringFull "&&"
   return ()
 
 /-- Parse || operator -/
-def orIf : Parser Unit := do
-  let _ ← string "||"
+def orIf : FullParser Unit := do
+  let _ ← stringFull "||"
   return ()
 
 /-- Parse | or |& operator -/
-def pipeOp : Parser String := do
-  let _ ← char '|'
-  match ← peek? with
+def pipeOp : FullParser String := do
+  let _ ← charFull '|'
+  match ← peekFull with
   | some '&' =>
-      let _ ← char '&'
+      let _ ← charFull '&'
       return "|&"
-  | some '|' => failure  -- This is || not pipe
+  | some '|' =>
+      ShellCheck.Parser.Parsec.ShellParser.fail "expected pipe operator"
   | _ => return "|"
 
 /-- Parse ; separator -/
-def semiOp : Parser Unit := do
-  let _ ← char ';'
+def semiOp : FullParser Unit := do
+  let _ ← charFull ';'
   -- Make sure it's not ;;
-  match ← peek? with
-  | some ';' => failure
+  match ← peekFull with
+  | some ';' => ShellCheck.Parser.Parsec.ShellParser.fail "expected ';'"
   | _ => return ()
 
 /-- Parse & for backgrounding (not &&) -/
-def bgOp : Parser Unit := do
-  let _ ← char '&'
-  match ← peek? with
-  | some '&' => failure  -- This is && not &
-  | some '>' => failure  -- This is &> redirection
+def bgOp : FullParser Unit := do
+  let _ ← charFull '&'
+  match ← peekFull with
+  | some '&' => ShellCheck.Parser.Parsec.ShellParser.fail "expected '&'"
+  | some '>' => ShellCheck.Parser.Parsec.ShellParser.fail "expected '&'"
   | _ => return ()
 
 /-- Parse newline as separator -/
-def newlineSep : Parser Unit := do
-  let _ ← char '\n'
+def newlineSep : FullParser Unit := do
+  let _ ← charFull '\n'
   return ()
 
 /-!
@@ -591,14 +584,14 @@ def isGlobChar (c : Char) : Bool :=
   c == '*' || c == '?' || c == '['
 
 /-- Parse a glob pattern character -/
-def readGlobChar : Parser Char := do
-  let c ← anyChar
+def readGlobChar : FullParser Char := do
+  let c ← anyCharFull
   if isGlobChar c then return c
-  else failure
+  else ShellCheck.Parser.Parsec.ShellParser.fail "expected glob"
 
 /-- Read an unquoted word part (literal text) stopping at special chars -/
-partial def readUnquotedPart : Parser String := do
-  takeWhile1 fun c =>
+partial def readUnquotedPart : FullParser String := do
+  takeWhile1Full fun c =>
     ¬ (c.isWhitespace ||
        c == '"' || c == '\'' || c == '`' ||
        c == '$' || c == '\\' ||
@@ -610,16 +603,17 @@ partial def readUnquotedPart : Parser String := do
        isGlobChar c)
 
 /-- Parse an escape sequence in unquoted context -/
-def readUnquotedEscape : Parser Char := do
-  let _ ← char '\\'
-  match ← peek? with
+def readUnquotedEscape : FullParser Char := do
+  let _ ← charFull '\\'
+  match ← peekFull with
   | some '\n' =>
-      let _ ← char '\n'
-      failure  -- Line continuation, not an escape
+      let _ ← charFull '\n'
+      ShellCheck.Parser.Parsec.ShellParser.fail "line continuation"
   | some c =>
-      let _ ← anyChar
+      let _ ← anyCharFull
       return c
-  | none => failure
+  | none =>
+      ShellCheck.Parser.Parsec.ShellParser.fail "unexpected end of input"
 
 /-- Parse a dollar expression (variable, command sub, arithmetic) -/
 partial def readDollarExpr (mkTok : InnerToken Token → Nat → Nat → TokenBuilderM Token) (line col : Nat) : TokenBuilderM Token := do
