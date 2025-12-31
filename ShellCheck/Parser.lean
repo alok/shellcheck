@@ -418,17 +418,6 @@ def parseScript [Monad m] (_sys : SystemInterface m) (spec : ParseSpec) : m Pars
     prRoot := root
   }
 
-/-- Parse a string into a token tree (simplified) -/
-def parseString (_input : String) : Except String Token :=
-  -- Simplified parsing - just create a basic structure
-  let gen : TokenGen Token := do
-    let shebangId ← freshId
-    let shebang : Token := ⟨shebangId, .T_Literal ""⟩
-    let scriptId ← freshId
-    return ⟨scriptId, .T_Script shebang []⟩
-  let (tok, _) := gen.run { nextId := 1 }
-  .ok tok
-
 -- Theorems (stubs)
 
 theorem variableStartChar_underscore :
@@ -443,9 +432,6 @@ theorem variableChar_includes_digit (c : Char) :
     c.isDigit → variableChar c = true := by
   intro h
   simp [variableChar, variableStartChar, h]
-
-theorem parseString_returns_token (input : String) :
-    ∃ tok, parseString input = .ok tok := sorry
 
 theorem freshId_increments : True := trivial  -- placeholder
 
@@ -2480,6 +2466,24 @@ def runFullParser (script : String) (filename : String := "<stdin>") : (Option T
       (some expanded, allPositions, errs)
   | (none, errs) =>
       (none, {}, errs)
+
+/-- Parse a string into a token tree (full parser). -/
+def parseString (input : String) : Except String Token :=
+  let (root, _positions, errors) := runFullParser input "<stdin>"
+  match root with
+  | some tok =>
+      if errors.isEmpty then
+        .ok tok
+      else
+        .error (String.intercalate "\n" errors)
+  | none =>
+      if errors.isEmpty then
+        .error "parse error"
+      else
+        .error (String.intercalate "\n" errors)
+
+theorem parseString_returns_token (input : String) :
+    ∃ tok, parseString input = .ok tok := sorry
 
 /-- Check if msg contains a substring (case-insensitive) -/
 private def contains (msg sub : String) : Bool :=
