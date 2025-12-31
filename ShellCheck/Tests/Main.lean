@@ -49,6 +49,7 @@ def main : IO UInt32 := do
   ok := ok && (← checkProp "simple echo round-trip" prop_simple_echo_roundtrip cfg)
   ok := ok && (← checkProp "positions valid for simple scripts" prop_positions_valid_for_simple_scripts cfg)
   ok := ok && (← checkProp "simple assignment parses" prop_simple_assignment_parses cfg)
+  ok := ok && (← checkProp "assignment positions valid" prop_assignment_positions_valid cfg)
 
   ok := ok && (← checkRegression "readUntil [[ ignores quoted terminator" test_readUntil_doubleBracket_ignores_quoted_terminator)
   ok := ok && (← checkRegression "readUntil [ ignores quoted terminator" test_readUntil_singleBracket_ignores_quoted_terminator)

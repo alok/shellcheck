@@ -173,4 +173,17 @@ abbrev prop_simple_assignment_parses : Prop :=
     Plausible.NamedBinder "value" <| ∀ value : SafeWord,
       parseOk (assignmentScript name value) = true
 
+private def assignmentPositionsOk (name : SafeVar) (value : SafeWord) : Bool :=
+  let script := assignmentScript name value
+  let (root, positions, errors) := runFullParser script "<test>"
+  match root with
+  | some _ => errors.isEmpty && positionsOk positions
+  | none => false
+
+/-- Positions are nonzero and ordered for simple assignments. -/
+abbrev prop_assignment_positions_valid : Prop :=
+  Plausible.NamedBinder "var" <| ∀ name : SafeVar,
+    Plausible.NamedBinder "value" <| ∀ value : SafeWord,
+      assignmentPositionsOk name value = true
+
 end ShellCheck.Tests.ParserProps
