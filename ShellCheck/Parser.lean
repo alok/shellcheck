@@ -40,28 +40,28 @@ export ShellCheck.Parser.Types (
 
 /-- Basic token parsers (ShellParser-backed). -/
 
-def backslash : FullParser Char := charFull '\\'
+def backslash : Parser Char := charFull '\\'
 
-def linefeed : FullParser Char := charFull '\n'
+def linefeed : Parser Char := charFull '\n'
 
-def singleQuote : FullParser Char := charFull '\''
+def singleQuote : Parser Char := charFull '\''
 
-def doubleQuote : FullParser Char := charFull '"'
+def doubleQuote : Parser Char := charFull '"'
 
-def variableStart : FullParser Char :=
+def variableStart : Parser Char :=
   ShellCheck.Parser.Parsec.satisfy variableStartChar
 
-def variableChars : FullParser Char :=
+def variableChars : Parser Char :=
   ShellCheck.Parser.Parsec.satisfy variableChar
 
 /-- Parse a variable name -/
-def variableName : FullParser String := do
+def variableName : Parser String := do
   let first ← variableStart
   let rest ← takeWhileFull variableChar
   return String.ofList (first :: rest.toList)
 
 /-- Skip whitespace and comments -/
-partial def skipSpacing : FullParser Unit := do
+partial def skipSpacing : Parser Unit := do
   let _ ← manyFull (ShellCheck.Parser.Parsec.satisfy fun c => c == ' ' || c == '\t')
   match ← peekFull with
   | some '#' =>
@@ -77,7 +77,7 @@ partial def skipSpacing : FullParser Unit := do
   | _ => pure ()
 
 /-- Parse a literal string (unquoted word part) -/
-partial def readLiteral : FullParser String :=
+partial def readLiteral : Parser String :=
   takeWhile1Full fun c =>
     ¬ (c == ' ' || c == '\t' || c == '\n' || c == '\r' ||
        c == '"' || c == '\'' || c == '$' || c == '`' ||
@@ -85,16 +85,16 @@ partial def readLiteral : FullParser String :=
        c == '>' || c == '(' || c == ')' || c == '#')
 
 /-- Parse a single-quoted string -/
-def readSingleQuoted : FullParser String := do
+def readSingleQuoted : Parser String := do
   let _ ← singleQuote
   let content ← takeWhileFull (· != '\'')
   let _ ← singleQuote
   return content
 
 /-- Parse a double-quoted string (simplified) -/
-partial def readDoubleQuoted : FullParser String := do
+partial def readDoubleQuoted : Parser String := do
   let _ ← doubleQuote
-  let rec go (acc : List Char) : FullParser String := do
+  let rec go (acc : List Char) : Parser String := do
     match ← peekFull with
     | none => ShellCheck.Parser.Parsec.ShellParser.fail "unexpected end of input"
     | some '"' =>
@@ -113,19 +113,19 @@ partial def readDoubleQuoted : FullParser String := do
   go []
 
 /-- Parse a simple word -/
-def readWord : FullParser String := do
+def readWord : Parser String := do
   let parts ← many1Full (readLiteral <|> readSingleQuoted <|> readDoubleQuoted)
   return String.join parts
 
 /-- Parse a simple command (simplified) -/
-def readSimpleCommand : FullParser (List String) := do
+def readSimpleCommand : Parser (List String) := do
   skipSpacing
   let cmd ← readWord
   let args ← manyFull (skipSpacing *> readWord)
   return cmd :: args
 
 /-- Parse a comment -/
-def readComment : FullParser String := do
+def readComment : Parser String := do
   let _ ← charFull '#'
   takeWhileFull (· != '\n')
 
@@ -219,29 +219,29 @@ def isWordTerminator (c : Char) : Bool :=
   c.isWhitespace || isOperatorStart c || c == '#'
 
 /-- Parse a specific keyword -/
-def keyword (kw : String) : FullParser String := do
+def keyword (kw : String) : Parser String := do
   let word ← takeWhile1Full (fun c => c.isAlpha || c == '_')
   if word == kw then return word
   else ShellCheck.Parser.Parsec.ShellParser.fail s!"expected keyword {kw}"
 
 /-- Parse optional whitespace (spaces and tabs, not newlines) -/
-def hspace : FullParser Unit := do
+def hspace : Parser Unit := do
   let _ ← takeWhileFull (fun c => c == ' ' || c == '\t')
   return ()
 
 /-- Parse mandatory horizontal whitespace -/
-def hspace1 : FullParser Unit := do
+def hspace1 : Parser Unit := do
   let _ ← takeWhile1Full (fun c => c == ' ' || c == '\t')
   return ()
 
 /-- Parse line continuation (backslash followed by newline) -/
-def lineContinuation : FullParser Unit := do
+def lineContinuation : Parser Unit := do
   let _ ← charFull '\\'
   let _ ← charFull '\n'
   return ()
 
 /-- Skip horizontal whitespace and line continuations -/
-partial def skipHSpacing : FullParser Unit := do
+partial def skipHSpacing : Parser Unit := do
   hspace
   match ← peekFull with
   | some '\\' =>
@@ -255,7 +255,7 @@ partial def skipHSpacing : FullParser Unit := do
   | _ => pure ()
 
 /-- Skip all whitespace including newlines and comments -/
-partial def skipAllSpacing : FullParser Unit := do
+partial def skipAllSpacing : Parser Unit := do
   let _ ← takeWhileFull (fun c => c == ' ' || c == '\t' || c == '\n' || c == '\r')
   match ← peekFull with
   | some '#' =>
@@ -268,17 +268,17 @@ partial def skipAllSpacing : FullParser Unit := do
   | _ => pure ()
 
 /-- Parse && operator -/
-def andIf : FullParser Unit := do
+def andIf : Parser Unit := do
   let _ ← stringFull "&&"
   return ()
 
 /-- Parse || operator -/
-def orIf : FullParser Unit := do
+def orIf : Parser Unit := do
   let _ ← stringFull "||"
   return ()
 
 /-- Parse | or |& operator -/
-def pipeOp : FullParser String := do
+def pipeOp : Parser String := do
   let _ ← charFull '|'
   match ← peekFull with
   | some '&' =>
@@ -289,7 +289,7 @@ def pipeOp : FullParser String := do
   | _ => return "|"
 
 /-- Parse ; separator -/
-def semiOp : FullParser Unit := do
+def semiOp : Parser Unit := do
   let _ ← charFull ';'
   -- Make sure it's not ;;
   match ← peekFull with
@@ -297,7 +297,7 @@ def semiOp : FullParser Unit := do
   | _ => return ()
 
 /-- Parse & for backgrounding (not &&) -/
-def bgOp : FullParser Unit := do
+def bgOp : Parser Unit := do
   let _ ← charFull '&'
   match ← peekFull with
   | some '&' => ShellCheck.Parser.Parsec.ShellParser.fail "expected '&'"
@@ -305,7 +305,7 @@ def bgOp : FullParser Unit := do
   | _ => return ()
 
 /-- Parse newline as separator -/
-def newlineSep : FullParser Unit := do
+def newlineSep : Parser Unit := do
   let _ ← charFull '\n'
   return ()
 
@@ -318,13 +318,13 @@ def isGlobChar (c : Char) : Bool :=
   c == '*' || c == '?' || c == '['
 
 /-- Parse a glob pattern character -/
-def readGlobChar : FullParser Char := do
+def readGlobChar : Parser Char := do
   let c ← anyCharFull
   if isGlobChar c then return c
   else ShellCheck.Parser.Parsec.ShellParser.fail "expected glob"
 
 /-- Read an unquoted word part (literal text) stopping at special chars -/
-partial def readUnquotedPart : FullParser String := do
+partial def readUnquotedPart : Parser String := do
   takeWhile1Full fun c =>
     ¬ (c.isWhitespace ||
        c == '"' || c == '\'' || c == '`' ||
@@ -337,7 +337,7 @@ partial def readUnquotedPart : FullParser String := do
        isGlobChar c)
 
 /-- Parse an escape sequence in unquoted context -/
-def readUnquotedEscape : FullParser Char := do
+def readUnquotedEscape : Parser Char := do
   let _ ← charFull '\\'
   match ← peekFull with
   | some '\n' =>
@@ -350,14 +350,11 @@ def readUnquotedEscape : FullParser Char := do
       ShellCheck.Parser.Parsec.ShellParser.fail "unexpected end of input"
 
 /-!
-### Full Parser with Token Generation
+### Parser with Token Generation
 
-This file historically implemented a custom `FullParser` state monad.
-We are migrating that infrastructure to the new Parsec-based `ShellParser`
-defined in `ShellCheck.Parser.Parsec`. To keep the rest of the grammar stable
-while we migrate incrementally, we provide a small compatibility layer that
-preserves the old names (`FullParser`, `peekFull`, `manyFull`, …) but delegates
-to the Parsec implementation.
+This file historically implemented a custom parser monad.
+The implementation now targets the Parsec-based `ShellParser` defined in
+`ShellCheck.Parser.Parsec`, while keeping the existing `*Full` helper names.
 -/
 
 /-- Parse a shellcheck directive from comment text.
@@ -403,7 +400,7 @@ where
     | none => none
 
 /-- Skip whitespace and comments, collecting shellcheck annotations -/
-partial def skipAllSpaceCollectAnnotations : FullParser (List Annotation) := do
+partial def skipAllSpaceCollectAnnotations : Parser (List Annotation) := do
   let _ ← takeWhileFull (fun c => c.isWhitespace)
   match ← peekFull with
   | some '#' =>
@@ -435,7 +432,7 @@ We keep the raw content as a string because array indices are interpreted
 differently for associative arrays vs indexed arrays, and because reparsing them
 (with proper tokenization) is a separate post-pass in the upstream
 implementation. -/
-partial def readArrayIndexFull : FullParser Token := do
+partial def readArrayIndexFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let _ ← charFull '['
   let (contentLine, contentCol) ← currentPos
@@ -452,7 +449,7 @@ where
   can represent nested brackets like `x[y[z=1]]=1` without prematurely stopping
   at the inner `]`. -/
   readIndexContent (acc : List Char) (depth : Nat)
-      (inSingle inDouble inBacktick escaped : Bool) : FullParser String := do
+      (inSingle inDouble inBacktick escaped : Bool) : Parser String := do
     match ← peekFull with
     | none => pure (String.ofList acc.reverse)
     | some c =>
@@ -511,7 +508,7 @@ where
           readIndexContent (c :: acc) depth false false false false
 
 /-- Read an array value: (elem1 elem2 ...) -/
-partial def readArrayFull : FullParser Token := do
+partial def readArrayFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let _ ← charFull '('
   skipAllSpaceFull
@@ -519,7 +516,7 @@ partial def readArrayFull : FullParser Token := do
   let _ ← charFull ')'
   mkTokenFullAt (.T_Array elems) startLine startCol
 where
-  readArrayElements (acc : List Token) : FullParser (List Token) := do
+  readArrayElements (acc : List Token) : Parser (List Token) := do
     skipAllSpaceFull
     match ← peekFull with
     | none => pure acc.reverse
@@ -528,7 +525,7 @@ where
         let elem ← readArrayElement
         readArrayElements (elem :: acc)
 
-  readArrayElement : FullParser Token := do
+  readArrayElement : Parser Token := do
     skipAllSpaceFull
     match ← peekFull with
     | some '[' =>
@@ -537,12 +534,12 @@ where
         | none => readRegularElement
     | _ => readRegularElement
 
-  readRegularElement : FullParser Token := do
+  readRegularElement : Parser Token := do
     match ← peekFull with
     | some '(' => readArrayFull
     | _ => readWordFull
 
-  readIndexedElement : FullParser Token := do
+  readIndexedElement : Parser Token := do
     let (startLine, startCol) ← currentPos
     let indices ← readIndices []
     let _ ← charFull '='
@@ -556,14 +553,14 @@ where
       | none => mkTokenFull (.T_Literal "")
     mkTokenFullAt (.T_IndexedElement indices value) startLine startCol
 
-  readIndices (acc : List Token) : FullParser (List Token) := do
+  readIndices (acc : List Token) : Parser (List Token) := do
     let idx ← readArrayIndexFull
     match ← peekFull with
     | some '[' => readIndices (idx :: acc)
     | _ => pure (idx :: acc).reverse
 
 /-- Read an assignment: VAR=value or VAR=(array) or VAR+=value -/
-partial def readAssignmentFull : FullParser Token := do
+partial def readAssignmentFull : Parser Token := do
   -- Capture position at the START of the assignment
   let (startLine, startCol) ← currentPos
   -- Read variable name
@@ -592,7 +589,7 @@ partial def readAssignmentFull : FullParser Token := do
   mkTokenFullAt (.T_Assignment mode varName indices value) startLine startCol
 
 /-- Read a simple command (assignments + words), with redirects -/
-partial def readSimpleCommandFull : FullParser Token := do
+partial def readSimpleCommandFull : Parser Token := do
   skipHSpaceFull
   -- Don't parse reserved keywords as commands
   let reserved ← isReservedKeyword
@@ -640,7 +637,7 @@ where
     | _ => none
 
   /-- Consume heredoc content until we find the delimiter line -/
-  consumeHereDocContent (delim : String) (dashedFlag : Dashed) : FullParser Unit := do
+  consumeHereDocContent (delim : String) (dashedFlag : Dashed) : Parser Unit := do
     -- First skip to end of current line if not already there
     let _ ← takeWhileFull (· != '\n')
     -- Consume the newline
@@ -648,7 +645,7 @@ where
     | some '\n' => let _ ← charFull '\n'; pure ()
     | _ => pure ()
     -- Now consume lines until we hit the delimiter
-    let rec consumeLines : FullParser Unit := do
+    let rec consumeLines : Parser Unit := do
       match ← peekFull with
       | none => pure ()  -- EOF
       | some _ =>
@@ -689,7 +686,7 @@ where
   -- For declaration builtins (declare, local, export, etc.), we keep trying
   -- to parse assignments even after other words/options have been parsed.
   readAssignsWordsAndRedirects (assignAcc : List Token) (wordAcc : List Token) (redirAcc : List Token)
-      : FullParser (List Token × List Token × List Token) := do
+      : Parser (List Token × List Token × List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | none => pure (assignAcc.reverse, wordAcc.reverse, redirAcc.reverse)
@@ -741,7 +738,7 @@ where
             readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
 
   /-- Read a heredoc delimiter, returning (delimiter_string, is_quoted) -/
-  readHereDocDelimiter : FullParser (String × Bool) := do
+  readHereDocDelimiter : Parser (String × Bool) := do
     skipHSpaceFull
     match ← peekFull with
     | some '\'' =>
@@ -767,7 +764,7 @@ where
         pure (delim, false)
 
   /-- Read a redirect operator and its target -/
-  readRedirectFull : FullParser Token := do
+  readRedirectFull : Parser Token := do
     let opStart ← peekFull
     let op ← match opStart with
       | some '>' =>
@@ -834,7 +831,7 @@ where
       | none => failure
 
   /-- Read a fd redirect like 2>, 2>>, 2>&1 -/
-  readFdRedirectFull : FullParser Token := do
+  readFdRedirectFull : Parser Token := do
     let (startLine, startCol) ← currentPos
     let fd ← takeWhile1Full Char.isDigit
     let opStart ← peekFull
@@ -843,8 +840,8 @@ where
     mkTokenFullAt (.T_FdRedirect fd redir) startLine startCol
 
 /-- Read raw content until `terminator` (not consumed). Fails on EOF. -/
-partial def readUntilStringFull (terminator : String) : FullParser String := do
-  let rec go (acc : List Char) (inSingle inDouble escaped : Bool) : FullParser String := do
+partial def readUntilStringFull (terminator : String) : Parser String := do
+  let rec go (acc : List Char) (inSingle inDouble escaped : Bool) : Parser String := do
     -- Only consider the terminator when we're not in a quoted/escaped context.
     if !inSingle && !inDouble && !escaped then
       let look ← peekStringFull terminator.length
@@ -881,7 +878,7 @@ partial def readUntilStringFull (terminator : String) : FullParser String := do
   go [] false false false
 
 /-- Read a `[[ ... ]]` condition expression. -/
-partial def readDoubleBracketConditionFull : FullParser Token := do
+partial def readDoubleBracketConditionFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let _ ← stringFull "[["
   let condTokens ← readCondTokens []
@@ -902,7 +899,7 @@ partial def readDoubleBracketConditionFull : FullParser Token := do
   mkTokenFullAt (.T_Condition .doubleBracket expr) startLine startCol
 where
   /-- Tokenize the body of `[[ ... ]]` into a list of operator/word tokens. -/
-  readCondTokens (acc : List Token) : FullParser (List Token) := do
+  readCondTokens (acc : List Token) : Parser (List Token) := do
     skipAllSpaceFull
     let done ← peekKeyword "]]"
     if done then
@@ -925,7 +922,7 @@ where
             readCondTokens (w :: acc)
 
 /-- Read a pipe sequence: cmd | cmd | cmd -/
-partial def readPipeSequenceFull : FullParser Token := do
+partial def readPipeSequenceFull : Parser Token := do
   let first ← readPipeCommandFull
   skipHSpaceFull
   let (seps, cmds) ← readPipeContinuation [] [first]
@@ -935,7 +932,7 @@ partial def readPipeSequenceFull : FullParser Token := do
     mkTokenFull (.T_Pipeline seps cmds)
 where
   /-- Read a command that can appear in a pipeline -/
-  readPipeCommandFull : FullParser Token := do
+  readPipeCommandFull : Parser Token := do
     skipHSpaceFull
     let isDoubleBracket ← peekKeyword "[["
     if isDoubleBracket then
@@ -972,7 +969,7 @@ where
                       | none => readSimpleCommandFull
 
   /-- Read a POSIX function definition in pipe context: name() { body } -/
-  readPosixFunctionInPipe : FullParser Token := do
+  readPosixFunctionInPipe : Parser Token := do
     let name ← takeWhile1Full (fun c => variableChar c || c == '-' || c == '.')
     skipHSpaceFull
     let _ ← stringFull "()"
@@ -982,7 +979,7 @@ where
     mkTokenFull (.T_Function ⟨false⟩ ⟨true⟩ name body)
 
   -- Forward declarations for compound commands in pipe
-  readBraceGroupInPipe : FullParser Token := do
+  readBraceGroupInPipe : Parser Token := do
     let _ ← charFull '{'
     skipAllSpaceFull
     let cmds ← readTermInPipe
@@ -992,7 +989,7 @@ where
     let _ ← charFull '}'
     mkTokenFull (.T_BraceGroup cmds)
 
-  readSubshellInPipe : FullParser Token := do
+  readSubshellInPipe : Parser Token := do
     match ← optionalFull (attemptFull (stringFull "((")) with
     | some _ =>
         let content ← readArithContentHelper
@@ -1007,7 +1004,7 @@ where
         let _ ← charFull ')'
         mkTokenFull (.T_Subshell cmds)
 
-  readIfInPipe : FullParser Token := do
+  readIfInPipe : Parser Token := do
     let _ ← consumeKeyword "if"
     skipAllSpaceFull
     let cond ← readTermInPipe
@@ -1021,7 +1018,7 @@ where
     mkTokenFull (.T_IfExpression branches elseBody)
 
   readElifElseInPipe (branches : List (List Token × List Token)) (_acc : List Token)
-      : FullParser (List (List Token × List Token) × List Token) := do
+      : Parser (List (List Token × List Token) × List Token) := do
     skipHSpaceFull
     let _ ← optionalFull (charFull ';')
     skipAllSpaceFull
@@ -1052,7 +1049,7 @@ where
         let _ ← consumeKeyword "fi"
         pure (branches, [])
 
-  readWhileInPipe : FullParser Token := do
+  readWhileInPipe : Parser Token := do
     let _ ← consumeKeyword "while"
     skipAllSpaceFull
     let cond ← readTermInPipe
@@ -1068,7 +1065,7 @@ where
     let _ ← consumeKeyword "done"
     mkTokenFull (.T_WhileExpression cond body)
 
-  readUntilInPipe : FullParser Token := do
+  readUntilInPipe : Parser Token := do
     let _ ← consumeKeyword "until"
     skipAllSpaceFull
     let cond ← readTermInPipe
@@ -1084,10 +1081,10 @@ where
     let _ ← consumeKeyword "done"
     mkTokenFull (.T_UntilExpression cond body)
 
-  readForInPipe : FullParser Token := do
+  readForInPipe : Parser Token := do
     attemptFull readForArithInPipe <|> readForInInPipe
 
-  readForArithInPipe : FullParser Token := do
+  readForArithInPipe : Parser Token := do
     let _ ← consumeKeyword "for"
     skipHSpaceFull
     let _ ← stringFull "(("
@@ -1115,7 +1112,7 @@ where
     let _ ← consumeKeyword "done"
     mkTokenFull (.T_ForArithmetic init cond incr body)
 
-  readForInInPipe : FullParser Token := do
+  readForInInPipe : Parser Token := do
     let _ ← consumeKeyword "for"
     skipHSpaceFull
     let varName ← takeWhile1Full variableChar
@@ -1138,7 +1135,7 @@ where
     let _ ← consumeKeyword "done"
     mkTokenFull (.T_ForIn varName words body)
 
-  readForWordsInPipe (acc : List Token) : FullParser (List Token) := do
+  readForWordsInPipe (acc : List Token) : Parser (List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | none => pure acc.reverse
@@ -1151,7 +1148,7 @@ where
             let word ← readWordFull
             readForWordsInPipe (word :: acc)
 
-  readCaseInPipe : FullParser Token := do
+  readCaseInPipe : Parser Token := do
     let _ ← consumeKeyword "case"
     skipHSpaceFull
     let word ← readWordFull
@@ -1163,7 +1160,7 @@ where
     mkTokenFull (.T_CaseExpression word cases)
 
   readCaseItemsInPipe (acc : List (CaseType × List Token × List Token))
-      : FullParser (List (CaseType × List Token × List Token)) := do
+      : Parser (List (CaseType × List Token × List Token)) := do
     skipAllSpaceFull
     let isEsac ← peekKeyword "esac"
     if isEsac then pure acc.reverse
@@ -1175,7 +1172,7 @@ where
       let (cmds, terminator) ← readCaseBodyInPipe [] .caseBreak
       readCaseItemsInPipe ((terminator, patterns, cmds) :: acc)
 
-  readPatternsInPipe (acc : List Token) : FullParser (List Token) := do
+  readPatternsInPipe (acc : List Token) : Parser (List Token) := do
     skipHSpaceFull
     let pat ← readPatternWordFull
     skipHSpaceFull
@@ -1185,7 +1182,7 @@ where
         readPatternsInPipe (pat :: acc)
     | _ => pure (pat :: acc).reverse
 
-  readCaseBodyInPipe (acc : List Token) (termType : CaseType) : FullParser (List Token × CaseType) := do
+  readCaseBodyInPipe (acc : List Token) (termType : CaseType) : Parser (List Token × CaseType) := do
     skipAllSpaceFull  -- Skip newlines and spaces
     match ← peekFull with
     | none => pure (acc.reverse, termType)
@@ -1213,7 +1210,7 @@ where
           let cmd ← readAndOrInPipe
           readCaseBodyInPipe (cmd :: acc) termType
 
-  readFunctionInPipe : FullParser Token := do
+  readFunctionInPipe : Parser Token := do
     let _ ← consumeKeyword "function"
     skipHSpaceFull
     let name ← takeWhile1Full (fun c => variableChar c || c == '-' || c == '.')
@@ -1223,7 +1220,7 @@ where
     let body ← readBraceGroupInPipe
     mkTokenFull (.T_Function ⟨true⟩ ⟨false⟩ name body)
 
-  readSelectInPipe : FullParser Token := do
+  readSelectInPipe : Parser Token := do
     let _ ← consumeKeyword "select"
     skipHSpaceFull
     let varName ← takeWhile1Full variableChar
@@ -1248,7 +1245,7 @@ where
     let _ ← consumeKeyword "done"
     mkTokenFull (.T_SelectIn varName words body)
 
-  readSelectWordsInPipe (acc : List Token) : FullParser (List Token) := do
+  readSelectWordsInPipe (acc : List Token) : Parser (List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | none => pure acc.reverse
@@ -1264,11 +1261,11 @@ where
   -- Self-contained term/andor for inside pipe context
   -- These form a mutually recursive group within the where clause
 
-  readTermInPipe : FullParser (List Token) := do
+  readTermInPipe : Parser (List Token) := do
     let first ← readAndOrInPipe
     readTermContinuationInPipe [first]
 
-  readTermContinuationInPipe (acc : List Token) : FullParser (List Token) := do
+  readTermContinuationInPipe (acc : List Token) : Parser (List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | some ';' =>
@@ -1311,11 +1308,11 @@ where
           | none => pure acc.reverse
     | _ => pure acc.reverse
 
-  readAndOrInPipe : FullParser Token := do
+  readAndOrInPipe : Parser Token := do
     let first ← readPipelineInPipe
     readAndOrContinuationInPipe first
 
-  readAndOrContinuationInPipe (left : Token) : FullParser Token := do
+  readAndOrContinuationInPipe (left : Token) : Parser Token := do
     skipHSpaceFull
     match ← peekFull with
     | some '&' =>
@@ -1336,7 +1333,7 @@ where
         | none => pure left
     | _ => pure left
 
-  readPipelineInPipe : FullParser Token := do
+  readPipelineInPipe : Parser Token := do
     skipHSpaceFull
     let banged ← optionalFull (charFull '!' <* skipHSpaceFull)
     let pipeline ← readPipeSequenceInPipe
@@ -1344,7 +1341,7 @@ where
     | some _ => mkTokenFull (.T_Banged pipeline)
     | none => pure pipeline
 
-  readPipeSequenceInPipe : FullParser Token := do
+  readPipeSequenceInPipe : Parser Token := do
     let first ← readPipeCommandFull
     skipHSpaceFull
     let (seps, cmds) ← readPipeContinuationInPipe [] [first]
@@ -1353,7 +1350,7 @@ where
     else
       mkTokenFull (.T_Pipeline seps cmds)
 
-  readPipeContinuationInPipe (seps : List Token) (cmds : List Token) : FullParser (List Token × List Token) := do
+  readPipeContinuationInPipe (seps : List Token) (cmds : List Token) : Parser (List Token × List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | some '|' =>
@@ -1369,7 +1366,7 @@ where
           readPipeContinuationInPipe (sepTok :: seps) (cmd :: cmds)
     | _ => pure (seps.reverse, cmds.reverse)
 
-  readPipeOpInPipe : FullParser String := do
+  readPipeOpInPipe : Parser String := do
     let _ ← charFull '|'
     match ← peekFull with
     | some '&' =>
@@ -1377,7 +1374,7 @@ where
         pure "|&"
     | _ => pure "|"
 
-  readPipeContinuation (seps : List Token) (cmds : List Token) : FullParser (List Token × List Token) := do
+  readPipeContinuation (seps : List Token) (cmds : List Token) : Parser (List Token × List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | some '|' =>
@@ -1393,7 +1390,7 @@ where
           readPipeContinuation (sepTok :: seps) (cmd :: cmds)
     | _ => pure (seps.reverse, cmds.reverse)
 
-  readPipeOpFull : FullParser String := do
+  readPipeOpFull : Parser String := do
     let _ ← charFull '|'
     match ← peekFull with
     | some '&' =>
@@ -1402,7 +1399,7 @@ where
     | _ => pure "|"
 
 /-- Read a pipeline: [!] pipe_sequence -/
-def readPipelineFull : FullParser Token := do
+def readPipelineFull : Parser Token := do
   skipHSpaceFull
   let banged ← optionalFull (charFull '!' <* skipHSpaceFull)
   let pipeline ← readPipeSequenceFull
@@ -1411,12 +1408,12 @@ def readPipelineFull : FullParser Token := do
   | none => pure pipeline
 
 /-- Read an and-or list: pipeline ((&&|||) pipeline)* -/
-partial def readAndOrFull : FullParser Token := do
+partial def readAndOrFull : Parser Token := do
   let first ← readPipelineFull
   skipHSpaceFull
   readAndOrContinuation first
 where
-  readAndOrContinuation (left : Token) : FullParser Token := do
+  readAndOrContinuation (left : Token) : Parser Token := do
     skipHSpaceFull
     match ← peekFull with
     | some '&' =>
@@ -1441,7 +1438,7 @@ where
         pure left
 
 /-- Read an and-or with any preceding shellcheck annotations -/
-partial def readAndOrWithAnnotations : FullParser Token := do
+partial def readAndOrWithAnnotations : Parser Token := do
   let annotations ← skipAllSpaceCollectAnnotations
   let cmd ← readAndOrFull
   if annotations.isEmpty then
@@ -1450,7 +1447,7 @@ partial def readAndOrWithAnnotations : FullParser Token := do
     mkTokenFull (.T_Annotation annotations cmd)
 
 /-- Read a term: and-or ((;|&|newline) and-or)* -/
-partial def readTermFull : FullParser (List Token) := do
+partial def readTermFull : Parser (List Token) := do
   -- The caller should have already skipped initial space
   let first ← readAndOrFull
   readTermContinuation [first]
@@ -1462,7 +1459,7 @@ where
 
   This avoids silently truncating the parse when the next command exists but is
   malformed (e.g. an invalid `case` pattern). -/
-  parseNextAfterSeparator : FullParser (Option Token) := do
+  parseNextAfterSeparator : Parser (Option Token) := do
     let annots ← skipAllSpaceCollectAnnotations
     match ← peekFull with
     | none => pure none
@@ -1479,7 +1476,7 @@ where
           else
             some <$> mkTokenFull (.T_Annotation annots cmd)
 
-  readTermContinuation (acc : List Token) : FullParser (List Token) := do
+  readTermContinuation (acc : List Token) : Parser (List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | some ';' =>
@@ -1516,7 +1513,7 @@ Now that readTermFull and readAndOrFull are defined, we can add control flow.
 -/
 
 /-- Read a subshell: ( commands ) -/
-partial def readSubshellFull : FullParser Token := do
+partial def readSubshellFull : Parser Token := do
   let _ ← charFull '('
   skipAllSpaceFull
   let cmds ← readTermFull
@@ -1525,7 +1522,7 @@ partial def readSubshellFull : FullParser Token := do
   mkTokenFull (.T_Subshell cmds)
 
 /-- Read a brace group: { commands } -/
-partial def readBraceGroupFull : FullParser Token := do
+partial def readBraceGroupFull : Parser Token := do
   let _ ← charFull '{'
   skipAllSpaceFull
   let cmds ← readTermFull
@@ -1536,7 +1533,7 @@ partial def readBraceGroupFull : FullParser Token := do
   mkTokenFull (.T_BraceGroup cmds)
 
 /-- Read an if expression: if cond; then body; [elif cond; then body;]* [else body;] fi -/
-partial def readIfExpressionFull : FullParser Token := do
+partial def readIfExpressionFull : Parser Token := do
   let _ ← consumeKeyword "if"
   skipAllSpaceFull
   let cond ← readTermFull
@@ -1550,7 +1547,7 @@ partial def readIfExpressionFull : FullParser Token := do
   mkTokenFull (.T_IfExpression branches elseBody)
 where
   readElifElse (branches : List (List Token × List Token)) (_elseAcc : List Token)
-      : FullParser (List (List Token × List Token) × List Token) := do
+      : Parser (List (List Token × List Token) × List Token) := do
     skipHSpaceFull
     let _ ← optionalFull (charFull ';')
     skipAllSpaceFull
@@ -1582,7 +1579,7 @@ where
         pure (branches, [])
 
 /-- Read a while expression: while cond; do body; done -/
-partial def readWhileExpressionFull : FullParser Token := do
+partial def readWhileExpressionFull : Parser Token := do
   let _ ← consumeKeyword "while"
   skipAllSpaceFull
   let cond ← readTermFull
@@ -1599,7 +1596,7 @@ partial def readWhileExpressionFull : FullParser Token := do
   mkTokenFull (.T_WhileExpression cond body)
 
 /-- Read an until expression: until cond; do body; done -/
-partial def readUntilExpressionFull : FullParser Token := do
+partial def readUntilExpressionFull : Parser Token := do
   let _ ← consumeKeyword "until"
   skipAllSpaceFull
   let cond ← readTermFull
@@ -1616,7 +1613,7 @@ partial def readUntilExpressionFull : FullParser Token := do
   mkTokenFull (.T_UntilExpression cond body)
 
 /-- Read a for-in expression: for var [in words]; do body; done -/
-partial def readForInFull : FullParser Token := do
+partial def readForInFull : Parser Token := do
   let _ ← consumeKeyword "for"
   skipHSpaceFull
   let varName ← takeWhile1Full variableChar
@@ -1639,7 +1636,7 @@ partial def readForInFull : FullParser Token := do
   let _ ← consumeKeyword "done"
   mkTokenFull (.T_ForIn varName words body)
 where
-  readForWords (acc : List Token) : FullParser (List Token) := do
+  readForWords (acc : List Token) : Parser (List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | none => pure acc.reverse
@@ -1653,7 +1650,7 @@ where
             readForWords (word :: acc)
 
 /-- Read a for arithmetic expression: for ((init; cond; incr)); do body; done -/
-partial def readForArithmeticFull : FullParser Token := do
+partial def readForArithmeticFull : Parser Token := do
   let _ ← consumeKeyword "for"
   skipHSpaceFull
   let _ ← stringFull "(("
@@ -1682,7 +1679,7 @@ partial def readForArithmeticFull : FullParser Token := do
   mkTokenFull (.T_ForArithmetic init cond incr body)
 
 /-- Read a case expression: case word in pattern) cmds ;; ... esac -/
-partial def readCaseExpressionFull : FullParser Token := do
+partial def readCaseExpressionFull : Parser Token := do
   let _ ← consumeKeyword "case"
   skipHSpaceFull
   let word ← readWordFull
@@ -1694,7 +1691,7 @@ partial def readCaseExpressionFull : FullParser Token := do
   mkTokenFull (.T_CaseExpression word cases)
 where
   readCaseItems (acc : List (CaseType × List Token × List Token))
-      : FullParser (List (CaseType × List Token × List Token)) := do
+      : Parser (List (CaseType × List Token × List Token)) := do
     skipAllSpaceFull
     let isEsac ← peekKeyword "esac"
     if isEsac then pure acc.reverse
@@ -1706,7 +1703,7 @@ where
       let (cmds, terminator) ← readCaseBody [] .caseBreak
       readCaseItems ((terminator, patterns, cmds) :: acc)
 
-  readPatterns (acc : List Token) : FullParser (List Token) := do
+  readPatterns (acc : List Token) : Parser (List Token) := do
     skipHSpaceFull
     let pat ← readPatternWordFull
     skipHSpaceFull
@@ -1716,7 +1713,7 @@ where
         readPatterns (pat :: acc)
     | _ => pure (pat :: acc).reverse
 
-  readCaseBody (acc : List Token) (termType : CaseType) : FullParser (List Token × CaseType) := do
+  readCaseBody (acc : List Token) (termType : CaseType) : Parser (List Token × CaseType) := do
     skipAllSpaceFull  -- Skip newlines and spaces
     match ← peekFull with
     | none => pure (acc.reverse, termType)
@@ -1745,7 +1742,7 @@ where
           readCaseBody (cmd :: acc) termType
 
 /-- Read a select expression: select var [in words]; do body; done -/
-partial def readSelectFull : FullParser Token := do
+partial def readSelectFull : Parser Token := do
   let _ ← consumeKeyword "select"
   skipHSpaceFull
   let varName ← takeWhile1Full variableChar
@@ -1770,7 +1767,7 @@ partial def readSelectFull : FullParser Token := do
   let _ ← consumeKeyword "done"
   mkTokenFull (.T_SelectIn varName words body)
 where
-  readSelectWords (acc : List Token) : FullParser (List Token) := do
+  readSelectWords (acc : List Token) : Parser (List Token) := do
     skipHSpaceFull
     match ← peekFull with
     | none => pure acc.reverse
@@ -1784,7 +1781,7 @@ where
             readSelectWords (word :: acc)
 
 /-- Read an arithmetic command: (( expr )) -/
-partial def readArithmeticCommandFull : FullParser Token := do
+partial def readArithmeticCommandFull : Parser Token := do
   let _ ← stringFull "(("
   let content ← readArithContentHelper
   let _ ← stringFull "))"
@@ -1792,7 +1789,7 @@ partial def readArithmeticCommandFull : FullParser Token := do
   mkTokenFull (.T_Arithmetic inner)
 
 /-- Read a function definition: function name { body } or name() { body } -/
-partial def readFunctionFull : FullParser Token := do
+partial def readFunctionFull : Parser Token := do
   let hasKeyword ← peekKeyword "function"
   if hasKeyword then
     let _ ← consumeKeyword "function"
@@ -1806,7 +1803,7 @@ partial def readFunctionFull : FullParser Token := do
   else failure
 
 /-- Read a POSIX function definition: name() { body } -/
-  partial def readPosixFunctionFull : FullParser Token := do
+  partial def readPosixFunctionFull : Parser Token := do
     -- Read function name (must be valid identifier)
     let name ← takeWhile1Full (fun c => variableChar c || c == '-' || c == '.')
     -- Must be followed by ()
@@ -1819,7 +1816,7 @@ partial def readFunctionFull : FullParser Token := do
     mkTokenFull (.T_Function ⟨false⟩ ⟨true⟩ name body)
 
   /-- Read any command (compound or simple) -/
-  partial def readCommandFull : FullParser Token := do
+  partial def readCommandFull : Parser Token := do
     skipHSpaceFull
     let isDoubleBracket ← peekKeyword "[["
     if isDoubleBracket then
@@ -1862,7 +1859,7 @@ partial def readFunctionFull : FullParser Token := do
                       | none => readSimpleCommandFull
 
 /-- Read a complete script -/
-def readScriptFull : FullParser Token := do
+def readScriptFull : Parser Token := do
   -- Don't skip whitespace first - shebang must be at very start
   -- Check for shebang
   let firstChar ← peekFull
@@ -1892,7 +1889,7 @@ def readScriptFull : FullParser Token := do
 
 /-- Parse a string as commands (for subshell content), with position offset -/
 def parseSubshellContent (content : String) (filename : String) (startId : Nat) (offsetLine : Nat) (offsetCol : Nat) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
-  let initState : FullParserState :=
+  let initState : ParserState :=
     { ShellCheck.Parser.Parsec.mkShellState filename with nextId := startId }
   match ShellCheck.Parser.Parsec.runWithState readTermFull content initState with
   | (some (tokens, st), _errs) =>
@@ -2103,7 +2100,7 @@ where
 
 /-- Run the full parser on a script -/
 def runFullParser (script : String) (filename : String := "<stdin>") : (Option Token × Std.HashMap Id (Position × Position) × List String) :=
-  let initState : FullParserState := ShellCheck.Parser.Parsec.mkShellState filename
+  let initState : ParserState := ShellCheck.Parser.Parsec.mkShellState filename
   match ShellCheck.Parser.Parsec.runWithState readScriptFull script initState with
   | (some (tok, st), errs) =>
       -- Post-process to expand $() content, passing original positions for offset calculation

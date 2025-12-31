@@ -238,7 +238,7 @@ private def bareWordString? (t : Token) : Option String :=
       | _ => none
   | _ => none
 
-private def spanOf (t : Token) : FullParser (Nat × Nat × Nat × Nat) := do
+private def spanOf (t : Token) : Parser (Nat × Nat × Nat × Nat) := do
   let st ← ShellCheck.Parser.Parsec.getState
   match st.positions.get? t.id with
   | some (startPos, endPos) =>
@@ -247,7 +247,7 @@ private def spanOf (t : Token) : FullParser (Nat × Nat × Nat × Nat) := do
       let (line, col) ← currentPos
       pure (line, col, line, col)
 
-private def mkSpan (inner : InnerToken Token) (first last : Token) : FullParser Token := do
+private def mkSpan (inner : InnerToken Token) (first last : Token) : Parser Token := do
   let (startLine, startCol, _, _) ← spanOf first
   let (_, _, endLine, endCol) ← spanOf last
   let id ← freshIdFull
@@ -266,7 +266,7 @@ private def isOrOp (ct : ConditionType) (op : String) : Bool :=
 
 mutual
 
-  partial def parsePrimary (ct : ConditionType) (ts : List Token) : FullParser (Token × List Token) := do
+  partial def parsePrimary (ct : ConditionType) (ts : List Token) : Parser (Token × List Token) := do
     match ts with
     | [] =>
         let empty ← mkTokenFull (.TC_Empty ct)
@@ -299,7 +299,7 @@ mutual
         | none =>
             parseBinaryOrNullary ct t rest
 
-  partial def parseBinaryOrNullary (ct : ConditionType) (lhs : Token) (ts : List Token) : FullParser (Token × List Token) := do
+  partial def parseBinaryOrNullary (ct : ConditionType) (lhs : Token) (ts : List Token) : Parser (Token × List Token) := do
     match ts with
     | opTok :: rhsTok :: rest =>
         match bareWordString? opTok with
@@ -317,11 +317,11 @@ mutual
         let node ← mkSpan (.TC_Nullary ct lhs) lhs lhs
         pure (node, ts)
 
-  partial def parseAnd (ct : ConditionType) (ts : List Token) : FullParser (Token × List Token) := do
+  partial def parseAnd (ct : ConditionType) (ts : List Token) : Parser (Token × List Token) := do
     let (left, rest) ← parsePrimary ct ts
     parseAndCont ct left rest
 
-  partial def parseAndCont (ct : ConditionType) (left : Token) (ts : List Token) : FullParser (Token × List Token) := do
+  partial def parseAndCont (ct : ConditionType) (left : Token) (ts : List Token) : Parser (Token × List Token) := do
     match ts with
     | opTok :: rest =>
         match bareWordString? opTok with
@@ -335,11 +335,11 @@ mutual
         | none => pure (left, ts)
     | [] => pure (left, [])
 
-  partial def parseOr (ct : ConditionType) (ts : List Token) : FullParser (Token × List Token) := do
+  partial def parseOr (ct : ConditionType) (ts : List Token) : Parser (Token × List Token) := do
     let (left, rest) ← parseAnd ct ts
     parseOrCont ct left rest
 
-  partial def parseOrCont (ct : ConditionType) (left : Token) (ts : List Token) : FullParser (Token × List Token) := do
+  partial def parseOrCont (ct : ConditionType) (left : Token) (ts : List Token) : Parser (Token × List Token) := do
     match ts with
     | opTok :: rest =>
         match bareWordString? opTok with
@@ -358,7 +358,7 @@ end
 end TokenParse
 
 /-- Parse a list of already-tokenized condition arguments into a `TC_*` tree. -/
-partial def parseConditionTokensFull (ct : ConditionType) (tokens : List Token) : FullParser Token := do
+partial def parseConditionTokensFull (ct : ConditionType) (tokens : List Token) : Parser Token := do
   let (expr, rest) := (← TokenParse.parseOr ct tokens)
   if rest.isEmpty then
     pure expr

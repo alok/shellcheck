@@ -69,7 +69,7 @@ def reservedKeywords : List String :=
 /-! ## Spacing Parsers -/
 
 /-- Skip horizontal whitespace (space, tab) -/
-partial def skipHSpaceFull : FullParser Unit := do
+partial def skipHSpaceFull : Parser Unit := do
   let _ ← takeWhileFull (fun c => c == ' ' || c == '\t')
   match ← peekFull with
   | some '\\' =>
@@ -82,7 +82,7 @@ partial def skipHSpaceFull : FullParser Unit := do
   | _ => pure ()
 
 /-- Skip all whitespace including newlines -/
-partial def skipAllSpaceFull : FullParser Unit := do
+partial def skipAllSpaceFull : Parser Unit := do
   let _ ← takeWhileFull (fun c => c.isWhitespace)
   match ← peekFull with
   | some '#' =>
@@ -97,7 +97,7 @@ partial def skipAllSpaceFull : FullParser Unit := do
 /-! ## Keyword Parsers -/
 
 /-- Check if next token is a specific keyword (without consuming) -/
-partial def peekKeyword (kw : String) : FullParser Bool := fun st it =>
+partial def peekKeyword (kw : String) : Parser Bool := fun st it =>
   let remaining := it.str.drop it.pos.byteIdx
   if remaining.startsWith kw then
     let afterKw := remaining.drop kw.length
@@ -111,7 +111,7 @@ partial def peekKeyword (kw : String) : FullParser Bool := fun st it =>
     .success it (false, st)
 
 /-- Consume a keyword -/
-partial def consumeKeyword (kw : String) : FullParser Unit := do
+partial def consumeKeyword (kw : String) : Parser Unit := do
   let isKw ← peekKeyword kw
   if isKw then
     let _ ← stringFull kw
@@ -120,7 +120,7 @@ partial def consumeKeyword (kw : String) : FullParser Unit := do
     failure
 
 /-- Check if at reserved keyword -/
-def isReservedKeyword : FullParser Bool := do
+def isReservedKeyword : Parser Bool := do
   let checks ← reservedKeywords.mapM peekKeyword
   pure (checks.any id)
 

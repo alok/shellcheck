@@ -28,7 +28,7 @@ migration.
 -/
 
 /-- Read a literal word part -/
-def readLiteralFull : FullParser Token := do
+def readLiteralFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let content ← takeWhile1Full fun c =>
     ¬ (c.isWhitespace ||
@@ -42,7 +42,7 @@ def readLiteralFull : FullParser Token := do
   mkTokenFullAt (.T_Literal content) startLine startCol
 
 /-- Read a single-quoted string -/
-def readSingleQuotedFull : FullParser Token := do
+def readSingleQuotedFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let _ ← charFull '\''
   let content ← takeWhileFull (· != '\'')
@@ -50,8 +50,8 @@ def readSingleQuotedFull : FullParser Token := do
   mkTokenFullAt (.T_SingleQuoted content) startLine startCol
 
 /-- Read backtick content until the next *unescaped* backtick, respecting quotes. -/
-partial def readBacktickContent : FullParser String := do
-  let rec go (acc : List Char) (inSingle inDouble escaped : Bool) : FullParser String := do
+partial def readBacktickContent : Parser String := do
+  let rec go (acc : List Char) (inSingle inDouble escaped : Bool) : Parser String := do
     match ← peekFull with
     | none => pure (String.ofList acc.reverse)
     | some c =>
@@ -91,7 +91,7 @@ partial def readBacktickContent : FullParser String := do
   go [] false false false
 
 /-- Read a backtick command substitution -/
-partial def readBacktickFull : FullParser Token := do
+partial def readBacktickFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let _ ← charFull '`'
   let (contentStartLine, contentStartCol) ← currentPos
@@ -101,9 +101,9 @@ partial def readBacktickFull : FullParser Token := do
   mkTokenFullAt (.T_Backticked [inner]) startLine startCol
 
 /-- Helper to read until a terminator string -/
-partial def readUntilStr (terminator : String) : FullParser String := do
+partial def readUntilStr (terminator : String) : Parser String := do
   -- Important: must not consume the terminator.
-  let rec go (acc : List Char) (depth : Nat) (inSingle inDouble inBacktick escaped : Bool) : FullParser String := do
+  let rec go (acc : List Char) (depth : Nat) (inSingle inDouble inBacktick escaped : Bool) : Parser String := do
     match ← peekFull with
     | none => pure (String.ofList acc.reverse)
     | some c =>
@@ -189,8 +189,8 @@ partial def readUntilStr (terminator : String) : FullParser String := do
   go [] 0 false false false false
 
 /-- Read `${ ... }` content (after consuming `{`), stopping before the matching `}`. -/
-partial def readBracedExpansionContent : FullParser String := do
-  let rec go (acc : List Char) (braceDepth : Nat) (inSingle inDouble inBacktick escaped : Bool) : FullParser String := do
+partial def readBracedExpansionContent : Parser String := do
+  let rec go (acc : List Char) (braceDepth : Nat) (inSingle inDouble inBacktick escaped : Bool) : Parser String := do
     match ← peekFull with
     | none => pure (String.ofList acc.reverse)
     | some c =>
@@ -261,7 +261,7 @@ nested `${...}` are represented in the AST instead of left as raw strings.
 -/
 
 /-- Read a literal word part inside a `${...}` argument, allowing whitespace and operators. -/
-def readLiteralInBracedArgFull : FullParser Token := do
+def readLiteralInBracedArgFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let content ← takeWhile1Full fun c =>
     c != '"' && c != '\'' && c != '`' && c != '$' && c != '\\'
@@ -293,16 +293,16 @@ private def posAtCharOffset (startLine startCol : Nat) (s : String) (n : Nat) : 
 mutual
 
 /-- Read arithmetic content until `))` (does not consume the closing `))`). -/
-partial def readArithContent : FullParser String := do
+partial def readArithContent : Parser String := do
   readUntilStr "))"
 
 /-- Read subshell content until `)` (does not consume the closing `)`). -/
-partial def readSubshellContent : FullParser String := do
+partial def readSubshellContent : Parser String := do
   readUntilStr ")"
 
 /-- Read ANSI-C quoted content, keeping escape sequences like `\\'`. -/
-partial def readAnsiCContentFull : FullParser String := do
-  let rec go (acc : List Char) : FullParser String := do
+partial def readAnsiCContentFull : Parser String := do
+  let rec go (acc : List Char) : Parser String := do
     match ← peekFull with
     | none => pure (String.ofList acc.reverse)
     | some '\'' => pure (String.ofList acc.reverse)
@@ -320,8 +320,8 @@ partial def readAnsiCContentFull : FullParser String := do
   go []
 
 /-- Read a `${...}` argument as a list of word-part tokens (until EOF). -/
-partial def readBracedArgPartsFull : FullParser (List Token) := do
-  let rec go (acc : List Token) : FullParser (List Token) := do
+partial def readBracedArgPartsFull : Parser (List Token) := do
+  let rec go (acc : List Token) : Parser (List Token) := do
     match ← peekFull with
     | none => pure acc.reverse
     | some '\'' =>
@@ -362,7 +362,7 @@ private partial def parseBracedArgParts
     (arg : String) (filename : String)
     (startId : Nat) (offsetLine offsetCol : Nat)
     : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
-  let initState : FullParserState :=
+  let initState : ParserState :=
     { ShellCheck.Parser.Parsec.mkShellState filename with nextId := startId }
   match ShellCheck.Parser.Parsec.runWithState readBracedArgPartsFull arg initState with
   | (some (parts, st), _) =>
@@ -375,13 +375,13 @@ private partial def parseBracedArgParts
 /-- Parse the content of a `${...}` expansion into a structured token tree.
 
 If parsing fails, fall back to a single literal token with the raw content. -/
-private partial def parseBracedExpansionContentFull (content : String) (startLine startCol : Nat) : FullParser Token := do
-  let mkLitAt (s : String) : FullParser Token :=
+private partial def parseBracedExpansionContentFull (content : String) (startLine startCol : Nat) : Parser Token := do
+  let mkLitAt (s : String) : Parser Token :=
     mkTokenFullAt (.T_Literal s) startLine startCol
-  let mkOpAt (s : String) : FullParser Token :=
+  let mkOpAt (s : String) : Parser Token :=
     mkTokenFullAt (.T_ParamSubSpecialChar s) startLine startCol
 
-  let parseArgAt (arg : String) (charOffset : Nat) : FullParser (List Token) := do
+  let parseArgAt (arg : String) (charOffset : Nat) : Parser (List Token) := do
     let st ← ShellCheck.Parser.Parsec.getState
     let (argLine, argCol) := posAtCharOffset startLine startCol content charOffset
     let (parts, newNextId, newPositions) :=
@@ -513,7 +513,7 @@ private partial def parseBracedExpansionContentFull (content : String) (startLin
           mkTokenFullAt (.T_NormalWord ([varTok, opTok] ++ argParts)) startLine startCol
 
 /-- Read a `$...` expansion inside double quotes (assumes `$` already consumed). -/
-partial def readDollarInDQFull (startLine startCol : Nat) : FullParser Token := do
+partial def readDollarInDQFull (startLine startCol : Nat) : Parser Token := do
   match ← peekFull with
   | some '{' =>
       let _ ← charFull '{'
@@ -556,7 +556,7 @@ partial def readDollarInDQFull (startLine startCol : Nat) : FullParser Token := 
       mkTokenFullAt (.T_Literal "$") startLine startCol
 
 /-- Read a `$...` expansion in normal word context (assumes `$` already consumed). -/
-partial def readDollarFull (startLine startCol : Nat) : FullParser Token := do
+partial def readDollarFull (startLine startCol : Nat) : Parser Token := do
   match ← peekFull with
   | some '{' =>
       let _ ← charFull '{'
@@ -613,14 +613,14 @@ partial def readDollarFull (startLine startCol : Nat) : FullParser Token := do
       mkTokenFullAt (.T_Literal "$") startLine startCol
 
 /-- Read a double-quoted string. -/
-partial def readDoubleQuotedFull : FullParser Token := do
+partial def readDoubleQuotedFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let _ ← charFull '"'
   let parts ← readDQParts []
   let _ ← charFull '"'
   mkTokenFullAt (.T_DoubleQuoted parts) startLine startCol
 where
-  readDQParts (acc : List Token) : FullParser (List Token) := do
+  readDQParts (acc : List Token) : Parser (List Token) := do
     match ← peekFull with
     | none => pure acc.reverse
     | some '"' => pure acc.reverse
@@ -650,7 +650,7 @@ where
           readDQParts (tok :: acc)
 
 /-- Read process substitution <(...) or >(...) -/
-partial def readProcSubFull : FullParser Token := do
+partial def readProcSubFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let dir ← anyCharFull  -- < or >
   let _ ← charFull '('
@@ -663,7 +663,7 @@ partial def readProcSubFull : FullParser Token := do
   mkTokenFullAt (.T_ProcSub dirStr [contentTok]) startLine startCol
 where
   /-- Read until matching ) accounting for nested parens and quotes -/
-  readProcSubContent (depth : Nat) (acc : List Char) : FullParser String := do
+  readProcSubContent (depth : Nat) (acc : List Char) : Parser String := do
     match ← peekFull with
     | none => pure (String.ofList acc.reverse)
     | some ')' =>
@@ -702,7 +702,7 @@ where
 end
 
 /-- Read a complete word (multiple parts) -/
-partial def readWordFull : FullParser Token := do
+partial def readWordFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let parts ← readWordParts []
   if parts.isEmpty then
@@ -710,7 +710,7 @@ partial def readWordFull : FullParser Token := do
   else
     mkTokenFullAt (.T_NormalWord parts) startLine startCol
 where
-  readWordParts (acc : List Token) : FullParser (List Token) := do
+  readWordParts (acc : List Token) : Parser (List Token) := do
     match ← peekFull with
     | none => pure acc.reverse
     | some c =>
@@ -770,7 +770,7 @@ operators. This reader:
 
 This is a best-effort parser intended to improve `case` pattern coverage without
 rewriting the full word lexer. -/
-partial def readPatternWordFull : FullParser Token := do
+partial def readPatternWordFull : Parser Token := do
   let (startLine, startCol) ← currentPos
   let parts ← readParts [] none [] 0 false 0 false false
   if parts.isEmpty then
@@ -779,7 +779,7 @@ partial def readPatternWordFull : FullParser Token := do
     mkTokenFullAt (.T_NormalWord parts) startLine startCol
 where
   flushLiteral (acc : List Token) (litStart : Option (Nat × Nat)) (litRev : List Char) :
-      FullParser (List Token) := do
+      Parser (List Token) := do
     match litStart with
     | none => pure acc
     | some (line, col) =>
@@ -828,7 +828,7 @@ where
       (classChars : Nat)
       (sawNegation : Bool)
       (extglobPending : Bool)
-      : FullParser (List Token) := do
+      : Parser (List Token) := do
     match ← peekFull with
     | none => do
         let acc ← flushLiteral acc litStart litRev
@@ -899,7 +899,7 @@ where
               c == '@' || c == '!' || c == '+' || c == '*' || c == '?'
           readParts acc litStart (c :: litRev) parenDepth' inClass' classChars' sawNegation' extglobPending'
 /-- Read arithmetic content for `(( .. ))` / `for (( .. ))` (does not consume the closing `))`). -/
-@[inline] def readArithContentHelper : FullParser String :=
+@[inline] def readArithContentHelper : Parser String :=
   readArithContent
 
 end ShellCheck.Parser.Word
