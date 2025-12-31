@@ -3,6 +3,7 @@ import ShellCheck.Tests.ParsecProps
 import ShellCheck.Tests.ParserRegression
 import ShellCheck.Tests.FormatterTTY
 import ShellCheck.Tests.FormatterGCC
+import ShellCheck.Tests.FormatterJSON
 import ShellCheck.Tests.AnalyticsRegression
 
 open Plausible
@@ -10,6 +11,7 @@ open ShellCheck.Tests.ParsecProps
 open ShellCheck.Tests.ParserRegression
 open ShellCheck.Tests.FormatterTTY
 open ShellCheck.Tests.FormatterGCC
+open ShellCheck.Tests.FormatterJSON
 open ShellCheck.Tests.AnalyticsRegression
 
 def checkProp (name : String) (p : Prop) (cfg : Configuration := {}) [Testable p] : IO Bool := do
@@ -69,6 +71,7 @@ def main : IO UInt32 := do
   ok := ok && (← checkRegression "tty format line group basic" test_tty_format_line_group_basic)
   ok := ok && (← checkRegression "tty footer summary" test_tty_footer_summary)
   ok := ok && (← checkRegression "gcc format comment basic" test_gcc_format_comment_basic)
+  ok := ok && (← checkRegression "json format includes fix" test_json_format_includes_fix)
   ok := ok && (← checkRegression "SC2145: concat \"$@\"" test_sc2145_double_quoted_concat)
   ok := ok && (← checkRegression "SC2145: array concat" test_sc2145_array_concat)
   ok := ok && (← checkRegression "SC2145: var concat" test_sc2145_var_concat)
