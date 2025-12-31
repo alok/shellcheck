@@ -15,8 +15,16 @@ structure SafeWord where
   value : String
   deriving Repr, BEq, Inhabited
 
+/-- A variable name that starts with a valid identifier character. -/
+structure SafeVar where
+  value : String
+  deriving Repr, BEq, Inhabited
+
 private def safeChars : List Char :=
   "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_".toList
+
+private def safeVarStartChars : List Char :=
+  "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_".toList
 
 private def genSafeChar : Gen Char :=
   Gen.elements safeChars (by decide)
@@ -37,13 +45,30 @@ private def genSafeWord : Gen String := do
   let chars ← genChars n
   pure (String.ofList chars)
 
+private def genSafeVar : Gen String := do
+  let size ← Gen.getSize
+  let ⟨n, _⟩ ← Gen.choose Nat 1 (size + 1) (by
+    exact Nat.succ_le_succ (Nat.zero_le size))
+  let first ← Gen.elements safeVarStartChars (by decide)
+  let rest ← genChars (n - 1)
+  pure (String.ofList (first :: rest))
+
 instance : Arbitrary SafeWord where
   arbitrary := do
     let w ← genSafeWord
     pure ⟨w⟩
 
 instance : Shrinkable SafeWord where
-  shrink w := (Shrinkable.shrink w.value).map fun s => ⟨s⟩
+  shrink w :=
+    (Shrinkable.shrink w.value).filter (fun s => !s.isEmpty) |>.map fun s => ⟨s⟩
+
+instance : Arbitrary SafeVar where
+  arbitrary := do
+    let v ← genSafeVar
+    pure ⟨v⟩
+
+instance : Shrinkable SafeVar where
+  shrink _ := []
 
 /-- Render a simple script consisting of `echo` and literal words. -/
 private def renderEchoScript (words : List String) : String :=
@@ -87,7 +112,7 @@ private def extractScriptWords (t : Token) : Option (List String) :=
   | _ => none
 
 private def roundtripOk (words : List SafeWord) : Bool :=
-  if words.isEmpty || words.any (fun w => w.value.isEmpty) then
+  if words.any (fun w => w.value.isEmpty) then
     true
   else
     let raw := words.map (·.value)
@@ -133,5 +158,19 @@ private def simpleScriptPositionsOk (words : List SafeWord) : Bool :=
 abbrev prop_positions_valid_for_simple_scripts : Prop :=
   Plausible.NamedBinder "words" <| ∀ words : List SafeWord,
     simpleScriptPositionsOk words = true
+
+private def assignmentScript (name : SafeVar) (value : SafeWord) : String :=
+  s!"{name.value}={value.value}"
+
+private def parseOk (script : String) : Bool :=
+  match parseScriptOk script with
+  | .ok _ => true
+  | .error _ => false
+
+/-- Assignments with safe names and literal values parse without errors. -/
+abbrev prop_simple_assignment_parses : Prop :=
+  Plausible.NamedBinder "var" <| ∀ name : SafeVar,
+    Plausible.NamedBinder "value" <| ∀ value : SafeWord,
+      parseOk (assignmentScript name value) = true
 
 end ShellCheck.Tests.ParserProps
