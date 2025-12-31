@@ -71,10 +71,13 @@ def cuteIndent (c : PositionedComment) : String :=
 /-- Format output for a single line group -/
 def formatLineGroup (color : ColorFunc) (filename : String) (lineNum : Nat)
     (sourceLine : String) (comments : List PositionedComment) : List String :=
-  let header := color "message" s!"In {filename} line {lineNum}:"
-  let source := color "source" sourceLine
+  let lineNoStr := toString lineNum
+  let gutter := lineNoStr ++ " | "
+  let pad := String.ofList (List.replicate lineNoStr.length ' ') ++ " | "
+  let header := color "message" s!"{filename}:{lineNum}:"
+  let source := color "source" (gutter ++ sourceLine)
   let indicators := comments.map fun c =>
-    color (severityText c) (cuteIndent c)
+    color (severityText c) (pad ++ cuteIndent c)
   ["", header, source] ++ indicators ++ [""]
 
 /-- Format a complete result with source context -/
@@ -97,7 +100,8 @@ def formatResultWithSource (color : ColorFunc) (cr : CheckResult) (contents : St
 /-- Format result without source (fallback) -/
 def formatResultSimple (color : ColorFunc) (cr : CheckResult) : List String :=
   cr.crComments.flatMap fun c =>
-    [color (severityText c) s!"{cr.crFilename}:{lineNo c}:{colNo c}: {messageText c}"]
+    [color (severityText c)
+      s!"{cr.crFilename}:{lineNo c}:{colNo c}: [SC{codeNo c}] {severityText c}: {messageText c}"]
 
 /-- Format wiki links for top errors -/
 def formatWikiLinks (codes : List Nat) : List String :=
