@@ -74,5 +74,9 @@ def main : IO UInt32 := do
   ok := ok && (← checkRegression "SC2145: var concat" test_sc2145_var_concat)
   ok := ok && (← checkRegression "SC2145: plain $@ ok" test_sc2145_plain_at_ok)
   ok := ok && (← checkRegression "SC2145: quoted array ok" test_sc2145_quoted_array_ok)
+  ok := ok && (← checkRegression "SC2086: fix present" test_sc2086_fix_present)
+  ok := ok && (← checkRegression "SC2125: glob assignment" test_sc2125_glob_assignment)
+  ok := ok && (← checkRegression "SC2125: brace assignment" test_sc2125_brace_assignment)
+  ok := ok && (← checkRegression "SC2125: quoted glob ok" test_sc2125_quoted_glob_ok)
 
   pure (if ok then 0 else 1)

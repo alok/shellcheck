@@ -142,7 +142,13 @@ def checkUnquotedDollarAt (params : Parameters) (t : Token) : List TokenComment 
       let str := oversimplify content |>.foldl (· ++ ·) ""
       -- Warn for $@, $*, or any variable name (simplified version)
       if str == "@" || str == "*" || isVariableName str then
-        [makeComment .warningC t.id 2086 "Double quote to prevent globbing and word splitting."]
+        match quoteFix params t.id with
+        | some fix =>
+            [makeCommentWithFix .warningC t.id 2086
+              "Double quote to prevent globbing and word splitting." fix]
+        | Option.none =>
+            [makeComment .warningC t.id 2086
+              "Double quote to prevent globbing and word splitting."]
       else []
   | _ => []
 where
@@ -150,6 +156,29 @@ where
     match s.toList with
     | c :: _ => c.isAlpha || c == '_'
     | [] => false
+  quoteFix (params : Parameters) (id : Id) : Option Fix :=
+    match params.tokenPositions.get? id with
+    | some (startPos, endPos) =>
+        if startPos.posLine != endPos.posLine then
+          Option.none
+        else
+          let openRep : Replacement := {
+            repStartPos := startPos
+            repEndPos := startPos
+            repString := "\""
+            repPrecedence := 1
+            repInsertionPoint := .insertBefore
+          }
+          let closePos : Position := { endPos with posColumn := endPos.posColumn + 1 }
+          let closeRep : Replacement := {
+            repStartPos := closePos
+            repEndPos := closePos
+            repString := "\""
+            repPrecedence := 1
+            repInsertionPoint := .insertAfter
+          }
+          some { fixReplacements := [openRep, closeRep] }
+    | Option.none => Option.none
 
 /-- SC2041/SC2042/SC2043/SC2066/SC2258: for-in loop quoting pitfalls. -/
 def checkForInQuoted (_params : Parameters) (t : Token) : List TokenComment :=
@@ -2066,11 +2095,29 @@ def checkArrayAsString (_params : Parameters) (t : Token) : List TokenComment :=
     if hasArrayExpansion word then
       [makeComment .warningC t.id 2124
         "Assigning an array to a string! Assign as array, or use * instead of @ to concatenate."]
+    else if hasLiteralGlobOrBrace word then
+      [makeComment .warningC t.id 2125
+        "Brace expansions and globs are literal in assignments. Quote it or use an array."]
     else []
   | _ => []
 where
   hasArrayExpansion (t : Token) : Bool :=
     getWordParts t |>.any isArrayExpansion
+  hasLiteralGlobOrBrace (t : Token) : Bool :=
+    match getUnquotedLiteral t with
+    | some s => containsGlobMeta s || containsBrace s || containsExtGlobStart s
+    | Option.none => false
+  containsGlobMeta (s : String) : Bool :=
+    s.any fun c => c == '*' || c == '?' || c == '['
+  containsBrace (s : String) : Bool :=
+    s.any (· == '{') && s.any (· == '}')
+  containsExtGlobStart (s : String) : Bool :=
+    let rec go : List Char → Bool
+      | [] => false
+      | [_] => false
+      | a :: b :: rest =>
+          (b == '(' && (a == '@' || a == '!' || a == '+')) || go (b :: rest)
+    go s.toList
 
 /-- SC2054: Use spaces, not commas, to separate array elements -/
 def checkCommarrays (_params : Parameters) (t : Token) : List TokenComment :=
@@ -2546,8 +2593,14 @@ def checkUnquotedVariables (params : Parameters) (t : Token) : List TokenComment
     else if isArrayExpansion t then []  -- Covered by SC2068
     else if isCountingReference t then []
     else if isQuoteFreeLocal params t then []
-    else [makeComment .infoC t.id 2086
-        "Double quote to prevent globbing and word splitting."]
+    else
+      match quoteFix params t.id with
+      | some fix =>
+          [makeCommentWithFix .infoC t.id 2086
+            "Double quote to prevent globbing and word splitting." fix]
+      | Option.none =>
+          [makeComment .infoC t.id 2086
+            "Double quote to prevent globbing and word splitting."]
   | _ => []
 where
   specialVarsNoQuote := ["?", "#", "-", "$", "!", "_", "PPID", "BASHPID",
@@ -2562,6 +2615,29 @@ where
   isQuoteFreeLocal (params : Parameters) (t : Token) : Bool :=
     -- Use the full isQuoteFree check from AnalyzerLib
     ShellCheck.AnalyzerLib.isQuoteFree params.shellType params.parentMap t
+  quoteFix (params : Parameters) (id : Id) : Option Fix :=
+    match params.tokenPositions.get? id with
+    | some (startPos, endPos) =>
+        if startPos.posLine != endPos.posLine then
+          Option.none
+        else
+          let openRep : Replacement := {
+            repStartPos := startPos
+            repEndPos := startPos
+            repString := "\""
+            repPrecedence := 1
+            repInsertionPoint := .insertBefore
+          }
+          let closePos : Position := { endPos with posColumn := endPos.posColumn + 1 }
+          let closeRep : Replacement := {
+            repStartPos := closePos
+            repEndPos := closePos
+            repString := "\""
+            repPrecedence := 1
+            repInsertionPoint := .insertBefore
+          }
+          some { fixReplacements := [openRep, closeRep] }
+    | Option.none => Option.none
 
 /-- SC2123: PATH is the shell search path. Use another name -/
 def checkOverridingPath (_params : Parameters) (t : Token) : List TokenComment :=
