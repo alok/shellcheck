@@ -205,7 +205,16 @@ theorem cuteIndent_starts_with_spaces (c : PositionedComment) :
     (cuteIndent c).length ≥ colNo c := sorry
 
 theorem makeArrow_not_empty (c : PositionedComment) :
-    (makeArrow c).length > 0 := sorry
+    (makeArrow c).length > 0 := by
+  unfold makeArrow
+  by_cases h :
+      lineNo c == endLineNo c && endColNo c - colNo c > 2 && endColNo c - colNo c < 32
+  · have hlen : ("^").length = 1 := by decide
+    have : 0 < Nat.succ (Nat.succ (endColNo c - colNo c - 2)) := by
+      exact Nat.succ_pos _
+    simpa [h, hlen, Nat.succ_eq_add_one, Nat.add_assoc, Nat.add_left_comm, Nat.add_comm] using this
+  · have hlen : ("^--").length = 3 := by decide
+    simpa [h, hlen] using (by decide : 0 < 3)
 
 theorem formatLineGroup_includes_source (color : ColorFunc) (filename : String)
     (lineNum : Nat) (sourceLine : String) (comments : List PositionedComment) :

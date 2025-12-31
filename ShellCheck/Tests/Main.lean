@@ -2,11 +2,13 @@ import Plausible
 import ShellCheck.Tests.ParsecProps
 import ShellCheck.Tests.ParserRegression
 import ShellCheck.Tests.FormatterTTY
+import ShellCheck.Tests.FormatterGCC
 
 open Plausible
 open ShellCheck.Tests.ParsecProps
 open ShellCheck.Tests.ParserRegression
 open ShellCheck.Tests.FormatterTTY
+open ShellCheck.Tests.FormatterGCC
 
 def checkProp (name : String) (p : Prop) (cfg : Configuration := {}) [Testable p] : IO Bool := do
   IO.println s!"[Plausible] {name}"
@@ -63,5 +65,7 @@ def main : IO UInt32 := do
   ok := ok && (← checkRegression "${} allows nested ${}" test_bracedExpansion_nested_parameterExpansions_parses)
   ok := ok && (← checkRegression "${} allows nested {...}" test_bracedExpansion_nested_braceExpansions_parses)
   ok := ok && (← checkRegression "tty format line group basic" test_tty_format_line_group_basic)
+  ok := ok && (← checkRegression "tty footer summary" test_tty_footer_summary)
+  ok := ok && (← checkRegression "gcc format comment basic" test_gcc_format_comment_basic)
 
   pure (if ok then 0 else 1)
