@@ -204,6 +204,30 @@ abbrev prop_redirect_parses : Prop :=
       parseOk (redirectScript word fname) = true ∧
       parseOk (redirectFdScript word fname) = true
 
+private def commandSubScript (word : SafeWord) : String :=
+  "echo $(echo " ++ word.value ++ ")"
+
+private def backtickScript (word : SafeWord) : String :=
+  "echo `echo " ++ word.value ++ "`"
+
+private def heredocScript (content : SafeWord) : String :=
+  "cat <<EOF\n" ++ content.value ++ "\nEOF\n"
+
+/-- Command substitution parses. -/
+abbrev prop_command_substitution_parses : Prop :=
+  Plausible.NamedBinder "word" <| ∀ word : SafeWord,
+    parseOk (commandSubScript word) = true
+
+/-- Backtick command substitution parses. -/
+abbrev prop_backtick_parses : Prop :=
+  Plausible.NamedBinder "word" <| ∀ word : SafeWord,
+    parseOk (backtickScript word) = true
+
+/-- Simple heredoc parses. -/
+abbrev prop_heredoc_parses : Prop :=
+  Plausible.NamedBinder "content" <| ∀ content : SafeWord,
+    parseOk (heredocScript content) = true
+
 private def assignmentPositionsOk (name : SafeVar) (value : SafeWord) : Bool :=
   let script := assignmentScript name value
   let (root, positions, errors) := runFullParser script "<test>"
