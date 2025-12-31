@@ -150,12 +150,36 @@ def formatFooter (color : ColorFunc) (options : Format.FormatterOptions)
   summary ++ formatWikiLinks wikiCodes
 
 /-- Create TTY formatter -/
-def format [Monad m] (_options : Format.FormatterOptions) : Format.Formatter m := {
-  header := pure ()
-  onResult := fun _cr _sys => pure ()  -- Would print formatted output
-  onFailure := fun _file _msg => pure ()  -- Would print error
-  footer := pure ()  -- Would print wiki links
-}
+def format (options : Format.FormatterOptions) : IO (Format.Formatter IO) := do
+  let commentsRef ← IO.mkRef ([] : List PositionedComment)
+  let useColor ←
+    match options.foColorOption with
+    | .colorAlways => pure true
+    | .colorNever => pure false
+    | .colorAuto =>
+        let out ← IO.getStdout
+        out.isTty
+  let color := getColorFunc useColor
+  let printLines (lines : List String) : IO Unit :=
+    lines.forM IO.println
+  let onResult := fun cr sys => do
+    commentsRef.modify (fun acc => acc ++ cr.crComments)
+    match ← sys.siReadFile none cr.crFilename with
+    | .ok contents =>
+        printLines (formatResultWithSource color cr contents)
+    | .error msg =>
+        printLines (formatResultSimple color cr)
+        IO.eprintln msg
+  let onFailure := fun file msg => IO.eprintln s!"{file}: {msg}"
+  let footer := do
+    let comments ← commentsRef.get
+    printLines (formatFooter color options comments)
+  pure {
+    header := pure ()
+    onResult := onResult
+    onFailure := onFailure
+    footer := footer
+  }
 
 -- Theorems (stubs)
 

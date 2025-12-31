@@ -306,6 +306,11 @@ def runShellcheck4 (p : Parsed) : IO UInt32 := do
 
   let wikiLinkCount : Nat := p.flag! "wiki-link-count" |>.as! Nat
   let formatterOptions : ShellCheck.Formatter.Format.FormatterOptions := {
+    foColorOption :=
+      match colorOpt with
+      | .colorAuto => .colorAuto
+      | .colorAlways => .colorAlways
+      | .colorNever => .colorNever
     foWikiLinkCount := wikiLinkCount
   }
 
@@ -360,14 +365,11 @@ def runShellcheck4 (p : Parsed) : IO UInt32 := do
         for line in lines do
           IO.println line
   | .tty =>
-      let color := ShellCheck.Formatter.TTY.getColorFunc useColor
+      let fmt ← ShellCheck.Formatter.TTY.format formatterOptions
+      fmt.header
       for cf in checkedFiles do
-        let lines := ShellCheck.Formatter.TTY.formatResultWithSource color cf.result cf.contents
-        for line in lines do
-          IO.println line
-      let allComments := checkedFiles.flatMap (fun cf => cf.result.crComments)
-      for line in ShellCheck.Formatter.TTY.formatFooter color formatterOptions allComments do
-        IO.println line
+        fmt.onResult cf.result sys
+      fmt.footer
   | .json =>
       IO.println (ShellCheck.Formatter.JSON.formatResults results)
   | .quiet =>
