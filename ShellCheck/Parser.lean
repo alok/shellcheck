@@ -2257,11 +2257,10 @@ def readScriptFull : FullParser Token := do
 
 /-- Parse a string as commands (for subshell content), with position offset -/
 def parseSubshellContent (content : String) (filename : String) (startId : Nat) (offsetLine : Nat) (offsetCol : Nat) : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
-  let it := ShellCheck.Parser.Parsec.PosIterator.create content
   let initState : FullParserState :=
     { ShellCheck.Parser.Parsec.mkShellState filename with nextId := startId }
-  match readTermFull initState it with
-  | .success _ (tokens, st) =>
+  match ShellCheck.Parser.Parsec.runWithState readTermFull content initState with
+  | (some (tokens, st), _errs) =>
       -- Offset all positions by the original $() location
       let offsetPositions := st.positions.fold (init := {}) fun m k (startPos, endPos) =>
         let newStart : Position := {
@@ -2280,7 +2279,7 @@ def parseSubshellContent (content : String) (filename : String) (startId : Nat) 
         }
         m.insert k (newStart, newEnd)
       (tokens, st.nextId, offsetPositions)
-  | .error _ _ =>
+  | (none, _errs) =>
       -- On parse error, return a literal token
       let litTok : Token := ⟨⟨startId⟩, .T_Literal content⟩
       ([litTok], startId + 1, {})
@@ -2469,20 +2468,18 @@ where
 
 /-- Run the full parser on a script -/
 def runFullParser (script : String) (filename : String := "<stdin>") : (Option Token × Std.HashMap Id (Position × Position) × List String) :=
-  let it := ShellCheck.Parser.Parsec.PosIterator.create script
   let initState : FullParserState := ShellCheck.Parser.Parsec.mkShellState filename
-  match readScriptFull initState it with
-  | .success _ (tok, st) =>
+  match ShellCheck.Parser.Parsec.runWithState readScriptFull script initState with
+  | (some (tok, st), errs) =>
       -- Post-process to expand $() content, passing original positions for offset calculation
       let (expanded, _finalId, extraPositions) :=
         expandDollarExpansions tok filename st.nextId st.positions
       -- Merge extra positions (from sub-parsing) into original positions
       let allPositions :=
         extraPositions.fold (init := st.positions) fun m k v => m.insert k v
-      (some expanded, allPositions, st.errors)
-  | .error it' err =>
-      let msg := s!"{filename}:{it'.line}:{it'.column}: {err}"
-      (none, {}, msg :: initState.errors)
+      (some expanded, allPositions, errs)
+  | (none, errs) =>
+      (none, {}, errs)
 
 /-- Check if msg contains a substring (case-insensitive) -/
 private def contains (msg sub : String) : Bool :=

@@ -367,24 +367,33 @@ def mkTokenAt (inner : InnerToken Token) (startLine startCol : Nat) : ShellParse
 ## Running Parsers
 -/
 
+/-- Run a shell parser with a custom initial state. -/
+def runWithState (p : ShellParser α) (input : String) (st : ShellState)
+    : Option (α × ShellState) × List String :=
+  let it := PosIterator.create input
+  match p st it with
+  | .success _ res => (some res, res.snd.errors)
+  | .error it' err =>
+      let msg := s!"{st.filename}:{it'.line}:{it'.column}: {err}"
+      (none, st.errors ++ [msg])
+
 /-- Run a shell parser -/
 def run (p : ShellParser α) (input : String) (filename : String := "<stdin>")
     : Option α × Std.HashMap Id (Position × Position) × List String :=
-  let it := PosIterator.create input
   let st := mkShellState filename
-  match p st it with
-  | .success _ (a, st') => (some a, st'.positions, st'.errors)
-  | .error it' err =>
-      let msg := s!"{filename}:{it'.line}:{it'.column}: {err}"
-      (none, {}, [msg])
+  match runWithState p input st with
+  | (some (a, st'), errs) => (some a, st'.positions, errs)
+  | (none, errs) => (none, {}, errs)
 
 /-- Run a shell parser, returning Except -/
 def runExcept (p : ShellParser α) (input : String) (filename : String := "<stdin>")
     : Except String (α × Std.HashMap Id (Position × Position)) :=
-  let it := PosIterator.create input
   let st := mkShellState filename
-  match p st it with
-  | .success _ (a, st') => .ok (a, st'.positions)
-  | .error it' err => .error s!"{filename}:{it'.line}:{it'.column}: {err}"
+  match runWithState p input st with
+  | (some (a, st'), _) => .ok (a, st'.positions)
+  | (none, errs) =>
+      match errs with
+      | [] => .error "parse error"
+      | msg :: _ => .error msg
 
 end ShellCheck.Parser.Parsec
