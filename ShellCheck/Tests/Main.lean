@@ -56,6 +56,9 @@ def main : IO UInt32 := do
   ok := ok && (← checkProp "command substitution parses" prop_command_substitution_parses cfg)
   ok := ok && (← checkProp "backtick parses" prop_backtick_parses cfg)
   ok := ok && (← checkProp "heredoc parses" prop_heredoc_parses cfg)
+  ok := ok && (← checkProp "if parses" prop_if_parses cfg)
+  ok := ok && (← checkProp "function definition parses" prop_function_definition_parses cfg)
+  ok := ok && (← checkProp "subshell parses" prop_subshell_parses cfg)
 
   ok := ok && (← checkRegression "readUntil [[ ignores quoted terminator" test_readUntil_doubleBracket_ignores_quoted_terminator)
   ok := ok && (← checkRegression "readUntil [ ignores quoted terminator" test_readUntil_singleBracket_ignores_quoted_terminator)

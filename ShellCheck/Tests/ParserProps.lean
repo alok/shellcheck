@@ -213,6 +213,15 @@ private def backtickScript (word : SafeWord) : String :=
 private def heredocScript (content : SafeWord) : String :=
   "cat <<EOF\n" ++ content.value ++ "\nEOF\n"
 
+private def ifScript (cond body : SafeWord) : String :=
+  s!"if echo {cond.value}; then echo {body.value}; fi"
+
+private def functionScript (name : SafeVar) (body : SafeWord) : String :=
+  name.value ++ "() { echo " ++ body.value ++ "; }"
+
+private def subshellScript (word : SafeWord) : String :=
+  s!"(echo {word.value})"
+
 /-- Command substitution parses. -/
 abbrev prop_command_substitution_parses : Prop :=
   Plausible.NamedBinder "word" <| ∀ word : SafeWord,
@@ -227,6 +236,23 @@ abbrev prop_backtick_parses : Prop :=
 abbrev prop_heredoc_parses : Prop :=
   Plausible.NamedBinder "content" <| ∀ content : SafeWord,
     parseOk (heredocScript content) = true
+
+/-- If/then/fi blocks parse. -/
+abbrev prop_if_parses : Prop :=
+  Plausible.NamedBinder "cond" <| ∀ cond : SafeWord,
+    Plausible.NamedBinder "body" <| ∀ body : SafeWord,
+      parseOk (ifScript cond body) = true
+
+/-- Function definitions parse. -/
+abbrev prop_function_definition_parses : Prop :=
+  Plausible.NamedBinder "name" <| ∀ name : SafeVar,
+    Plausible.NamedBinder "body" <| ∀ body : SafeWord,
+      parseOk (functionScript name body) = true
+
+/-- Subshells parse. -/
+abbrev prop_subshell_parses : Prop :=
+  Plausible.NamedBinder "word" <| ∀ word : SafeWord,
+    parseOk (subshellScript word) = true
 
 private def assignmentPositionsOk (name : SafeVar) (value : SafeWord) : Bool :=
   let script := assignmentScript name value
