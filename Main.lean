@@ -371,7 +371,11 @@ def runShellcheck4 (p : Parsed) : IO UInt32 := do
         fmt.onResult cf.result sys
       fmt.footer
   | .json =>
-      IO.println (ShellCheck.Formatter.JSON.formatResults results)
+      let fmt ← ShellCheck.Formatter.JSON.format
+      fmt.header
+      for cf in checkedFiles do
+        fmt.onResult cf.result sys
+      fmt.footer
   | .quiet =>
       pure ()
   | .checkstyle =>

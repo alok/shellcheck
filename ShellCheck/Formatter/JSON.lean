@@ -69,12 +69,21 @@ def formatOutput (comments : List PositionedComment) : String :=
   jsonArray.pretty
 
 /-- Create JSON formatter -/
-def format [Monad m] : Formatter m := {
-  header := pure ()
-  onResult := fun _cr _sys => pure ()  -- Would collect results
-  onFailure := fun _file _msg => pure ()
-  footer := pure ()  -- Would output collected JSON
-}
+def format : IO (Formatter IO) := do
+  let commentsRef ← IO.mkRef ([] : List PositionedComment)
+  let onResult := fun cr _sys =>
+    commentsRef.modify (fun acc => acc ++ cr.crComments)
+  let onFailure := fun file msg =>
+    IO.eprintln s!"{file}: {msg}"
+  let footer := do
+    let comments ← commentsRef.get
+    IO.println (formatOutput comments)
+  pure {
+    header := pure ()
+    onResult := onResult
+    onFailure := onFailure
+    footer := footer
+  }
 
 /-- Format a single check result to JSON string -/
 def formatResult (cr : CheckResult) : String :=
