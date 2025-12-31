@@ -4,6 +4,7 @@ import ShellCheck.Interface
 namespace ShellCheck.Tests.AnalyticsRegression
 
 open ShellCheck.Checker
+open ShellCheck.Data
 open ShellCheck.Interface
 
 def idSystemInterface : SystemInterface Id := {
@@ -21,6 +22,21 @@ def runCheck (script : String) : CheckResult :=
     csExcludedWarnings := []
     csIncludedWarnings := none
     csShellTypeOverride := none
+    csMinSeverity := .styleC
+    csExtendedAnalysis := none
+    csOptionalChecks := []
+  }
+  checkScript idSystemInterface spec
+
+def runCheckWithShell (shell : Shell) (script : String) : CheckResult :=
+  let spec : CheckSpec := {
+    csFilename := "<test>"
+    csScript := script
+    csCheckSourced := false
+    csIgnoreRC := true
+    csExcludedWarnings := []
+    csIncludedWarnings := none
+    csShellTypeOverride := some shell
     csMinSeverity := .styleC
     csExtendedAnalysis := none
     csOptionalChecks := []
@@ -73,5 +89,13 @@ def test_sc2125_brace_assignment : Except String Bool := do
 def test_sc2125_quoted_glob_ok : Except String Bool := do
   let cr := runCheck "a='*.gif'"
   pure (!hasCode cr 2125)
+
+def test_sc2127_case_fallthrough_sh : Except String Bool := do
+  let cr := runCheckWithShell .Sh "case foo in bar) echo hi ;& baz) echo ok ;; esac"
+  pure (hasCode cr 2127)
+
+def test_sc2127_case_fallthrough_bash_ok : Except String Bool := do
+  let cr := runCheckWithShell .Bash "case foo in bar) echo hi ;& baz) echo ok ;; esac"
+  pure (!hasCode cr 2127)
 
 end ShellCheck.Tests.AnalyticsRegression

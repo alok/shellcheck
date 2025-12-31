@@ -1,8 +1,8 @@
 ShellCheck parity report (generated 2025-12-31)
 
 Haskell codes:      529
-Lean codes:      528
-Missing in Lean:      283
+Lean codes:      529
+Missing in Lean:      282
 
 Missing SC codes (Haskell-only):
 SC1032
@@ -103,7 +103,6 @@ SC2102
 SC2103
 SC2111
 SC2113
-SC2127
 SC2151
 SC2168
 SC2172

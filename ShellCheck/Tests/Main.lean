@@ -81,5 +81,7 @@ def main : IO UInt32 := do
   ok := ok && (← checkRegression "SC2125: glob assignment" test_sc2125_glob_assignment)
   ok := ok && (← checkRegression "SC2125: brace assignment" test_sc2125_brace_assignment)
   ok := ok && (← checkRegression "SC2125: quoted glob ok" test_sc2125_quoted_glob_ok)
+  ok := ok && (← checkRegression "SC2127: case fallthrough (sh)" test_sc2127_case_fallthrough_sh)
+  ok := ok && (← checkRegression "SC2127: case fallthrough (bash ok)" test_sc2127_case_fallthrough_bash_ok)
 
   pure (if ok then 0 else 1)

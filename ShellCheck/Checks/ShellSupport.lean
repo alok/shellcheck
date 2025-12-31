@@ -24,10 +24,44 @@ open ShellCheck.Prelude
 def stringContains (s sub : String) : Bool :=
   (s.splitOn sub).length > 1
 
+def shellNameLower : Shell → String
+  | .Ksh => "ksh"
+  | .Sh => "sh"
+  | .Bash => "bash"
+  | .Dash => "dash"
+  | .BusyboxSh => "busyboxsh"
+
+def shellSupport (t : Token) : String × List Shell :=
+  match t.inner with
+  | .T_CaseExpression _ cases =>
+      let seps := cases.map (fun (ct, _, _) => ct)
+      if seps.any (· == .caseContinue) then
+        ("cases with ;;&", [.Bash])
+      else if seps.any (· == .caseFallThrough) then
+        ("cases with ;&", [.Bash, .Ksh])
+      else
+        ("", [])
+  | .T_DollarBraceCommandExpansion _ _ =>
+      ("${ ..; } command expansion", [.Bash, .Ksh])
+  | _ => ("", [])
+
 /-- Wrapper for shell-specific checks -/
 structure ForShell where
   shells : List Shell
   check : Parameters → Token → List TokenComment
+
+/-- SC2127: Unsupported shell feature for current shell type. -/
+def checkUnsupported : ForShell := {
+  shells := [.Sh, .Dash, .BusyboxSh, .Bash, .Ksh]
+  check := fun params t =>
+    let (name, support) := shellSupport t
+    if support.isEmpty || support.contains params.shellType then
+      []
+    else
+      let shells := String.intercalate " or " (support.map shellNameLower)
+      [makeComment .errorC t.id 2127
+        s!"To use {name}, specify #!/usr/bin/env {shells}"]
+}
 
 /-- Get checker for specific shell -/
 def getChecker (params : Parameters) (list : List ForShell) : Checker := {
@@ -338,6 +372,7 @@ def checkWordSplitting : ForShell := {
 -- Note: checkWordSplitting removed - SC2046 is handled by checkUnquotedExpansions in Analytics.lean
 -- which properly checks for quote-free contexts (assignments, double-quoted strings, etc.)
 def checks : List ForShell := [
+  checkUnsupported,
   checkForDecimals,
   checkBashisms,
   checkEchoSed,
