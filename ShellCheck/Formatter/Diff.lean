@@ -75,14 +75,18 @@ def computeDiff (oldLines newLines : List String) : List (DiffElem String) :=
     -- Very simplified: show all old as deletions, all new as additions
     (oldLines.map DiffElem.first) ++ (newLines.map DiffElem.second)
 
-/-- Count lines in diff for left/right sides -/
-def countDelta (diffs : List (DiffElem α)) : Nat × Nat :=
-  diffs.foldl (fun (l, r) d =>
-    match d with
-    | .both _ _ => (l + 1, r + 1)
-    | .first _ => (l + 1, r)
-    | .second _ => (l, r + 1)
-  ) (0, 0)
+/-- Count lines in diff for left/right sides. -/
+def countDelta : List (DiffElem α) → Nat × Nat
+  | [] => (0, 0)
+  | .both _ _ :: rest =>
+      let (l, r) := countDelta rest
+      (l + 1, r + 1)
+  | .first _ :: rest =>
+      let (l, r) := countDelta rest
+      (l + 1, r)
+  | .second _ :: rest =>
+      let (l, r) := countDelta rest
+      (l, r + 1)
 
 /-- Format a range as "start,count" -/
 def formatRange (range : Nat × Nat) : String :=
@@ -165,17 +169,20 @@ def format [Monad m] (_options : Format.FormatterOptions) : Format.Formatter m :
 theorem countDelta_both_increments (s : String) (rest : List (DiffElem String)) :
     countDelta (DiffElem.both s s :: rest) =
     let (l, r) := countDelta rest
-    (l + 1, r + 1) := sorry
+    (l + 1, r + 1) := by
+  simp [countDelta]
 
 theorem countDelta_first_increments_left (s : String) (rest : List (DiffElem String)) :
     countDelta (DiffElem.first s :: rest) =
     let (l, r) := countDelta rest
-    (l + 1, r) := sorry
+    (l + 1, r) := by
+  simp [countDelta]
 
 theorem countDelta_second_increments_right (s : String) (rest : List (DiffElem String)) :
     countDelta (DiffElem.second s :: rest) =
     let (l, r) := countDelta rest
-    (l, r + 1) := sorry
+    (l, r + 1) := by
+  simp [countDelta]
 
 theorem formatDiffLine_first_starts_minus (_color : ColorFunc) (_s : String) :
     True := trivial  -- Would verify starts with '-' (before coloring)

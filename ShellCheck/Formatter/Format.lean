@@ -112,10 +112,16 @@ theorem lineNo_extracts_line (pc : PositionedComment) :
     lineNo pc = pc.pcStartPos.posLine := rfl
 
 theorem severityText_covers_all (pc : PositionedComment) :
-    severityText pc ∈ ["error", "warning", "info", "style"] := sorry
+    severityText pc ∈ ["error", "warning", "info", "style"] := by
+  cases pc with
+  | mk _ _ pcComment _ =>
+      cases pcComment with
+      | mk sev _ _ =>
+          cases sev <;> simp [severityText]
 
 theorem makeNonVirtual_preserves_count (comments : List PositionedComment) (contents : String) :
-    (makeNonVirtual comments contents).length = comments.length := sorry
+    (makeNonVirtual comments contents).length = comments.length := by
+  simp [makeNonVirtual]
 
 theorem groupBy_partitions (key : PositionedComment → α) [BEq α] (comments : List PositionedComment) :
     (groupBy key comments).flatten.length = comments.length := sorry
