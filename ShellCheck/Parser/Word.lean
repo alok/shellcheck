@@ -362,14 +362,13 @@ private partial def parseBracedArgParts
     (arg : String) (filename : String)
     (startId : Nat) (offsetLine offsetCol : Nat)
     : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
-  let it := ShellCheck.Parser.Parsec.PosIterator.create arg
   let initState : FullParserState :=
     { ShellCheck.Parser.Parsec.mkShellState filename with nextId := startId }
-  match readBracedArgPartsFull initState it with
-  | .success _ (parts, st) =>
+  match ShellCheck.Parser.Parsec.runWithState readBracedArgPartsFull arg initState with
+  | (some (parts, st), _) =>
       let pos := offsetPositions st.positions offsetLine offsetCol
       (parts, st.nextId, pos)
-  | .error _ _ =>
+  | (none, _) =>
       let litTok : Token := ⟨⟨startId⟩, .T_Literal arg⟩
       ([litTok], startId + 1, {})
 
