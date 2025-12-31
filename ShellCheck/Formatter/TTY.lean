@@ -117,7 +117,22 @@ def format [Monad m] (_options : Format.FormatterOptions) : Format.Formatter m :
 -- Theorems (stubs)
 
 theorem colorForLevel_valid (level : String) :
-    colorForLevel level ≤ 37 := sorry
+    colorForLevel level ≤ 37 := by
+  by_cases h1 : level = "error"
+  · simp [colorForLevel, h1]
+  by_cases h2 : level = "warning"
+  · simp [colorForLevel, h2]
+  by_cases h3 : level = "info"
+  · simp [colorForLevel, h3]
+  by_cases h4 : level = "style"
+  · simp [colorForLevel, h4]
+  by_cases h5 : level = "verbose"
+  · simp [colorForLevel, h5]
+  by_cases h6 : level = "message"
+  · simp [colorForLevel, h6]
+  by_cases h7 : level = "source"
+  · simp [colorForLevel, h7]
+  · simp [colorForLevel]
 
 theorem cuteIndent_starts_with_spaces (c : PositionedComment) :
     (cuteIndent c).length ≥ colNo c := sorry
