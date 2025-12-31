@@ -3787,7 +3787,6 @@ def commandChecks : List CommandCheck := [
   checkSingleQuoteExpression, -- SC2016
   checkDecimalComparison, -- SC2072
   checkArrayAssign,     -- SC2206
-  checkPrintfAtVar,     -- SC2145
   checkAccidentalExec,  -- SC2091
   checkAliasExpansion,  -- SC2139
   checkAliasesUsesArgs, -- SC2142

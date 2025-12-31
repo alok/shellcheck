@@ -1677,18 +1677,17 @@ where
 /-- SC2145: Argument mixes string and array. Use * or separate argument -/
 def checkConcatenatedDollarAt (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_NormalWord parts =>
-    let hasArray := parts.any isArrayExpansion
-    let hasOther := parts.any fun p =>
-      match p.inner with
-      | .T_Literal s => not s.isEmpty
-      | .T_SingleQuoted _ => true
-      | .T_DoubleQuoted _ => true
-      | _ => false
-    if hasArray && hasOther && parts.length > 1 then
-      [makeComment .warningC t.id 2145
-        "Argument mixes string and array. Use * or separate argument."]
-    else []
+  | .T_NormalWord _ =>
+    let parts := getWordParts t
+    let array := parts.find? isArrayExpansion
+    if (parts.drop 1).isEmpty then
+      []
+    else
+      match array with
+      | some arr =>
+          [makeComment .errorC arr.id 2145
+            "Argument mixes string and array. Use * or separate argument."]
+      | Option.none => []
   | _ => []
 
 /-- SC2050: This expression is constant. Did you forget the $ on a variable? -/
