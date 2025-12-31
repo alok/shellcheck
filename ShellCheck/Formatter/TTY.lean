@@ -131,6 +131,12 @@ theorem formatLineGroup_includes_source (color : ColorFunc) (filename : String)
 
 theorem formatWikiLinks_prefix (codes : List Nat) :
     codes.length > 0 →
-    (formatWikiLinks codes).head? = some "For more information:" := sorry
+    (formatWikiLinks codes).head? = some "For more information:" := by
+  intro h
+  cases codes with
+  | nil =>
+      simp at h
+  | cons c cs =>
+      simp [formatWikiLinks]
 
 end ShellCheck.Formatter.TTY
