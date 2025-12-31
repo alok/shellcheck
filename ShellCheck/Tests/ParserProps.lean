@@ -173,6 +173,37 @@ abbrev prop_simple_assignment_parses : Prop :=
     Plausible.NamedBinder "value" <| ∀ value : SafeWord,
       parseOk (assignmentScript name value) = true
 
+private def doubleQuotedEchoScript (a b : SafeWord) : String :=
+  s!"echo \"{a.value} {b.value}\""
+
+private def singleQuotedEchoScript (a b : SafeWord) : String :=
+  s!"echo '{a.value} {b.value}'"
+
+private def redirectScript (word fname : SafeWord) : String :=
+  s!"echo {word.value} >{fname.value}"
+
+private def redirectFdScript (word fname : SafeWord) : String :=
+  s!"echo {word.value} 2>{fname.value}"
+
+/-- Double-quoted words with spaces parse. -/
+abbrev prop_double_quoted_word_parses : Prop :=
+  Plausible.NamedBinder "a" <| ∀ a : SafeWord,
+    Plausible.NamedBinder "b" <| ∀ b : SafeWord,
+      parseOk (doubleQuotedEchoScript a b) = true
+
+/-- Single-quoted words with spaces parse. -/
+abbrev prop_single_quoted_word_parses : Prop :=
+  Plausible.NamedBinder "a" <| ∀ a : SafeWord,
+    Plausible.NamedBinder "b" <| ∀ b : SafeWord,
+      parseOk (singleQuotedEchoScript a b) = true
+
+/-- Simple redirections parse. -/
+abbrev prop_redirect_parses : Prop :=
+  Plausible.NamedBinder "word" <| ∀ word : SafeWord,
+    Plausible.NamedBinder "fname" <| ∀ fname : SafeWord,
+      parseOk (redirectScript word fname) = true ∧
+      parseOk (redirectFdScript word fname) = true
+
 private def assignmentPositionsOk (name : SafeVar) (value : SafeWord) : Bool :=
   let script := assignmentScript name value
   let (root, positions, errors) := runFullParser script "<test>"
