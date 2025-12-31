@@ -26,7 +26,6 @@ def mkState (_input : String) (filename : String := "<stdin>") : ParserState :=
 @[inline] def recordPosition (id : Id) (startLine startCol endLine endCol : Nat) : Parser Unit :=
   ShellCheck.Parser.Parsec.recordPosition id startLine startCol endLine endCol
 @[inline] def currentPos : Parser (Nat × Nat) := ShellCheck.Parser.Parsec.getPos
-@[inline] def isEof : Parser Bool := ShellCheck.Parser.Parsec.isEof
 @[inline] def peek? : Parser (Option Char) := ShellCheck.Parser.Parsec.peek?
 @[inline] def anyChar : Parser Char := ShellCheck.Parser.Parsec.anyChar
 @[inline] def char (c : Char) : Parser Char := ShellCheck.Parser.Parsec.pchar c

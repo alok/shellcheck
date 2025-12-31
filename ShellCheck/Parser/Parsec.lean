@@ -150,7 +150,7 @@ protected def fail (msg : String) : ShellParser α := fun _ it =>
   If the left branch fails *without consuming input*, we run the right branch.
   If it fails *after consuming input*, we commit to that failure.
 
-  Use `attempt`/`attempt` around a branch when it must backtrack even after
+  Use `attempt` around a branch when it must backtrack even after
   consuming input. -/
   @[inline]
   protected def orElse (p : ShellParser α) (q : Unit → ShellParser α) : ShellParser α := fun st it =>
