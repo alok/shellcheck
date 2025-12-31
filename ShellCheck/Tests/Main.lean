@@ -1,9 +1,11 @@
 import Plausible
 import ShellCheck.Tests.ParsecProps
+import ShellCheck.Tests.ParserProps
 import ShellCheck.Tests.ParserRegression
 
 open Plausible
 open ShellCheck.Tests.ParsecProps
+open ShellCheck.Tests.ParserProps
 open ShellCheck.Tests.ParserRegression
 
 def checkProp (name : String) (p : Prop) (cfg : Configuration := {}) [Testable p] : IO Bool := do
@@ -44,6 +46,8 @@ def main : IO UInt32 := do
   ok := ok && (← checkProp "many rejects empty success" prop_many_rejects_empty_success cfg)
   ok := ok && (← checkProp "optional doesn't consume on mismatch" prop_optional_does_not_consume_on_mismatch cfg)
   ok := ok && (← checkProp "optional commits after partial consumption" prop_optional_commits_after_partial_consumption cfg)
+  ok := ok && (← checkProp "simple echo round-trip" prop_simple_echo_roundtrip cfg)
+  ok := ok && (← checkProp "positions valid for simple scripts" prop_positions_valid_for_simple_scripts cfg)
 
   ok := ok && (← checkRegression "readUntil [[ ignores quoted terminator" test_readUntil_doubleBracket_ignores_quoted_terminator)
   ok := ok && (← checkRegression "readUntil [ ignores quoted terminator" test_readUntil_singleBracket_ignores_quoted_terminator)
