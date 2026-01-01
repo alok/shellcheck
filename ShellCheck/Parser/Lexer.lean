@@ -68,31 +68,30 @@ def reservedKeywords : List String :=
 
 /-! ## Spacing Parsers -/
 
-/-- Skip horizontal whitespace (space, tab) -/
-partial def skipHSpace : Parser Unit := do
-  let _ ← takeWhile (fun c => c == ' ' || c == '\t')
+/-- Core whitespace skipper with optional newline handling. -/
+partial def skipSpaceCore (includeNewlines : Bool) : Parser Unit := do
+  let _ ←
+    takeWhile (fun c => if includeNewlines then c.isWhitespace else c == ' ' || c == '\t')
   match ← peek? with
-  | some '\\' =>
-      match ← ShellCheck.Parser.Parsec.optional (attempt (pstring "\\\n")) with
-      | some _ => skipHSpace
-      | none => pure ()
   | some '#' =>
       let _ ← takeWhile (· != '\n')
-      pure ()
+      if includeNewlines then
+        skipSpaceCore includeNewlines
+      else
+        pure ()
+  | some '\\' =>
+      match ← ShellCheck.Parser.Parsec.optional (attempt (pstring "\\\n")) with
+      | some _ => skipSpaceCore includeNewlines
+      | none => pure ()
   | _ => pure ()
+
+/-- Skip horizontal whitespace (space, tab) -/
+partial def skipHSpace : Parser Unit := do
+  skipSpaceCore false
 
 /-- Skip all whitespace including newlines -/
 partial def skipAllSpace : Parser Unit := do
-  let _ ← takeWhile (fun c => c.isWhitespace)
-  match ← peek? with
-  | some '#' =>
-      let _ ← takeWhile (· != '\n')
-      skipAllSpace
-  | some '\\' =>
-      match ← ShellCheck.Parser.Parsec.optional (attempt (pstring "\\\n")) with
-      | some _ => skipAllSpace
-      | none => pure ()
-  | _ => pure ()
+  skipSpaceCore true
 
 /-! ## Keyword Parsers -/
 
