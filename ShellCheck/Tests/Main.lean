@@ -1,5 +1,6 @@
 import Plausible
 import ShellCheck.Tests.ParsecProps
+import ShellCheck.Tests.ParserProps
 import ShellCheck.Tests.ParserRegression
 import ShellCheck.Tests.FormatterTTY
 import ShellCheck.Tests.FormatterGCC
@@ -8,6 +9,7 @@ import ShellCheck.Tests.AnalyticsRegression
 
 open Plausible
 open ShellCheck.Tests.ParsecProps
+open ShellCheck.Tests.ParserProps
 open ShellCheck.Tests.ParserRegression
 open ShellCheck.Tests.FormatterTTY
 open ShellCheck.Tests.FormatterGCC
@@ -52,6 +54,8 @@ def main : IO UInt32 := do
   ok := ok && (← checkProp "many rejects empty success" prop_many_rejects_empty_success cfg)
   ok := ok && (← checkProp "optional doesn't consume on mismatch" prop_optional_does_not_consume_on_mismatch cfg)
   ok := ok && (← checkProp "optional commits after partial consumption" prop_optional_commits_after_partial_consumption cfg)
+  ok := ok && (← checkProp "parser roundtrip (simple subset)" prop_simple_roundtrip cfg)
+  ok := ok && (← checkProp "parser positions within bounds" prop_positions_valid cfg)
 
   ok := ok && (← checkRegression "readUntil [[ ignores quoted terminator" test_readUntil_doubleBracket_ignores_quoted_terminator)
   ok := ok && (← checkRegression "readUntil [ ignores quoted terminator" test_readUntil_singleBracket_ignores_quoted_terminator)
