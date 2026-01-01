@@ -110,6 +110,83 @@ def parseOk (script : String) : Bool :=
   | none => false
   | some _ => errors.isEmpty
 
+def parseRoot? (script : String) : Option Token :=
+  let (rootOpt, _positions, errors) := runParser script "<prop>"
+  match rootOpt with
+  | none => none
+  | some root =>
+      if errors.isEmpty then some root else none
+
+def hasAnyDollarExpansion (t : Token) : Bool :=
+  let scan : StateM Bool Token :=
+    ShellCheck.AST.analyze
+      (m := StateM Bool)
+      (f := fun tok => do
+        match tok.inner with
+        | .T_DollarBraced _ _
+        | .T_DollarExpansion _
+        | .T_DollarArithmetic _
+        | .T_DollarBracket _
+        | .T_DollarSingleQuoted _
+        | .T_DollarDoubleQuoted _
+        | .T_DollarBraceCommandExpansion _ _ =>
+            modify (fun _ => true)
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run false
+  found
+
+def collectHereDocs (t : Token) : List (Quoted × List Token) :=
+  let scan : StateM (List (Quoted × List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (List (Quoted × List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_HereDoc _ quotedFlag _ content =>
+            modify (fun acc => (quotedFlag, content) :: acc)
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run []
+  found.reverse
+
+def firstBraceExpansion? (t : Token) : Option (List Token) :=
+  let scan : StateM (Option (List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (Option (List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_BraceExpansion parts =>
+            match (← get) with
+            | some _ => pure ()
+            | none => set (some parts)
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run none
+  found
+
+def firstExtglob? (t : Token) : Option (String × List Token) :=
+  let scan : StateM (Option (String × List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (Option (String × List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_Extglob pattern parts =>
+            match (← get) with
+            | some _ => pure ()
+            | none => set (some (pattern, parts))
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run none
+  found
+
 def simpleRoundtrip (seed : String) : Bool :=
   let cmds := scriptFromSeed seed
   let script := renderScript cmds
@@ -149,6 +226,103 @@ def positionsOkQuoted (seed : String) : Bool :=
   | none => false
   | some _ => errors.isEmpty && positionsValid script positions
 
+def braceExpansionSplits (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let w2 := sanitizeWord (reverseString seed)
+  let script := "echo {" ++ w1 ++ "," ++ w2 ++ "}"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match firstBraceExpansion? root with
+      | none => false
+      | some parts =>
+          parts.map getLiteralString == [some w1, some w2]
+
+def braceExpansionNestedLiteral (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let w2 := sanitizeWord (reverseString seed)
+  let w3 := sanitizeWord (seed ++ "x")
+  let script := "echo {" ++ w1 ++ ",{" ++ w2 ++ "," ++ w3 ++ "}}"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match firstBraceExpansion? root with
+      | none => false
+      | some parts =>
+          let expected := "{" ++ w2 ++ "," ++ w3 ++ "}"
+          parts.map getLiteralString == [some w1, some expected]
+
+def braceExpansionRangeIsExpansion (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let w2 := sanitizeWord (reverseString seed)
+  let script := "echo {" ++ w1 ++ ".." ++ w2 ++ "}"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match firstBraceExpansion? root with
+      | none => false
+      | some parts =>
+          parts.map getLiteralString == [some (w1 ++ ".." ++ w2)]
+
+def extglobSplits (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let w2 := sanitizeWord (reverseString seed)
+  let script := "echo @(" ++ w1 ++ "|" ++ w2 ++ ")"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match firstExtglob? root with
+      | none => false
+      | some (_, parts) =>
+          parts.map getLiteralString == [some w1, some w2]
+
+def extglobBracketKeepsPipe (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "echo @([|]|" ++ w1 ++ ")"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match firstExtglob? root with
+      | none => false
+      | some (_, parts) =>
+          parts.map getLiteralString == [some "[|]", some w1]
+
+def heredocUnquotedExpands (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "cat <<EOF\n$" ++ w1 ++ "\nEOF\n"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match collectHereDocs root with
+      | [] => false
+      | (quotedFlag, content) :: _ =>
+          quotedFlag == .unquoted && content.any hasAnyDollarExpansion
+
+def heredocMultipleExpands (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let w2 := sanitizeWord (reverseString seed)
+  let script :=
+    "cat <<EOF1 <<EOF2\n$" ++ w1 ++ "\nEOF1\n$" ++ w2 ++ "\nEOF2\n"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      let docs := collectHereDocs root
+      let okCount := docs.length == 2
+      let okContent := docs.all (fun (quotedFlag, content) =>
+        quotedFlag == .unquoted && content.any hasAnyDollarExpansion)
+      okCount && okContent
+
+def heredocDashedExpands (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "cat <<-EOF\n\t$" ++ w1 ++ "\n\tEOF\n"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match collectHereDocs root with
+      | [] => false
+      | (quotedFlag, content) :: _ =>
+          quotedFlag == .unquoted && content.any hasAnyDollarExpansion
+
 abbrev prop_simple_roundtrip : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     simpleRoundtrip seed = true
@@ -164,5 +338,37 @@ abbrev prop_parse_ok_quoted : Prop :=
 abbrev prop_positions_valid_quoted : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     positionsOkQuoted seed = true
+
+abbrev prop_brace_expansion_splits : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    braceExpansionSplits seed = true
+
+abbrev prop_brace_expansion_nested_literal : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    braceExpansionNestedLiteral seed = true
+
+abbrev prop_brace_expansion_range : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    braceExpansionRangeIsExpansion seed = true
+
+abbrev prop_extglob_splits : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    extglobSplits seed = true
+
+abbrev prop_extglob_bracket_pipe : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    extglobBracketKeepsPipe seed = true
+
+abbrev prop_heredoc_unquoted_expands : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    heredocUnquotedExpands seed = true
+
+abbrev prop_heredoc_multiple_expands : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    heredocMultipleExpands seed = true
+
+abbrev prop_heredoc_dashed_expands : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    heredocDashedExpands seed = true
 
 end ShellCheck.Tests.ParserProps
