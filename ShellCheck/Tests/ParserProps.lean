@@ -106,6 +106,14 @@ def positionsValid (script : String) (positions : Std.HashMap Id (Position × Po
     posInBounds script startPos &&
     posInBounds script endPos)
 
+def positionsHas (positions : Std.HashMap Id (Position × Position)) (id : Id) : Bool :=
+  match positions.get? id with
+  | some _ => true
+  | none => false
+
+def positionsCoverTokens (positions : Std.HashMap Id (Position × Position)) (root : Token) : Bool :=
+  collectTokenIds root |>.all (positionsHas positions)
+
 def parseOk (script : String) : Bool :=
   let (rootOpt, _positions, errors) := runParser script "<prop>"
   match rootOpt with
@@ -145,7 +153,10 @@ def positionsOk (seed : String) : Bool :=
   let (rootOpt, positions, errors) := runParser script "<prop>"
   match rootOpt with
   | none => false
-  | some _ => errors.isEmpty && positionsValid script positions
+  | some root =>
+      errors.isEmpty &&
+        positionsValid script positions &&
+        positionsCoverTokens positions root
 
 def parseOkQuoted (seed : String) : Bool :=
   let script := scriptFromSeedQuoted seed
@@ -156,7 +167,10 @@ def positionsOkQuoted (seed : String) : Bool :=
   let (rootOpt, positions, errors) := runParser script "<prop>"
   match rootOpt with
   | none => false
-  | some _ => errors.isEmpty && positionsValid script positions
+  | some root =>
+      errors.isEmpty &&
+        positionsValid script positions &&
+        positionsCoverTokens positions root
 
 def braceExpansionSplits (seed : String) : Bool :=
   let w1 := sanitizeWord seed
