@@ -136,6 +136,14 @@ def test_sc2102_char_range_glob : Except String Bool := do
   let cr := runCheck "ls [10-15]"
   pure (hasCode cr 2102)
 
+def test_sc2103_cd_and_back : Except String Bool := do
+  let cr := runCheck "for f in *; do cd $f; git pull; cd ..; done"
+  pure (hasCode cr 2103)
+
+def test_sc2103_set_e_ok : Except String Bool := do
+  let cr := runCheck "set -e; for dir in */; do cd \"$dir\"; some_cmd; cd ..; done"
+  pure (!hasCode cr 2103)
+
 def test_sc2223_default_assignment : Except String Bool := do
   let cr := runCheckWithExtended ": ${var:=*}"
   pure (hasCode cr 2223)

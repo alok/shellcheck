@@ -915,6 +915,39 @@ where
     | .SubshellScope str => some str
     | .NoneScope => Option.none
 
+/-- SC2103: Use a subshell to avoid having to cd back. -/
+def checkCdAndBack (params : Parameters) (t : Token) : List TokenComment :=
+  if params.hasSetE then
+    []
+  else
+    let sequences := getCommandSequences t
+    sequences.foldl (fun acc seq => acc ++ checkSeq seq) []
+where
+  isCdRevert (tok : Token) : Bool :=
+    match oversimplify tok with
+    | [_cmd, p] => p == ".." || p == "-"
+    | _ => false
+
+  getCandidate : Token → Option Token
+    | ⟨_, .T_Annotation _ inner⟩ => getCandidate inner
+    | tok =>
+        if isCommand tok "cd" then some tok else Option.none
+
+  findCdPair : List Token → Option Token
+    | a :: b :: rest =>
+        if isCdRevert b && !isCdRevert a then
+          some b
+        else
+          findCdPair (b :: rest)
+    | _ => Option.none
+
+  checkSeq (seq : List Token) : List TokenComment :=
+    match findCdPair (seq.filterMap getCandidate) with
+    | some cdTok =>
+        [makeComment .infoC cdTok.id 2103
+          "Use a ( subshell ) to avoid having to cd back."]
+    | Option.none => []
+
 /-- SC2002: Useless cat. Consider cmd < file | .. instead -/
 def checkUuoc (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -5704,6 +5737,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkSecondArgIsComparison,
   checkSpuriousExec,
   checkLoopKeywordScope,
+  checkCdAndBack,
   -- More checks
   checkPrintfFormat,
   checkLsFind,
