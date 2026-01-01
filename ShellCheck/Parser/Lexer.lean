@@ -45,6 +45,13 @@ def isOperatorStart (c : Char) : Bool :=
 def isWordTerminator (c : Char) : Bool :=
   c.isWhitespace || isOperatorStart c || c == '#'
 
+/-- True when a keyword is properly terminated (or at end of input). -/
+def isKeywordTerminator (s : String) : Bool :=
+  s.isEmpty ||
+    match (0 : String.Pos.Raw).get? s with
+    | some c => isWordTerminator c || c == ';'
+    | none => true
+
 /-- Is character a glob metacharacter? -/
 def isGlobChar (c : Char) : Bool :=
   c == '*' || c == '?' || c == '[' || c == ']'
@@ -100,12 +107,7 @@ partial def peekKeyword (kw : String) : Parser Bool := fun st it =>
   let remaining := (it.str.drop it.pos.byteIdx).toString
   if remaining.startsWith kw then
     let afterKw := (remaining.drop kw.length).toString
-    let isTerminated :=
-      afterKw.isEmpty ||
-        match (0 : String.Pos.Raw).get? afterKw with
-        | some c => isWordTerminator c || c == ';'
-        | none => true
-    .success it (isTerminated, st)
+    .success it (isKeywordTerminator afterKw, st)
   else
     .success it (false, st)
 

@@ -332,6 +332,16 @@ partial def pstring (s : String) : Parser String := fun st it =>
         .error it' (.other s!"expected \"{s}\"")
   go 0 it
 
+/-- Run a parser and then consume trailing space with the provided skipper. -/
+def lexeme (space : Parser Unit) (p : Parser α) : Parser α := do
+  let a ← p
+  space
+  pure a
+
+/-- Match a string and consume trailing space with the provided skipper. -/
+def symbol (space : Parser Unit) (s : String) : Parser String :=
+  lexeme space (pstring s)
+
 /-- Skip whitespace -/
 def ws : Parser Unit := do
   let _ ← manyChars (satisfy fun c => c == ' ' || c == '\t' || c == '\n' || c == '\r')
