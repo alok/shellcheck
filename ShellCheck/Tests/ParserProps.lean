@@ -187,6 +187,23 @@ def firstExtglob? (t : Token) : Option (String × List Token) :=
   let (_, found) := scan.run none
   found
 
+def firstProcSub? (t : Token) : Option (String × List Token) :=
+  let scan : StateM (Option (String × List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (Option (String × List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_ProcSub dir cmds =>
+            match (← get) with
+            | some _ => pure ()
+            | none => set (some (dir, cmds))
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run none
+  found
+
 def simpleRoundtrip (seed : String) : Bool :=
   let cmds := scriptFromSeed seed
   let script := renderScript cmds
@@ -323,6 +340,16 @@ def heredocDashedExpands (seed : String) : Bool :=
       | (quotedFlag, content) :: _ =>
           quotedFlag == .unquoted && content.any hasAnyDollarExpansion
 
+def procSubEscapedQuote (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "cat <(echo \"\\\"" ++ w1 ++ "\\\"\")"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match firstProcSub? root with
+      | none => false
+      | some _ => true
+
 abbrev prop_simple_roundtrip : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     simpleRoundtrip seed = true
@@ -370,5 +397,9 @@ abbrev prop_heredoc_multiple_expands : Prop :=
 abbrev prop_heredoc_dashed_expands : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     heredocDashedExpands seed = true
+
+abbrev prop_procsub_escaped_quote : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    procSubEscapedQuote seed = true
 
 end ShellCheck.Tests.ParserProps

@@ -133,6 +133,23 @@ def firstExtglob? (t : Token) : Option (String × List Token) :=
   let (_, found) := scan.run none
   found
 
+def firstProcSub? (t : Token) : Option (String × List Token) :=
+  let scan : StateM (Option (String × List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (Option (String × List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_ProcSub dir cmds =>
+            match (← get) with
+            | some _ => pure ()
+            | none => set (some (dir, cmds))
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run none
+  found
+
 def firstBraceExpansion? (t : Token) : Option (List Token) :=
   let scan : StateM (Option (List Token)) Token :=
     ShellCheck.AST.analyze
@@ -418,5 +435,11 @@ def test_extglob_bracket_class_keeps_pipe : Except String Bool := do
       let alts := parts.map getLiteralString
       pure (alts == [some "[|]", some "foo"])
   | none => .error "did not find extglob"
+
+def test_procsub_escaped_quote_parses : Except String Bool := do
+  let root ← parseScriptOk "cat <(echo \"\\\"\")"
+  match firstProcSub? root with
+  | some _ => pure true
+  | none => .error "did not find procsub"
 
 end ShellCheck.Tests.ParserRegression
