@@ -50,6 +50,19 @@ open ShellCheck.Parser.Parsec
 def trimAsciiString (s : String) : String :=
   s.trimAscii.toString
 
+/-- Parse a token and then skip trailing whitespace/comments. -/
+def lexemeAll (p : Parser α) : Parser α :=
+  ShellCheck.Parser.Parsec.lexeme skipAllSpace p
+
+/-- Parse a token and then skip trailing horizontal whitespace/comments. -/
+def lexemeHSpace (p : Parser α) : Parser α :=
+  ShellCheck.Parser.Parsec.lexeme skipHSpace p
+
+/-- Consume an optional semicolon and then skip whitespace/comments. -/
+def optionalSemicolon : Parser Unit := do
+  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
+  skipAllSpace
+
 /-- Parse a shellcheck directive from comment text.
     Returns annotations for "# shellcheck disable=SC2001,SC2046" etc. -/
 def parseShellCheckDirective (comment : String) : List Annotation :=
@@ -203,8 +216,7 @@ where
 /-- Read an array value: (elem1 elem2 ...) -/
 partial def readArray : Parser Token := do
   let (startLine, startCol) ← getPos
-  let _ ← pchar '('
-  skipAllSpace
+  let _ ← lexemeAll (pchar '(')
   let elems ← readArrayElements []
   let _ ← pchar ')'
   mkTokenAt (.T_Array elems) startLine startCol
@@ -826,12 +838,10 @@ where
 
   -- Forward declarations for compound commands in pipe
   readBraceGroupInPipe : Parser Token := do
-    let _ ← pchar '{'
-    skipAllSpace
+    let _ ← lexemeAll (pchar '{')
     let cmds ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← pchar '}'
     mkToken (.T_BraceGroup cmds)
 
@@ -843,8 +853,7 @@ where
         let inner ← mkToken (.T_Literal content)
         mkToken (.T_Arithmetic inner)
     | none =>
-        let _ ← pchar '('
-        skipAllSpace
+        let _ ← lexemeAll (pchar '(')
         let cmds ← readTermInPipe
         skipAllSpace
         let _ ← pchar ')'
@@ -855,8 +864,7 @@ where
     skipAllSpace
     let cond ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "then"
     skipAllSpace
     let thenBody ← readTermInPipe
@@ -866,16 +874,14 @@ where
   readElifElseInPipe (branches : List (List Token × List Token)) (_acc : List Token)
       : Parser (List (List Token × List Token) × List Token) := do
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let isElif ← peekKeyword "elif"
     if isElif then
       let _ ← consumeKeyword "elif"
       skipAllSpace
       let cond ← readTermInPipe
       skipHSpace
-      let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-      skipAllSpace
+      optionalSemicolon
       let _ ← consumeKeyword "then"
       skipAllSpace
       let body ← readTermInPipe
@@ -887,8 +893,7 @@ where
         skipAllSpace
         let elseBody ← readTermInPipe
         skipHSpace
-        let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-        skipAllSpace
+        optionalSemicolon
         let _ ← consumeKeyword "fi"
         pure (branches, elseBody)
       else
@@ -900,14 +905,12 @@ where
     skipAllSpace
     let cond ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "do"
     skipAllSpace
     let body ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "done"
     mkToken (.T_WhileExpression cond body)
 
@@ -916,14 +919,12 @@ where
     skipAllSpace
     let cond ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "do"
     skipAllSpace
     let body ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "done"
     mkToken (.T_UntilExpression cond body)
 
@@ -947,14 +948,12 @@ where
     let incr ← mkToken (.T_Literal incrContent)
     let _ ← pstring "))"
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "do"
     skipAllSpace
     let body ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "done"
     mkToken (.T_ForArithmetic init cond incr body)
 
@@ -970,14 +969,12 @@ where
       readForWordsInPipe []
     else pure []
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "do"
     skipAllSpace
     let body ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "done"
     mkToken (.T_ForIn varName words body)
 
@@ -1013,8 +1010,7 @@ where
     else
       let _ ← ShellCheck.Parser.Parsec.optional (pchar '(')
       let patterns ← readPatternsInPipe []
-      let _ ← pchar ')'
-      skipAllSpace
+      let _ ← lexemeAll (pchar ')')
       let (cmds, terminator) ← readCaseBodyInPipe [] .caseBreak
       readCaseItemsInPipe ((terminator, patterns, cmds) :: acc)
 
@@ -1080,14 +1076,12 @@ where
     else
       pure []
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "do"
     skipAllSpace
     let body ← readTermInPipe
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let _ ← consumeKeyword "done"
     mkToken (.T_SelectIn varName words body)
 
@@ -1136,8 +1130,7 @@ where
             | some next => readTermContinuationInPipe (next :: bgLast :: rest)
             | none => pure (bgLast :: rest).reverse
     | some '\n' =>
-        let _ ← pchar '\n'
-        skipAllSpace
+        let _ ← lexemeAll (pchar '\n')
         -- Check for terminating keywords
         let isDone ← peekKeyword "done"
         let isFi ← peekKeyword "fi"
@@ -1360,8 +1353,7 @@ Now that readTerm and readAndOr are defined, we can add control flow.
 
 /-- Read a subshell: ( commands ) -/
 partial def readSubshell : Parser Token := do
-  let _ ← pchar '('
-  skipAllSpace
+  let _ ← lexemeAll (pchar '(')
   let cmds ← readTerm
   skipAllSpace
   let _ ← pchar ')'
@@ -1369,12 +1361,10 @@ partial def readSubshell : Parser Token := do
 
 /-- Read a brace group: { commands } -/
 partial def readBraceGroup : Parser Token := do
-  let _ ← pchar '{'
-  skipAllSpace
+  let _ ← lexemeAll (pchar '{')
   let cmds ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← pchar '}'
   mkToken (.T_BraceGroup cmds)
 
@@ -1384,8 +1374,7 @@ partial def readIfExpression : Parser Token := do
   skipAllSpace
   let cond ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "then"
   skipAllSpace
   let thenBody ← readTerm
@@ -1395,16 +1384,14 @@ where
   readElifElse (branches : List (List Token × List Token)) (_elseAcc : List Token)
       : Parser (List (List Token × List Token) × List Token) := do
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-    skipAllSpace
+    optionalSemicolon
     let isElif ← peekKeyword "elif"
     if isElif then
       let _ ← consumeKeyword "elif"
       skipAllSpace
       let cond ← readTerm
       skipHSpace
-      let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-      skipAllSpace
+      optionalSemicolon
       let _ ← consumeKeyword "then"
       skipAllSpace
       let body ← readTerm
@@ -1416,8 +1403,7 @@ where
         skipAllSpace
         let elseBody ← readTerm
         skipHSpace
-        let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-        skipAllSpace
+        optionalSemicolon
         let _ ← consumeKeyword "fi"
         pure (branches, elseBody)
       else
@@ -1430,14 +1416,12 @@ partial def readWhileExpression : Parser Token := do
   skipAllSpace
   let cond ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "do"
   skipAllSpace
   let body ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "done"
   mkToken (.T_WhileExpression cond body)
 
@@ -1447,14 +1431,12 @@ partial def readUntilExpression : Parser Token := do
   skipAllSpace
   let cond ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "do"
   skipAllSpace
   let body ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "done"
   mkToken (.T_UntilExpression cond body)
 
@@ -1471,14 +1453,12 @@ partial def readForIn : Parser Token := do
     readForWords []
   else pure []
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "do"
   skipAllSpace
   let body ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "done"
   mkToken (.T_ForIn varName words body)
 where
@@ -1513,14 +1493,12 @@ partial def readForArithmetic : Parser Token := do
   let incr ← mkToken (.T_Literal incrContent)
   let _ ← pstring "))"
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "do"
   skipAllSpace
   let body ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "done"
   mkToken (.T_ForArithmetic init cond incr body)
 
@@ -1544,8 +1522,7 @@ where
     else
       let _ ← ShellCheck.Parser.Parsec.optional (pchar '(')
       let patterns ← readPatterns []
-      let _ ← pchar ')'
-      skipAllSpace
+      let _ ← lexemeAll (pchar ')')
       let (cmds, terminator) ← readCaseBody [] .caseBreak
       readCaseItems ((terminator, patterns, cmds) :: acc)
 
@@ -1602,14 +1579,12 @@ partial def readSelect : Parser Token := do
   else
     pure []
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "do"
   skipAllSpace
   let body ← readTerm
   skipHSpace
-  let _ ← ShellCheck.Parser.Parsec.optional (pchar ';')
-  skipAllSpace
+  optionalSemicolon
   let _ ← consumeKeyword "done"
   mkToken (.T_SelectIn varName words body)
 where
