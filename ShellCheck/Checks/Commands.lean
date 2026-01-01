@@ -1516,6 +1516,65 @@ def checkArrayComma : CommandCheck := {
     | Option.none => []
 }
 
+private def backrefPosLt (a b : Position) : Bool :=
+  a.posLine < b.posLine ||
+    (a.posLine == b.posLine && a.posColumn < b.posColumn)
+
+private def backrefPosLtOpt : Option Position → Option Position → Bool
+  | some pa, some pb => backrefPosLt pa pb
+  | some _, Option.none => true
+  | Option.none, some _ => false
+  | Option.none, Option.none => false
+
+private def backrefWithIndex : Nat → List Token → List (Nat × Token)
+  | _n, [] => []
+  | n, t :: rest => (n, t) :: backrefWithIndex (n + 1) rest
+
+private def backrefSortTokens (params : Parameters) (tokens : List Token) : List Token :=
+  (backrefWithIndex 0 tokens).toArray.qsort (fun (ia, ta) (ib, tb) =>
+    let posA := (params.tokenPositions.get? ta.id).map Prod.fst
+    let posB := (params.tokenPositions.get? tb.id).map Prod.fst
+    if backrefPosLtOpt posA posB then
+      true
+    else if backrefPosLtOpt posB posA then
+      false
+    else
+      ia < ib
+  ) |>.toList |>.map (·.2)
+
+partial def backrefCollectRefNames (params : Parameters) (tok : Token) : List String :=
+  let here := getReferencedVariablesImpl params.parentMap tok |>.map (fun (_, _, name) => name)
+  let kids := getTokenChildren tok
+  here ++ kids.flatMap (backrefCollectRefNames params)
+
+-- SC2318: Backreferencing declaration assignments in a single command.
+def checkBackreferencingDeclaration (cmd : String) : CommandCheck := {
+  name := .exactly cmd
+  check := fun params t =>
+    match t.inner with
+    | .T_SimpleCommand assigns words =>
+      let args := words.drop 1
+      let ordered := backrefSortTokens params (assigns ++ args)
+      let (comments, _) :=
+        ordered.foldl (fun (acc, assigned) tok =>
+          let refs := backrefCollectRefNames params tok |>.eraseDups
+          let acc := refs.foldl (fun acc2 name =>
+            match assigned.get? name with
+            | some id =>
+              acc2 ++ [makeComment .warningC id 2318
+                s!"This assignment is used again in this '{cmd}', but won't have taken effect. Use two '{cmd}'s."]
+            | Option.none => acc2
+          ) acc
+          let assigned :=
+            match tok.inner with
+            | .T_Assignment _ name _ _ => assigned.insert name tok.id
+            | _ => assigned
+          (acc, assigned)
+        ) ([], ({} : Std.HashMap String Id))
+      comments
+    | _ => []
+}
+
 -- Note: SC2199 for [[ ${array[@]} ]] is handled in Analytics.lean since [[ ]] is parsed as T_Condition
 
 /-- SC2038: Use -print0 with xargs -0, or -exec + for find|xargs -/
@@ -2913,6 +2972,16 @@ def checkCpNoDestination : CommandCheck := {
     | Option.none => []
 }
 
+/-- SC2336: cp -r behavior is implementation-defined -/
+def checkCpLegacyR : CommandCheck := {
+  name := .basename "cp"
+  check := fun _params t =>
+    match (getAllFlags t).find? (fun (_, flag) => flag == "r") with
+    | some (tok, _) =>
+      [makeComment .warningC tok.id 2336 "cp -r behavior is implementation-defined"]
+    | Option.none => []
+}
+
 /-- SC2226: This ln has no destination -/
 def checkLnNoDestination : CommandCheck := {
   name := .basename "ln"
@@ -3769,6 +3838,9 @@ def commandChecks : List CommandCheck := [
   checkReadExpansions,  -- SC2229/SC2313
   checkPrintfArgCount,
   checkArrayComma,
+  checkBackreferencingDeclaration "declare",
+  checkBackreferencingDeclaration "local",
+  checkBackreferencingDeclaration "readonly",
   -- More new checks
   checkSudoRedirect,    -- SC2024
   checkCdNoCheck,       -- SC2164
@@ -3836,6 +3908,7 @@ def commandChecks : List CommandCheck := [
   checkRedirectToCd,    -- SC2217
   checkMvNoDestination, -- SC2224
   checkCpNoDestination, -- SC2225
+  checkCpLegacyR,       -- SC2336
   checkLnNoDestination, -- SC2226
   checkSudoBuiltins,    -- SC2232
   checkShebangAbsolutePath, -- SC2239

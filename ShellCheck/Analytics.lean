@@ -1897,6 +1897,32 @@ def checkForDecimals (params : Parameters) (t : Token) : List TokenComment :=
 where
   hasFloatingPoint (_params : Parameters) : Bool := false  -- Shell arithmetic doesn't support floats
 
+private def warnArithIndex (id : Id) : List TokenComment :=
+  [makeComment .styleC id 2321
+    "Array indices are already arithmetic contexts. Prefer removing the $(( and ))."]
+
+private def isArithExpansionIndex (content : String) : Bool :=
+  let trimmed := content.trim
+  trimmed.startsWith "$((" && trimmed.endsWith "))"
+
+private partial def checkArithIndexToken (tok : Token) : List TokenComment :=
+  match tok.inner with
+  | .T_DollarArithmetic _ => warnArithIndex tok.id
+  | .T_UnparsedIndex _ content =>
+    if isArithExpansionIndex content then warnArithIndex tok.id else []
+  | .T_NormalWord parts => parts.flatMap checkArithIndexToken
+  | .T_DoubleQuoted parts => parts.flatMap checkArithIndexToken
+  | _ => []
+
+/-- SC2321: Array indices are already arithmetic contexts. -/
+def checkUnnecessaryArithmeticExpansionIndex (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Assignment _ _ indices _ =>
+    match indices with
+    | [idx] => checkArithIndexToken idx
+    | _ => []
+  | _ => []
+
 /-- SC2322/SC2323: Unnecessary parentheses in arithmetic contexts -/
 def checkUnnecessaryParens (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -2317,10 +2343,10 @@ where
     "-L", "-N", "-O", "-G", "-S",
     "!"]
 
-/-- SC2237: Use [ -n "..." ] instead of [ ! -z "..." ] -/
+/-- SC2237/SC2335: Prefer direct negated test operators -/
 def checkNegatedTest (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .TC_Unary _ "!" inner =>
+  | .TC_Unary condType "!" inner =>
     match inner.inner with
     | .TC_Unary _ "-z" _ =>
       [makeComment .styleC t.id 2237
@@ -2328,8 +2354,61 @@ def checkNegatedTest (_params : Parameters) (t : Token) : List TokenComment :=
     | .TC_Unary _ "-n" _ =>
       [makeComment .styleC t.id 2237
         "Use [ -z \"...\" ] instead of [ ! -n \"...\" ]."]
+    | .TC_Binary _ op _ _ =>
+      suggestInversion true condType t.id op
+    | _ => []
+  | .T_Banged inner =>
+    -- ! [ a -eq b ] or ! [[ a -eq b ]]
+    match inner.inner with
+    | .T_Pipeline _ [pipeCmd] =>
+      match pipeCmd.inner with
+      | .T_Redirecting _ cmd =>
+        match cmd.inner with
+        | .T_Condition condType cond =>
+          match cond.inner with
+          | .TC_Binary _ op _ _ => suggestInversion false condType t.id op
+          | _ => []
+        | _ => []
+      | .T_Condition condType cond =>
+        match cond.inner with
+        | .TC_Binary _ op _ _ => suggestInversion false condType t.id op
+        | _ => []
+      | _ => []
     | _ => []
   | _ => []
+where
+  inversionMap : List (String × String) := [
+    ("=", "!="),
+    ("==", "!="),
+    ("!=", "="),
+    ("-eq", "-ne"),
+    ("-ne", "-eq"),
+    ("-le", "-gt"),
+    ("-gt", "-le"),
+    ("-ge", "-lt"),
+    ("-lt", "-ge")
+  ]
+
+  findInversion (op : String) : Option String :=
+    inversionMap.findSome? (fun (old, new) => if old == op then some new else none)
+
+  suggestInversion (bangInside : Bool) (condType : ConditionType) (id : Id) (op : String) :
+      List TokenComment :=
+    match findInversion op with
+    | some newOp =>
+      let oldExpr := s!"a {op} b"
+      let newExpr := s!"a {newOp} b"
+      let bracket (s : String) :=
+        match condType with
+        | .singleBracket => s!"[ {s} ]"
+        | .doubleBracket => s!"[[ {s} ]]"
+      let msg :=
+        if bangInside then
+          s!"Use {newExpr} instead of ! {oldExpr}."
+        else
+          s!"Use {bracket newExpr} instead of ! {bracket oldExpr}."
+      [makeComment .styleC id 2335 msg]
+    | Option.none => []
 
 /-- SC2053: Quote the right-hand side of == in [[ ]] to prevent glob matching -/
 def checkUnquotedRhsGlob (_params : Parameters) (t : Token) : List TokenComment :=
@@ -2706,25 +2785,99 @@ def checkSuspiciousIFS (params : Parameters) (t : Token) : List TokenComment :=
     | Option.none => []
   | _ => []
 
-/-- SC2144: -e doesn't work with globs. Use a for loop -/
-def checkTestArgumentSplitting (_params : Parameters) (t : Token) : List TokenComment :=
+/-- SC2144/SC2245: Test operators with globs -/
+def checkTestArgumentSplitting (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .TC_Unary condType op token =>
     if op == "-v" then
-      if condType == .singleBracket && isGlob token then
+      if condType == .singleBracket && isGlobToken token then
         [makeComment .errorC token.id 2208
           "Use [[ ]] or quote arguments to -v to avoid glob expansion."]
       else []
-    else if isGlob token then
-      [makeComment .errorC token.id 2144 s!"{op} doesn't work with globs. Use a for loop."]
+    else if isGlobToken token then
+      if condType == .singleBracket && params.shellType == .Ksh && kshGlobOps.contains op then
+        [makeComment .warningC token.id 2245
+          s!"{op} only applies to the first expansion of this glob. Use a loop to check any/all."]
+      else
+        [makeComment .errorC token.id 2144 s!"{op} doesn't work with globs. Use a for loop."]
     else []
   | .TC_Nullary condType token =>
-    if isGlob token then
+    if isGlobToken token then
       [makeComment .errorC token.id 2144 "This test always fails. Globs don't work in test expressions."]
     else if condType == .doubleBracket && isArrayExpansion token then
       [makeComment .errorC token.id 2198 "[[ $array ]] always true. Use [[ ${array[0]} ]] or [[ ${array[@]} ]]."]
     else []
   | _ => []
+where
+  kshGlobOps : List String :=
+    ["-b", "-c", "-d", "-f", "-g", "-k", "-p", "-r", "-s", "-u", "-w", "-x",
+     "-L", "-h", "-N", "-O", "-G", "-R", "-S"]
+
+  isGlobToken (tok : Token) : Bool :=
+    isGlob tok ||
+    match getLiteralString tok with
+    | some s => s.contains '*' || s.contains '?' || s.contains '['
+    | Option.none => false
+
+/-- SC2102: Ranges can only match single chars (mentioned due to duplicates). -/
+def checkCharRangeGlob (params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Glob s => checkToken t s
+  | .T_Literal s => checkToken t s
+  | .T_NormalWord parts =>
+    parts.flatMap fun part =>
+      match part.inner with
+      | .T_Glob s => checkToken part s
+      | .T_Literal s => checkToken part s
+      | _ => []
+  | _ => []
+where
+  checkToken (tok : Token) (s : String) : List TokenComment :=
+    if isCharClass s && !isIgnoredCommand tok && !isDereferenced tok then
+      let contents := dropNegation (s.drop 1 |>.dropRight 1)
+      if contents.startsWith ":" && contents.endsWith ":" && contents != ":" then
+        [makeComment .warningC tok.id 2101
+          "Named class needs outer [], e.g. [[:digit:]]."]
+      else if !contents.toList.contains '[' && hasDupes contents then
+        [makeComment .infoC tok.id 2102
+          "Ranges can only match single chars (mentioned due to duplicates)."]
+      else []
+    else []
+
+  isCharClass (str : String) : Bool :=
+    str.startsWith "[" && str.endsWith "]"
+
+  dropNegation (str : String) : String :=
+    if str.startsWith "!" || str.startsWith "^" then
+      str.drop 1
+    else
+      str
+
+  hasDupes (str : String) : Bool :=
+    let rec go : List Char → Bool
+      | [] => false
+      | c :: rest => if rest.contains c then true else go rest
+    go (str.toList.filter (· != '-'))
+
+  isIgnoredCommand (tok : Token) : Bool :=
+    match getClosestCommand params.parentMap tok with
+    | some cmd =>
+      match getCommandBasename cmd with
+      | some name => name == "tr" || name == "read"
+      | Option.none => false
+    | Option.none => false
+
+  isDereferenced (tok : Token) : Bool :=
+    let path := getPath params.parentMap tok
+    path.any fun anc =>
+      match anc.inner with
+      | .TC_Binary .doubleBracket op _ _ => isDereferencingBinaryOp op
+      | .TC_Unary _ op _ => op == "-v"
+      | .T_SimpleCommand .. => false
+      | _ => false
+
+  isDereferencingBinaryOp (op : String) : Bool :=
+    op ∈ ["-eq", "-ne", "-lt", "-le", "-gt", "-ge"]
 
 /-- SC2198-SC2203/SC2255: Arrays/braces/globs in test operands -/
 def checkTestOperands (params : Parameters) (t : Token) : List TokenComment :=
@@ -3241,6 +3394,103 @@ def checkPipePitfalls (_params : Parameters) (t : Token) : List TokenComment :=
     | _ => []
   | _ => []
 
+/-- SC2259/SC2260/SC2261: Redirections overriding pipeline input/output. -/
+def checkPipelineRedirections (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline _ cmds =>
+      let lastIndex := if cmds.isEmpty then 0 else cmds.length - 1
+      (withIndex 0 cmds).foldl (fun acc (idx, cmd) =>
+        let hasInputPipe := idx > 0
+        let hasOutputPipe := idx < lastIndex
+        let redirs := getRedirections cmd
+        if redirs.isEmpty then
+          acc
+        else
+          let fdMap := redirs.foldl addRedir ({} : Std.HashMap Nat (List Token))
+          let acc :=
+            if hasInputPipe then
+              match fdMap.get? 0 with
+              | some (tok :: _) =>
+                  acc ++ [makeComment .errorC tok.id 2259
+                    "This redirection overrides piped input. To use both, merge or pass filenames."]
+              | _ => acc
+            else acc
+          let acc :=
+            if hasOutputPipe then
+              match fdMap.get? 1 with
+              | some (tok :: _) =>
+                  acc ++ [makeComment .errorC tok.id 2260
+                    "This redirection overrides the output pipe. Use 'tee' to output to both."]
+              | _ => acc
+            else acc
+          acc ++ warnDupes fdMap
+      ) []
+  | _ => []
+where
+  getRedirections (cmd : Token) : List Token :=
+    match cmd.inner with
+    | .T_Redirecting redirs _ => redirs
+    | _ => []
+
+  withIndex : Nat → List Token → List (Nat × Token)
+    | _n, [] => []
+    | n, t :: rest => (n, t) :: withIndex (n + 1) rest
+
+  addRedir (m : Std.HashMap Nat (List Token)) (redir : Token) : Std.HashMap Nat (List Token) :=
+    let pairs := redirFds redir
+    pairs.foldl (fun acc (fd, tok) =>
+      let existing := acc.get? fd |>.getD []
+      acc.insert fd (existing ++ [tok])
+    ) m
+
+  redirFds (redir : Token) : List (Nat × Token) :=
+    match redir.inner with
+    | .T_FdRedirect fd target =>
+      let (defaultFds, opTok) := defaultFdsForTarget target
+      let explicitFd := if fd.isEmpty then Option.none else fd.toNat?
+      let fds :=
+        match explicitFd with
+        | some n => [n]
+        | Option.none => defaultFds
+      fds.map fun n => (n, opTok)
+    | .T_IoFile opTok _ =>
+      (opTokenDefaultFds opTok).map fun n => (n, opTok)
+    | .T_IoDuplicate opTok _ =>
+      (opTokenDefaultFds opTok).map fun n => (n, opTok)
+    | .T_HereString _ => [(0, redir)]
+    | .T_HereDoc _ _ _ _ => [(0, redir)]
+    | _ => []
+
+  defaultFdsForTarget (target : Token) : List Nat × Token :=
+    match target.inner with
+    | .T_IoFile opTok _ => (opTokenDefaultFds opTok, opTok)
+    | .T_IoDuplicate opTok _ => (opTokenDefaultFds opTok, opTok)
+    | .T_HereString _ => ([0], target)
+    | .T_HereDoc _ _ _ _ => ([0], target)
+    | _ => ([], target)
+
+  opTokenDefaultFds (opTok : Token) : List Nat :=
+    match getLiteralString opTok with
+    | some op =>
+      if op.startsWith "<" then [0]
+      else if op.startsWith ">" then [1]
+      else []
+    | Option.none => []
+
+  warnDupes (m : Std.HashMap Nat (List Token)) : List TokenComment :=
+    m.toList.flatMap fun (fd, toks) =>
+      if toks.length > 1 then
+        toks.map fun tok =>
+          makeComment .errorC tok.id 2261
+            s!"Multiple redirections compete for {fdName fd}. Use cat, tee, or pass filenames instead."
+      else []
+
+  fdName : Nat → String
+    | 0 => "stdin"
+    | 1 => "stdout"
+    | 2 => "stderr"
+    | n => s!"FD {n}"
+
 /-- SC2206: Quote to prevent word splitting in array assignment -/
 def checkSplittingInArrays (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -3429,6 +3679,100 @@ where
     match getCommandName t with
     | some name => name ∈ ["echo", "printf", ":", "true"]  -- These usually succeed
     | Option.none => true
+
+private def zip3Tokens : List (Option Token) → List Token → List (Option Token) →
+    List (Option Token × Token × Option Token)
+  | b :: bs, c :: cs, a :: as => (b, c, a) :: zip3Tokens bs cs as
+  | _, _, _ => []
+
+private def badTestPipeCheckPipe (sep : Option Token) : List TokenComment :=
+  match sep with
+  | some tok =>
+    match tok.inner with
+    | .T_Pipe "|" =>
+      [makeComment .warningC tok.id 2266
+        "Use || for logical OR. Single | will pipe."]
+    | _ => []
+  | Option.none => []
+
+private partial def badTestPipeCheckAnds (bgId : Id) (cmd : Token) : List TokenComment :=
+  match cmd.inner with
+  | .T_AndIf _ rhs => badTestPipeCheckAnds bgId rhs
+  | .T_OrIf _ rhs => badTestPipeCheckAnds bgId rhs
+  | .T_Pipeline _ cmds =>
+    match cmds.getLast? with
+    | some last => badTestPipeCheckAnds bgId last
+    | Option.none => []
+  | _ =>
+    if isTestCommand cmd then
+      [makeComment .errorC bgId 2265
+        "Use && for logical AND. Single & will background and return true."]
+    else []
+
+/-- SC2265/SC2266: Use &&/|| for logical AND/OR in tests. -/
+def checkBadTestAndOrPipes (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_Pipeline seps cmds =>
+    if cmds.length >= 2 then
+      let maybeSeps := seps.map Option.some
+      let before := Option.none :: maybeSeps
+      let after := maybeSeps ++ [Option.none]
+      let triples := zip3Tokens before cmds after
+      triples.foldl (fun acc (b, cmd, a) =>
+        if isTestCommand cmd then
+          acc ++ badTestPipeCheckPipe b ++ badTestPipeCheckPipe a
+        else acc
+      ) []
+    else []
+  | .T_Backgrounded cmd =>
+    badTestPipeCheckAnds t.id cmd
+  | _ => []
+
+/-- SC2268: Avoid x-prefix in comparisons. -/
+def checkComparisonWithLeadingX (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .TC_Binary _ op lhs rhs =>
+    if op == "=" || op == "==" || op == "!=" then
+      if hasLeadingX lhs || hasLeadingX rhs then
+        [makeComment .styleC lhs.id 2268
+          "Avoid x-prefix in comparisons as it no longer serves a purpose."]
+      else []
+    else []
+  | .T_SimpleCommand _ (cmd :: lhs :: opTok :: rhs :: _) =>
+    if getLiteralString cmd == some "test" then
+      match getLiteralString opTok with
+      | some op =>
+        if op == "=" || op == "==" || op == "!=" then
+          if hasLeadingX lhs || hasLeadingX rhs then
+            [makeComment .styleC lhs.id 2268
+              "Avoid x-prefix in comparisons as it no longer serves a purpose."]
+          else []
+        else []
+      | Option.none => []
+    else []
+  | _ => []
+where
+  startsWithX (s : String) : Bool :=
+    match s.toList.head? with
+    | some c => c == 'x' || c == 'X'
+    | Option.none => false
+
+  hasLeadingX (tok : Token) : Bool :=
+    match getWordParts tok with
+    | [] => false
+    | part :: _ =>
+      match part.inner with
+      | .T_Literal s => startsWithX s
+      | .T_SingleQuoted s => startsWithX s
+      | .T_DoubleQuoted parts =>
+        match parts with
+        | first :: _ =>
+          match first.inner with
+          | .T_Literal s => startsWithX s
+          | .T_SingleQuoted s => startsWithX s
+          | _ => false
+        | [] => false
+      | _ => false
 
 /-- SC2166: Prefer [ p ] || [ q ] as [ p -o q ] is not well defined -/
 def checkTestAndOr (_params : Parameters) (t : Token) : List TokenComment :=
@@ -3779,25 +4123,45 @@ where
       else []
     | _ => []
 
-/-- SC2097: This assignment is only seen by the command's forked shell -/
-def checkPrefixAssignment (_params : Parameters) (t : Token) : List TokenComment :=
+/-- SC2097/SC2098: Prefix assignments are not visible to expansions in the same command. -/
+def checkPrefixAssignment (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_SimpleCommand (assign :: _) (cmd :: _) =>
-    match assign.inner with
-    | .T_Assignment _ name _ _ =>
-      -- Check if the command references the same variable
-      if commandReferencesVar cmd name then
-        [makeComment .warningC assign.id 2097
-          s!"This assignment is only seen by the forked process."]
-      else []
-    | _ => []
+  | .T_DollarBraced _ content =>
+    let name := ASTLib.getBracedReference (String.join (oversimplify content))
+    if name.isEmpty then
+      []
+    else
+      let path := getPath params.parentMap t
+      let pathIds := path.map (·.id)
+      let simpleCmd? := path.find? fun tok =>
+        match tok.inner with
+        | .T_SimpleCommand _ (_ :: _) => true
+        | _ => false
+      match simpleCmd? with
+      | some simpleCmd =>
+        match simpleCmd.inner with
+        | .T_SimpleCommand assigns _ =>
+          let matching := assigns.filterMap fun assign =>
+            match assign.inner with
+            | .T_Assignment _ varName indices _ =>
+              if indices.isEmpty && varName == name && !(pathIds.contains assign.id) then
+                some assign
+              else
+                none
+            | _ => none
+          if matching.isEmpty then
+            []
+          else
+            let warnAssigns := matching.map fun assign =>
+              makeComment .warningC assign.id 2097
+                "This assignment is only seen by the forked process."
+            let warnRef :=
+              makeComment .warningC t.id 2098
+                "This expansion will not see the mentioned assignment."
+            warnAssigns ++ [warnRef]
+        | _ => []
+      | Option.none => []
   | _ => []
-where
-  commandReferencesVar (cmd : Token) (name : String) : Bool :=
-    -- Simplified check
-    let cmdStr := String.join (oversimplify cmd)
-    Regex.containsSubstring cmdStr ("$" ++ name) ||
-    Regex.containsSubstring cmdStr ("${" ++ name)
 
 /-- SC2270-SC2282: Command name looks like an assignment/comparison -/
 def checkEqualsInCommand (params : Parameters) (originalToken : Token) : List TokenComment :=
@@ -4224,6 +4588,62 @@ where
         | _ => []
       | _ => []
     | _ => []
+
+private def arithModWarning (id : Id) : List TokenComment :=
+  [makeComment .warningC id 2257
+    "Arithmetic modifications in command redirections may be discarded. Do them separately."]
+
+private partial def arithmeticModifies (expr : Token) : Bool :=
+  match expr.inner with
+  | .TA_Unary op _ => op == "++" || op == "--" || op == "++post" || op == "--post"
+  | .TA_Assignment _ _ _ => true
+  | .TA_Binary _ lhs rhs => arithmeticModifies lhs || arithmeticModifies rhs
+  | .TA_Trinary cond t e =>
+      arithmeticModifies cond || arithmeticModifies t || arithmeticModifies e
+  | .TA_Sequence exprs => exprs.any arithmeticModifies
+  | .TA_Parenthesis inner => arithmeticModifies inner
+  | .TA_Expansion parts => parts.any arithmeticModifies
+  | .TA_Variable _ indices => indices.any arithmeticModifies
+  | _ => false
+
+/-- SC2257: Arithmetic modifications in command redirections may be discarded. -/
+def checkModifiedArithmeticInRedirection (params : Parameters) (t : Token) : List TokenComment :=
+  if params.shellType == .Dash || params.shellType == .BusyboxSh then
+    []
+  else
+    match t.inner with
+    | .T_Redirecting redirs cmd =>
+      match cmd.inner with
+      | .T_SimpleCommand _ (_ :: _) =>
+        redirs.flatMap checkRedir
+      | _ => []
+    | _ => []
+where
+  checkRedir (redir : Token) : List TokenComment :=
+    match redir.inner with
+    | .T_FdRedirect _ target => checkTarget target
+    | .T_IoFile _ word => checkWord word
+    | .T_HereString word => checkWord word
+    | .T_HereDoc _ _ _ content => content.flatMap checkWord
+    | _ => []
+
+  checkTarget (target : Token) : List TokenComment :=
+    match target.inner with
+    | .T_IoFile _ word => checkWord word
+    | .T_HereString word => checkWord word
+    | .T_HereDoc _ _ _ content => content.flatMap checkWord
+    | _ => []
+
+  checkWord (word : Token) : List TokenComment :=
+    match word.inner with
+    | .T_DollarArithmetic expr =>
+      if arithmeticModifies expr then arithModWarning word.id else []
+    | _ =>
+      getWordParts word |>.flatMap fun part =>
+        match part.inner with
+        | .T_DollarArithmetic expr =>
+          if arithmeticModifies expr then arithModWarning part.id else []
+        | _ => []
 
 /-- SC2078: This expression is constant. Did you forget the $ on a variable? -/
 def checkConstantTest (_params : Parameters) (t : Token) : List TokenComment :=
@@ -4795,6 +5215,147 @@ def checkFunctionsUsedExternally (params : Parameters) (_root : Token) : List To
       else acc
     ) []
 
+/-!
+## Bats tests
+-/
+
+/-- SC2314/SC2315: Bats negation does not fail the test. -/
+def checkBatsTestDoesNotUseNegation (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_BatsTest _ body =>
+    match body.inner with
+    | .T_BraceGroup commands =>
+        commands.flatMap (check commands)
+    | _ => []
+  | _ => []
+where
+  isLastOf (target : Token) : List Token → Bool
+    | [] => false
+    | [x] => x.id == target.id
+    | _ :: rest => isLastOf target rest
+
+  getCondition (cmd : Token) : Option Token :=
+    match cmd.inner with
+    | .T_Redirecting _ inner =>
+      match inner.inner with
+      | .T_Condition .. => some inner
+      | _ => Option.none
+    | .T_Condition .. => some cmd
+    | _ => Option.none
+
+  warnRun (cmd : Token) (commands : List Token) : List TokenComment :=
+    if isLastOf cmd commands then
+      [makeComment .styleC cmd.id 2314
+        "In Bats, ! will not fail the test if it is not the last command anymore. Use `run ! ` (on Bats >= 1.5.0) instead."]
+    else
+      [makeComment .errorC cmd.id 2314
+        "In Bats, ! does not cause a test failure. Use 'run ! ' (on Bats >= 1.5.0) instead."]
+
+  check (commands : List Token) (cmd : Token) : List TokenComment :=
+    match cmd.inner with
+    | .T_Banged inner =>
+      match inner.inner with
+      | .T_Pipeline _ [pipeCmd] =>
+        match getCondition pipeCmd with
+        | some _ =>
+            if isLastOf cmd commands then
+              [makeComment .styleC cmd.id 2315
+                "In Bats, ! will not fail the test if it is not the last command anymore. Fold the `!` into the conditional!"]
+            else
+              [makeComment .errorC cmd.id 2315
+                "In Bats, ! does not cause a test failure. Fold the `!` into the conditional!"]
+        | Option.none =>
+            warnRun cmd commands
+      | _ =>
+        warnRun cmd commands
+    | _ => []
+
+/-!
+## Alias analysis
+-/
+
+private partial def groupByLinkTokens (f : Token → Token → Bool) : List Token → List (List Token)
+  | [] => []
+  | x :: xs =>
+      let rec takeGroup (prev : Token) (acc : List Token) (rest : List Token) :
+          List Token × List Token :=
+        match rest with
+        | [] => (acc.reverse, [])
+        | y :: ys =>
+            if f prev y then
+              takeGroup y (y :: acc) ys
+            else
+              (acc.reverse, rest)
+      let (group, rest) := takeGroup x [x] xs
+      group :: groupByLinkTokens f rest
+
+/-- SC2262/SC2263: Alias defined and used in the same parsing unit. -/
+def checkAliasUsedInSameParsingUnit (params : Parameters) (root : Token) : List TokenComment :=
+  let commands := (getCommandSequences root).foldl (· ++ ·) []
+  let units := groupByLinkTokens (fun a b => followsOnLine a b) commands
+  units.flatMap checkUnit
+where
+  lineSpan (tok : Token) : Option (Nat × Nat) := do
+    let (startPos, endPos) ← params.tokenPositions.get? tok.id
+    some (startPos.posLine, endPos.posLine)
+
+  followsOnLine (a b : Token) : Bool :=
+    match lineSpan a, lineSpan b with
+    | some (_, endLine), some (startLine, _) => endLine == startLine
+    | _, _ => false
+
+  checkUnit (unit : List Token) : List TokenComment :=
+    let (comments, _) :=
+      unit.foldl (fun (acc, aliases) tok =>
+        match tok.inner with
+        | .T_SimpleCommand _ (cmd :: args) =>
+          match getUnquotedLiteral cmd with
+          | some "alias" =>
+              let aliases :=
+                args.foldl (fun m arg =>
+                  match getLiteralString arg with
+                  | some s =>
+                      match s.splitOn "=" with
+                      | name :: rest =>
+                          if rest.isEmpty then
+                            m
+                          else if isVariableName name && !m.contains name then
+                            m.insert name tok
+                          else
+                            m
+                      | [] => m
+                  | Option.none => m
+                ) aliases
+              (acc, aliases)
+          | some name =>
+              if name.contains '/' then
+                (acc, aliases)
+              else
+                match aliases.get? name with
+                | some aliasTok =>
+                    if isSourced params tok || shouldIgnoreCode params 2262 aliasTok then
+                      (acc, aliases)
+                    else
+                      let warnAlias :=
+                        makeComment .warningC aliasTok.id 2262
+                          "This alias can't be defined and used in the same parsing unit. Use a function instead."
+                      let infoUse :=
+                        makeComment .infoC tok.id 2263
+                          "Since they're in the same parsing unit, this command will not refer to the previously mentioned alias."
+                      (acc ++ [warnAlias, infoUse], aliases)
+                | Option.none => (acc, aliases)
+          | Option.none => (acc, aliases)
+        | _ => (acc, aliases)
+      ) ([], ({} : Std.HashMap String Token))
+    comments
+
+  isSourced (params : Parameters) (t : Token) : Bool :=
+    let path := getPath params.parentMap t
+    path.any fun ancestor =>
+      match ancestor.inner with
+      | .T_SourceCommand .. => true
+      | _ => false
+
 /-- SC2119: Use function "$@" if function's $1 should mean script's $1
     SC2120: Function references arguments, but none are ever passed -/
 def checkUnpassedInFunctions (params : Parameters) (_root : Token) : List TokenComment :=
@@ -4885,14 +5446,30 @@ def checkCommandIsUnreachable (params : Parameters) (t : Token) : List TokenComm
             "Command appears to be unreachable. Check usage (or ignore if invoked indirectly)."]
         else []
       | Option.none => []
+    | .T_Function _ _ name _ =>
+      if !isFunctionInvoked name && !(hasUnreachableAncestor cfg params t) then
+        [makeComment .infoC t.id 2329
+          "This function is never invoked. Check usage (or ignored if invoked indirectly)."]
+      else []
     | _ => []
 where
+  isUnreachable (cfg : CFGAnalysis) (t : Token) : Bool :=
+    match getIncomingState cfg t.id with
+    | some st => !st.stateIsReachable
+    | Option.none => false
+
+  isUnreachableFunction (cfg : CFGAnalysis) (t : Token) : Bool :=
+    match t.inner with
+    | .T_Function _ _ _ body => isUnreachable cfg body
+    | _ => false
+
+  isFunctionInvoked (name : String) : Bool :=
+    (findCommandInvocations params.rootNode).any (fun (_, n) => n == name)
+
   hasUnreachableAncestor (cfg : CFGAnalysis) (params : Parameters) (t : Token) : Bool :=
     let ancestors := (getPath params.parentMap t).drop 1
     ancestors.any fun a =>
-      match getIncomingState cfg a.id with
-      | some st => !st.stateIsReachable
-      | Option.none => false
+      isUnreachable cfg a || isUnreachableFunction cfg a
 
 /-- SC2319/SC2320: `$?` may refer to a condition/echo instead of a previous command. -/
 def checkOverwrittenExitCode (params : Parameters) (t : Token) : List TokenComment :=
@@ -4955,24 +5532,39 @@ def checkSpacefulnessCfg (params : Parameters) (t : Token) : List TokenComment :
   | some cfg =>
     match t.inner with
     | .T_DollarBraced _ content =>
-      if not (isQuoteFree params.shellType params.parentMap t) then
-        let varName := ASTLib.getBracedReference (String.join (oversimplify content))
-        -- Check if variable may have spaces based on CFG state
-        match getIncomingState cfg t.id with
-        | some state =>
-          match state.variablesInScope.get? varName with
-          | some varState =>
-            if varState.variableValue.spaceStatus == .SpaceStatusUnknown ||
-               varState.variableValue.spaceStatus == .SpaceStatusSpaces then
+      if isQuoteFree params.shellType params.parentMap t then
+        []
+      else
+        let raw := String.join (oversimplify content)
+        let modifier := getBracedModifier raw
+        let varName := ASTLib.getBracedReference raw
+        let needsQuoting :=
+          not (isArrayExpansion t) &&
+          not (ASTLib.isCountingReference t) &&
+          not (ASTLib.isQuotedAlternativeReference t) &&
+          not (usedAsCommandName params.parentMap t)
+        let isDefaultAssignment :=
+          (modifier.startsWith "=" || modifier.startsWith ":=") &&
+          isParamTo params.parentMap ":" t
+        if needsQuoting && isDefaultAssignment then
+          [makeComment .infoC t.id 2223
+            "This default assignment may cause DoS due to globbing. Quote it."]
+        else
+          -- Check if variable may have spaces based on CFG state
+          match getIncomingState cfg t.id with
+          | some state =>
+            match state.variablesInScope.get? varName with
+            | some varState =>
+              if varState.variableValue.spaceStatus == .SpaceStatusUnknown ||
+                 varState.variableValue.spaceStatus == .SpaceStatusSpaces then
+                [makeComment .warningC t.id 2086
+                  "Double quote to prevent globbing and word splitting."]
+              else []
+            | Option.none =>
+              -- Unknown variable - warn conservatively
               [makeComment .warningC t.id 2086
                 "Double quote to prevent globbing and word splitting."]
-            else []
-          | Option.none =>
-            -- Unknown variable - warn conservatively
-            [makeComment .warningC t.id 2086
-              "Double quote to prevent globbing and word splitting."]
-        | Option.none => []
-      else []
+          | Option.none => []
     | _ => []
 
 -- All node checks
@@ -5006,6 +5598,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkFindXargs,
   checkFindExec,
   checkPipePitfalls,
+  checkPipelineRedirections,
   checkRedirectedNowhere,
   checkGrepWc,
   -- checkReadWithoutR, -- SC2162 - handled by Commands.checkReadWithoutR
@@ -5057,9 +5650,11 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkUnmatchableCases,
   checkCaseAgainstGlob,
   checkBadTestAndOr,
+  checkBadTestAndOrPipes,
   checkTestAndOr,  -- SC2166
   checkNegatedTest,  -- SC2237
   checkUnquotedRhsGlob,  -- SC2053
+  checkComparisonWithLeadingX,
   checkComparisonOperators,
   checkSubshellAsTest,
   checkBackticksAsTest,
@@ -5067,10 +5662,12 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkSubshelledTests,
   -- Arithmetic checks
   checkForDecimals,
+  checkUnnecessaryArithmeticExpansionIndex,
   checkUnnecessaryParens,
   checkDivBeforeMult,
   -- set -e + ! checks
   checkUselessBang,
+  checkBatsTestDoesNotUseNegation,
   -- Path and IFS checks
   checkOverridingPath,
   checkTildeInPath,
@@ -5080,6 +5677,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkNullaryExpansionTest,
   checkUnaryTestA,
   checkTestArgumentSplitting,
+  checkCharRangeGlob,
   checkTestRedirection,
   checkTrailingBracket,
   -- Redirection checks
@@ -5117,6 +5715,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkDoubleBracketAndOperator,
   checkQuotedRightHandRegex,
   checkRedirectToDollarExpansion,
+  checkModifiedArithmeticInRedirection,
   checkConstantTest,
   checkFractionsInArithmetic,
   checkBracketSpacing,
@@ -5145,6 +5744,7 @@ def treeChecks : List (Parameters → Token → List TokenComment) := [
   checkShebang,
   -- Function scope analysis checks (operate on whole tree)
   checkFunctionsUsedExternally,
+  checkAliasUsedInSameParsingUnit,
   checkUnpassedInFunctions,
   checkUseBeforeDefinition
 ]

@@ -43,6 +43,36 @@ def runCheckWithShell (shell : Shell) (script : String) : CheckResult :=
   }
   checkScript idSystemInterface spec
 
+def runCheckWithExtended (script : String) : CheckResult :=
+  let spec : CheckSpec := {
+    csFilename := "<test>"
+    csScript := script
+    csCheckSourced := false
+    csIgnoreRC := true
+    csExcludedWarnings := []
+    csIncludedWarnings := none
+    csShellTypeOverride := none
+    csMinSeverity := .styleC
+    csExtendedAnalysis := some true
+    csOptionalChecks := []
+  }
+  checkScript idSystemInterface spec
+
+def runCheckWithShellExtended (shell : Shell) (script : String) : CheckResult :=
+  let spec : CheckSpec := {
+    csFilename := "<test>"
+    csScript := script
+    csCheckSourced := false
+    csIgnoreRC := true
+    csExcludedWarnings := []
+    csIncludedWarnings := none
+    csShellTypeOverride := some shell
+    csMinSeverity := .styleC
+    csExtendedAnalysis := some true
+    csOptionalChecks := []
+  }
+  checkScript idSystemInterface spec
+
 def hasCode (cr : CheckResult) (code : Int) : Bool :=
   cr.crComments.any (fun c => c.pcComment.cCode == code)
 
@@ -97,5 +127,81 @@ def test_sc2127_case_fallthrough_sh : Except String Bool := do
 def test_sc2127_case_fallthrough_bash_ok : Except String Bool := do
   let cr := runCheckWithShell .Bash "case foo in bar) echo hi ;& baz) echo ok ;; esac"
   pure (!hasCode cr 2127)
+
+def test_sc2098_prefix_assignment_reference : Except String Bool := do
+  let cr := runCheck "var=foo echo ${var}"
+  pure (hasCode cr 2098)
+
+def test_sc2102_char_range_glob : Except String Bool := do
+  let cr := runCheck "ls [10-15]"
+  pure (hasCode cr 2102)
+
+def test_sc2223_default_assignment : Except String Bool := do
+  let cr := runCheckWithExtended ": ${var:=*}"
+  pure (hasCode cr 2223)
+
+def test_sc2245_ksh_glob_unary : Except String Bool := do
+  let cr := runCheckWithShell .Ksh "[ -d foo* ]"
+  pure (hasCode cr 2245)
+
+def test_sc2257_arith_mod_redir : Except String Bool := do
+  let cr := runCheck "echo hi > $((i++))"
+  pure (hasCode cr 2257)
+
+def test_sc2259_pipe_input_overridden : Except String Bool := do
+  let cr := runCheck "echo foo | cat < input"
+  pure (hasCode cr 2259)
+
+def test_sc2260_pipe_output_overridden : Except String Bool := do
+  let cr := runCheck "echo foo > out | cat"
+  pure (hasCode cr 2260)
+
+def test_sc2261_duplicate_redirs_in_pipeline : Except String Bool := do
+  let cr := runCheck "echo foo > a > b | cat"
+  pure (hasCode cr 2261)
+
+def test_sc2262_alias_same_unit : Except String Bool := do
+  let cr := runCheck "alias x=y; x"
+  pure (hasCode cr 2262)
+
+def test_sc2318_backref_declare : Except String Bool := do
+  let cr := runCheckWithShell .Bash "declare x=1 y=$x"
+  pure (hasCode cr 2318)
+
+def test_sc2325_multiple_bangs_posix : Except String Bool := do
+  let cr := runCheckWithShell .Sh "! ! true"
+  pure (hasCode cr 2325)
+
+def test_sc2326_bang_in_pipeline : Except String Bool := do
+  let cr := runCheckWithShell .Sh "true | ! true"
+  pure (hasCode cr 2326)
+
+def test_sc2329_unreachable_function : Except String Bool := do
+  let cr := runCheckWithExtended "f() { echo hi; }; exit"
+  pure (hasCode cr 2329)
+
+def test_sc2332_negated_unary_op_bash : Except String Bool := do
+  let cr := runCheckWithShell .Bash "[ ! -o braceexpand ]"
+  pure (hasCode cr 2332)
+
+def test_sc2265_bad_test_background : Except String Bool := do
+  let cr := runCheck "[ x ] & [ y ]"
+  pure (hasCode cr 2265)
+
+def test_sc2266_bad_test_or_pipe : Except String Bool := do
+  let cr := runCheck "[ x ] | [ y ]"
+  pure (hasCode cr 2266)
+
+def test_sc2268_leading_x_comparison : Except String Bool := do
+  let cr := runCheck "[ x$foo = xlol ]"
+  pure (hasCode cr 2268)
+
+def test_sc2321_unnecessary_arith_expansion_index : Except String Bool := do
+  let cr := runCheck "a[$((1+1))]=n"
+  pure (hasCode cr 2321)
+
+def test_sc2336_cp_legacy_r : Except String Bool := do
+  let cr := runCheck "cp -r foo bar"
+  pure (hasCode cr 2336)
 
 end ShellCheck.Tests.AnalyticsRegression

@@ -257,21 +257,44 @@ def checkMultipleBangs : ForShell := {
     | _ => []
 }
 
-/-- SC2261: Check for negated pipelines in POSIX sh -/
-def checkBangAfterPipe : ForShell := {
+/-- Is this command effectively a bang/negation? -/
+def isBangCommand : Token → Bool
+  | ⟨_, .T_Banged _⟩ => true
+  | ⟨_, .T_Redirecting _ inner⟩ => isBangCommand inner
+  | ⟨_, .T_SimpleCommand _ (cmd :: _)⟩ => getLiteralString cmd == some "!"
+  | _ => false
+
+/-- SC2325: Multiple ! in front of pipelines are a bash/ksh extension. -/
+def checkMultipleBangsPosix : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh]
   check := fun _params t =>
     match t.inner with
     | .T_Banged inner =>
-      -- In POSIX sh, ! can only negate a whole pipeline, not individual commands
-      -- Check if the negated thing is a pipeline
       match inner.inner with
       | .T_Pipeline _ cmds =>
-        if cmds.length > 1 then
-          -- This is actually ok - ! cmd1 | cmd2 negates the exit status of the pipeline
-          []
+        if cmds.any isBangCommand then
+          [makeComment .errorC t.id 2325
+            "Multiple ! in front of pipelines are a bash/ksh extension. Use only 0 or 1."]
         else []
-      | _ => []
+      | _ =>
+        if isBangCommand inner then
+          [makeComment .errorC t.id 2325
+            "Multiple ! in front of pipelines are a bash/ksh extension. Use only 0 or 1."]
+        else []
+    | _ => []
+}
+
+/-- SC2326: ! is not allowed in the middle of pipelines. -/
+def checkBangAfterPipe : ForShell := {
+  shells := [.Sh, .Dash, .BusyboxSh, .Bash]
+  check := fun _params t =>
+    match t.inner with
+    | .T_Pipeline _ cmds =>
+      cmds.flatMap fun cmd =>
+        if isBangCommand cmd then
+          [makeComment .errorC cmd.id 2326
+            "! is not allowed in the middle of pipelines. Use command group as in cmd | { ! cmd; } if necessary."]
+        else []
     | _ => []
 }
 
@@ -296,6 +319,37 @@ def checkNegatedUnaryOps : ForShell := {
       if isNegatedCondition left && isNegatedCondition right then
         [makeComment .styleC t.id 2107
           "Instead of [ ! a -o ! b ], use ! [ a -a b ]. (De Morgan's law)"]
+      else []
+    | _ => []
+}
+
+/-- SC2332: Negated -o or -a in [ ] are always true in bash. -/
+def checkNegatedUnaryOpsBash : ForShell := {
+  shells := [.Bash]
+  check := fun _params t =>
+    match t.inner with
+    | .TC_Unary .singleBracket "!" inner =>
+      match inner.inner with
+      | .TC_Unary _ op _ =>
+        if op == "-o" then
+          [makeComment .errorC t.id 2332
+            "[ ! -o opt ] is always true because -o becomes logical OR. Use [[ ]] or ! [ -o opt ]."]
+        else if op == "-a" then
+          [makeComment .errorC t.id 2332
+            "[ ! -a file ] is always true because -a becomes logical AND. Use -e instead."]
+        else []
+      | _ => []
+    | .T_SimpleCommand _ (first :: bangTok :: opTok :: _rest) =>
+      if getLiteralString first == some "[" &&
+         getLiteralString bangTok == some "!" &&
+         getLiteralString opTok == some "-o" then
+        [makeComment .errorC t.id 2332
+          "[ ! -o opt ] is always true because -o becomes logical OR. Use [[ ]] or ! [ -o opt ]."]
+      else if getLiteralString first == some "[" &&
+              getLiteralString bangTok == some "!" &&
+              getLiteralString opTok == some "-a" then
+        [makeComment .errorC t.id 2332
+          "[ ! -a file ] is always true because -a becomes logical AND. Use -e instead."]
       else []
     | _ => []
 }
@@ -380,8 +434,10 @@ def checks : List ForShell := [
   checkMultiDimensionalArrays,
   checkPS1Assignments,
   checkMultipleBangs,
+  checkMultipleBangsPosix,
   checkBangAfterPipe,
   checkNegatedUnaryOps,
+  checkNegatedUnaryOpsBash,
   checkTildeInQuotes,
   checkQuotesInAssignment,
   checkExpressionsInSingleQuotes
