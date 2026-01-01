@@ -6,6 +6,8 @@ namespace ShellCheck.Tests.SCCoverage
 open ShellCheck.Interface
 open ShellCheck.Tests.AnalyticsRegression
 
+set_option maxRecDepth 2048
+
 structure CoverageCase where
   code : Int
   script : String
@@ -56,8 +58,75 @@ def sc2xxxCases : List CoverageCase := [
 def sc2xxxFailures : List CoverageCase :=
   sc2xxxCases.filter (fun c => !runCase c)
 
+def sc3xxxCases : List CoverageCase := [
+  { code := 3001, script := "cat <(echo hi)", shell := some .Sh },
+  { code := 3002, script := "echo @(foo|bar)", shell := some .Sh },
+  { code := 3003, script := "echo $'hi'", shell := some .Sh },
+  { code := 3004, script := "echo $\"hi\"", shell := some .Sh },
+  { code := 3005, script := "for ((i=0;i<1;i++)); do echo $i; done", shell := some .Sh },
+  { code := 3006, script := "((i++))", shell := some .Sh },
+  { code := 3007, script := "echo $[1+1]", shell := some .Sh },
+  { code := 3008, script := "select x in a b; do echo $x; break; done", shell := some .Sh },
+  { code := 3009, script := "echo {1..3}", shell := some .Sh },
+  { code := 3010, script := "if [[ -n \"$x\" ]]; then echo ok; fi", shell := some .Sh },
+  { code := 3011, script := "cat <<< \"hi\"", shell := some .Sh },
+  { code := 3019, script := "echo $((2**3))", shell := some .Sh },
+  { code := 3020, script := "echo hi &> out", shell := some .Sh },
+  { code := 3021, script := "echo hi >& out", shell := some .Sh },
+  { code := 3022, script := "exec {fd}>out", shell := some .Sh },
+  { code := 3023, script := "exec 10>out", shell := some .Sh },
+  { code := 3024, script := "foo+=1", shell := some .Sh },
+  { code := 3025, script := "echo hi >/dev/tcp/localhost/80", shell := some .Sh },
+  { code := 3026, script := "echo [^a]", shell := some .Sh },
+  { code := 3028, script := "echo $BASH_SOURCE", shell := some .Sh },
+  { code := 3029, script := "echo hi |& cat", shell := some .Sh },
+  { code := 3030, script := "arr=(a b)", shell := some .Sh },
+  { code := 3031, script := "echo hi > *.txt", shell := some .Sh },
+  { code := 3032, script := "coproc sleep 1", shell := some .Sh },
+  { code := 3033, script := "foo-bar() { :; }", shell := some .Sh },
+  { code := 3034, script := "echo $(<foo)", shell := some .Sh },
+  { code := 3035, script := "echo `</etc/hosts`", shell := some .Sh },
+  { code := 3036, script := "echo -e hi", shell := some .Dash },
+  { code := 3037, script := "echo -e hi", shell := some .Sh },
+  { code := 3038, script := "exec -a foo", shell := some .Sh },
+  { code := 3039, script := "let x=1", shell := some .Sh },
+  { code := 3040, script := "set -o foobar", shell := some .Sh },
+  { code := 3041, script := "set -z", shell := some .Sh },
+  { code := 3042, script := "set --foo", shell := some .Sh },
+  { code := 3043, script := "local x=1", shell := some .Sh },
+  { code := 3044, script := "declare x=1", shell := some .Sh },
+  { code := 3045, script := "read -a foo", shell := some .Sh },
+  { code := 3046, script := "source foo", shell := some .Sh },
+  { code := 3047, script := "trap 'echo hi' ERR", shell := some .Sh },
+  { code := 3048, script := "trap 'echo hi' SIGINT", shell := some .Sh },
+  { code := 3049, script := "trap 'echo hi' sigint", shell := some .Sh },
+  { code := 3050, script := "printf '%q' foo", shell := some .Sh },
+  { code := 3052, script := "echo $((16#ff))", shell := some .Sh },
+  { code := 3053, script := "echo ${!foo}", shell := some .Sh },
+  { code := 3054, script := "echo ${arr[1]}", shell := some .Sh },
+  { code := 3055, script := "echo ${!arr[@]}", shell := some .Sh },
+  { code := 3056, script := "echo ${!foo*}", shell := some .Sh },
+  { code := 3057, script := "echo ${foo:1:2}", shell := some .Sh },
+  { code := 3058, script := "echo ${@%foo}", shell := some .Sh },
+  { code := 3059, script := "echo ${foo^}", shell := some .Sh },
+  { code := 3060, script := "echo ${foo/foo/bar}", shell := some .Sh },
+  { code := 3061, script := "read", shell := some .Sh },
+  { code := 3062, script := "test -o noclobber", shell := some .Sh },
+  { code := 3063, script := "test -R file", shell := some .Sh },
+  { code := 3064, script := "test -N file", shell := some .Sh },
+  { code := 3065, script := "test -k file", shell := some .Sh },
+  { code := 3066, script := "test -G file", shell := some .Sh },
+  { code := 3067, script := "test -O file", shell := some .Sh }
+]
+
+def sc3xxxFailures : List CoverageCase :=
+  sc3xxxCases.filter (fun c => !runCase c)
+
 abbrev prop_sc2xxx_coverage : Prop :=
   sc2xxxFailures.isEmpty = true
+
+abbrev prop_sc3xxx_coverage : Prop :=
+  sc3xxxFailures.isEmpty = true
 
 def test_sc2xxx_coverage : Except String Bool := do
   let failures := sc2xxxFailures
@@ -66,5 +135,13 @@ def test_sc2xxx_coverage : Except String Bool := do
   else
     let codes := failures.map (fun c => toString c.code)
     .error s!"Missing SC2xxx coverage: {String.intercalate ", " codes}"
+
+def test_sc3xxx_coverage : Except String Bool := do
+  let failures := sc3xxxFailures
+  if failures.isEmpty then
+    pure true
+  else
+    let codes := failures.map (fun c => toString c.code)
+    .error s!"Missing SC3xxx coverage: {String.intercalate ", " codes}"
 
 end ShellCheck.Tests.SCCoverage

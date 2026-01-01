@@ -9,6 +9,7 @@ import ShellCheck.AST
 import ShellCheck.Parser.Arithmetic
 import ShellCheck.Parser.Parsec
 import ShellCheck.Parser.Expansion
+import ShellCheck.Parser.Glob
 import ShellCheck.Parser.Lexer
 
 namespace ShellCheck.Parser.Word
@@ -17,6 +18,7 @@ open ShellCheck.AST
 open ShellCheck.Interface
 open ShellCheck.Parser.Parsec
 open ShellCheck.Parser.Expansion
+open ShellCheck.Parser.Glob
 open ShellCheck.Parser.Lexer
 
 /-!
@@ -39,7 +41,18 @@ def readLiteral : Parser Token := do
        c == '(' || c == ')' ||
        c == '#')
        -- Note: { and } are allowed in word literals for brace expansion
-  mkTokenAt (.T_Literal content) startLine startCol
+  let isBracketToken :=
+    content == "[" || content == "]" || content == "[[" || content == "]]"
+  let inner :=
+    if hasExtGlob content then
+      .T_Extglob content []
+    else if hasBraceExpansion content then
+      .T_BraceExpansion []
+    else if content.toList.any isGlobChar && !isBracketToken then
+      .T_Glob content
+    else
+      .T_Literal content
+  mkTokenAt inner startLine startCol
 
 /-- Read a single-quoted string -/
 def readSingleQuoted : Parser Token := do
@@ -513,6 +526,47 @@ private partial def parseBracedExpansionContent (content : String) (startLine st
           let argParts ← parseArgAt arg (exp.varName.length + 1)
           mkTokenAt (.T_NormalWord ([varTok, opTok] ++ argParts)) startLine startCol
 
+/-- Assign fresh ids to arithmetic tokens parsed from a raw `$((..))` string. -/
+partial def freshenArithmeticTokensAt
+    (startLine startCol endLine endCol : Nat) (t : Token) : Parser Token := do
+  let id ← freshId
+  recordPosition id startLine startCol endLine endCol
+  let inner ←
+    match t.inner with
+    | .TA_Binary op lhs rhs =>
+        let lhs' ← freshenArithmeticTokensAt startLine startCol endLine endCol lhs
+        let rhs' ← freshenArithmeticTokensAt startLine startCol endLine endCol rhs
+        pure (.TA_Binary op lhs' rhs')
+    | .TA_Assignment op lhs rhs =>
+        let lhs' ← freshenArithmeticTokensAt startLine startCol endLine endCol lhs
+        let rhs' ← freshenArithmeticTokensAt startLine startCol endLine endCol rhs
+        pure (.TA_Assignment op lhs' rhs')
+    | .TA_Variable name indices =>
+        let indices' ← indices.mapM (freshenArithmeticTokensAt startLine startCol endLine endCol)
+        pure (.TA_Variable name indices')
+    | .TA_Expansion parts =>
+        let parts' ← parts.mapM (freshenArithmeticTokensAt startLine startCol endLine endCol)
+        pure (.TA_Expansion parts')
+    | .TA_Sequence exprs =>
+        let exprs' ← exprs.mapM (freshenArithmeticTokensAt startLine startCol endLine endCol)
+        pure (.TA_Sequence exprs')
+    | .TA_Parenthesis expr =>
+        let expr' ← freshenArithmeticTokensAt startLine startCol endLine endCol expr
+        pure (.TA_Parenthesis expr')
+    | .TA_Trinary cond thenExpr elseExpr =>
+        let cond' ← freshenArithmeticTokensAt startLine startCol endLine endCol cond
+        let thenExpr' ← freshenArithmeticTokensAt startLine startCol endLine endCol thenExpr
+        let elseExpr' ← freshenArithmeticTokensAt startLine startCol endLine endCol elseExpr
+        pure (.TA_Trinary cond' thenExpr' elseExpr')
+    | .TA_Unary op expr =>
+        let expr' ← freshenArithmeticTokensAt startLine startCol endLine endCol expr
+        pure (.TA_Unary op expr')
+    | .T_Literal value =>
+        pure (.T_Literal value)
+    | other =>
+        pure other
+  pure ⟨id, inner⟩
+
 /-- Read a `$...` expansion inside double quotes (assumes `$` already consumed). -/
 partial def readDollarInDQ (startLine startCol : Nat) : Parser Token := do
   match ← peek? with
@@ -528,11 +582,18 @@ partial def readDollarInDQ (startLine startCol : Nat) : Parser Token := do
       match ← peek? with
       | some '(' =>
           let _ ← pchar '('
+          let (contentStartLine, contentStartCol) ← getPos
           let content ← readArithContent
           let _ ← pstring "))"
-          let inner := match Arithmetic.parse content with
-            | some arithToken => arithToken
-            | none => ⟨⟨0⟩, .T_Literal content⟩
+          let (contentEndLine, contentEndCol) ← getPos
+          let inner ←
+            match Arithmetic.parse content with
+            | some arithToken =>
+                freshenArithmeticTokensAt
+                  contentStartLine contentStartCol contentEndLine contentEndCol
+                  arithToken
+            | none =>
+                mkTokenAt (.T_Literal content) contentStartLine contentStartCol
           mkTokenAt (.T_DollarArithmetic inner) startLine startCol
       | _ =>
           let (contentStartLine, contentStartCol) ← getPos
@@ -540,6 +601,21 @@ partial def readDollarInDQ (startLine startCol : Nat) : Parser Token := do
           let inner ← mkTokenAt (.T_Literal content) contentStartLine contentStartCol
           let _ ← pchar ')'
           mkTokenAt (.T_DollarExpansion [inner]) startLine startCol
+  | some '[' =>
+      let _ ← pchar '['
+      let (contentStartLine, contentStartCol) ← getPos
+      let content ← takeWhile (· != ']')
+      let _ ← pchar ']'
+      let (contentEndLine, contentEndCol) ← getPos
+      let inner ←
+        match Arithmetic.parse content with
+        | some arithToken =>
+            freshenArithmeticTokensAt
+              contentStartLine contentStartCol contentEndLine contentEndCol
+              arithToken
+        | none =>
+            mkTokenAt (.T_Literal content) contentStartLine contentStartCol
+      mkTokenAt (.T_DollarBracket inner) startLine startCol
   | some c =>
       if variableStartChar c then
         let (nameStartLine, nameStartCol) ← getPos
@@ -571,11 +647,18 @@ partial def readDollar (startLine startCol : Nat) : Parser Token := do
       match ← peek? with
       | some '(' =>
           let _ ← pchar '('
+          let (contentStartLine, contentStartCol) ← getPos
           let content ← readArithContent
           let _ ← pstring "))"
-          let inner := match Arithmetic.parse content with
-            | some arithToken => arithToken
-            | none => ⟨⟨0⟩, .T_Literal content⟩
+          let (contentEndLine, contentEndCol) ← getPos
+          let inner ←
+            match Arithmetic.parse content with
+            | some arithToken =>
+                freshenArithmeticTokensAt
+                  contentStartLine contentStartCol contentEndLine contentEndCol
+                  arithToken
+            | none =>
+                mkTokenAt (.T_Literal content) contentStartLine contentStartCol
           mkTokenAt (.T_DollarArithmetic inner) startLine startCol
       | _ =>
           let (contentStartLine, contentStartCol) ← getPos
@@ -583,6 +666,21 @@ partial def readDollar (startLine startCol : Nat) : Parser Token := do
           let inner ← mkTokenAt (.T_Literal content) contentStartLine contentStartCol
           let _ ← pchar ')'
           mkTokenAt (.T_DollarExpansion [inner]) startLine startCol
+  | some '[' =>
+      let _ ← pchar '['
+      let (contentStartLine, contentStartCol) ← getPos
+      let content ← takeWhile (· != ']')
+      let _ ← pchar ']'
+      let (contentEndLine, contentEndCol) ← getPos
+      let inner ←
+        match Arithmetic.parse content with
+        | some arithToken =>
+            freshenArithmeticTokensAt
+              contentStartLine contentStartCol contentEndLine contentEndCol
+              arithToken
+        | none =>
+            mkTokenAt (.T_Literal content) contentStartLine contentStartCol
+      mkTokenAt (.T_DollarBracket inner) startLine startCol
   | some '\'' =>
       -- $'...' ANSI-C quoting - keep escape sequences in the raw content.
       let _ ← pchar '\''
@@ -754,9 +852,36 @@ where
           | none =>
               let tok ← mkTokenAt (.T_Literal "\\") escStartLine escStartCol
               readWordParts (tok :: acc)
+        else if extglobStartChars.toList.contains c then
+          let look ← peekString 2
+          if look.length == 2 && (String.Pos.Raw.mk 1).get look == '(' then
+            let (extLine, extCol) ← getPos
+            let opChar ← anyChar
+            let _ ← anyChar  -- '('
+            let content ← readExtglobContent 1 []
+            let pattern := String.ofList (opChar :: '(' :: content ++ [')'])
+            let tok ← mkTokenAt (.T_Extglob pattern []) extLine extCol
+            readWordParts (tok :: acc)
+          else
+            let tok ← readLiteral
+            readWordParts (tok :: acc)
         else
           let tok ← readLiteral
           readWordParts (tok :: acc)
+  readExtglobContent (depth : Nat) (acc : List Char) : Parser (List Char) := do
+    match ← peek? with
+    | none => failure
+    | some c =>
+        let _ ← anyChar
+        if c == '(' then
+          readExtglobContent (depth + 1) (c :: acc)
+        else if c == ')' then
+          if depth == 1 then
+            pure acc.reverse
+          else
+            readExtglobContent (depth - 1) (c :: acc)
+        else
+          readExtglobContent depth (c :: acc)
 
 /-- Read a word as it appears in `case` patterns.
 

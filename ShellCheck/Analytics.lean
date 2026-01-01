@@ -2165,7 +2165,12 @@ where
   hasLiteralGlobOrBrace (t : Token) : Bool :=
     match getUnquotedLiteral t with
     | some s => containsGlobMeta s || containsBrace s || containsExtGlobStart s
-    | Option.none => false
+    | Option.none => hasBraceToken t || isGlob t
+  hasBraceToken (t : Token) : Bool :=
+    getWordParts t |>.any fun part =>
+      match part.inner with
+      | .T_BraceExpansion _ => true
+      | _ => false
   containsGlobMeta (s : String) : Bool :=
     s.any fun c => c == '*' || c == '?' || c == '['
   containsBrace (s : String) : Bool :=

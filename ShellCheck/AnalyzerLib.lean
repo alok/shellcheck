@@ -139,7 +139,7 @@ def getTokenChildren (t : Token) : List Token :=
   match t.inner with
   | .T_Script _ list => list
   | .T_SimpleCommand assigns words => assigns ++ words
-  | .T_Pipeline _ cmds => cmds  -- 2 args: separators, commands
+  | .T_Pipeline seps cmds => cmds ++ seps  -- 2 args: separators, commands
   | .T_Redirecting redirects cmd => cmd :: redirects  -- 2 args
   | .T_Condition _ expr => [expr]  -- 2 args: condType, expr
   | .T_BraceGroup list => list

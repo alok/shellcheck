@@ -127,6 +127,16 @@ partial def getLiteralStringExt (more : Token → Option String) (t : Token) : O
   | .TA_Expansion parts => String.join <$> parts.mapM (getLiteralStringExt more)
   | .T_SingleQuoted s => some s
   | .T_Literal s => some s
+  | .T_Greater => some ">"
+  | .T_DGREAT => some ">>"
+  | .T_GREATAND => some ">&"
+  | .T_CLOBBER => some ">|"
+  | .T_Less => some "<"
+  | .T_DLESS => some "<<"
+  | .T_DLESSDASH => some "<<-"
+  | .T_LESSAND => some "<&"
+  | .T_LESSGREAT => some "<>"
+  | .T_Pipe s => some s
   | .T_ParamSubSpecialChar s => some s
   | .T_DollarSingleQuoted s => some (decodeEscapes s)
   | _ => more t
@@ -691,7 +701,10 @@ partial def getFlagsUntil (stop : String → Bool) (t : Token) : List (Token × 
   match getCommand t with
   | some cmd =>
     match cmd.inner with
-    | .T_SimpleCommand _ args => extractFlags stop args
+    | .T_SimpleCommand _ args =>
+        match args with
+        | [] => []
+        | _ :: rest => extractFlags stop rest
     | _ => []
   | none => []
 where

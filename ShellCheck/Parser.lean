@@ -382,8 +382,16 @@ where
     match ← peek? with
     | none => pure (assignAcc.reverse, wordAcc.reverse, redirAcc.reverse)
     | some c =>
+        -- Check for &> redirections before treating & as a terminator
+        if c == '&' then
+          let nextTwo ← peekString 2
+          if nextTwo == "&>" then
+            let redir ← readFdRedirect
+            readAssignsWordsAndRedirects assignAcc wordAcc (redir :: redirAcc)
+          else
+            pure (assignAcc.reverse, wordAcc.reverse, redirAcc.reverse)
         -- Check for command terminators
-        if c == '\n' || c == ';' || c == '&' || c == '|' || c == ')' || c == '}' then
+        else if c == '\n' || c == ';' || c == '|' || c == ')' || c == '}' then
           pure (assignAcc.reverse, wordAcc.reverse, redirAcc.reverse)
         else if c == '#' then
           let _ ← takeWhile (· != '\n')
@@ -391,6 +399,7 @@ where
         -- Check for redirects: >, >>, <, <<, etc.
         -- BUT: <(...) and >(...) are process substitutions, not redirects
         else if c == '>' || c == '<' then
+          let (redirStartLine, redirStartCol) ← getPos
           let nextTwo ← peekString 2
           if nextTwo == "<(" || nextTwo == ">(" then
             -- Process substitution - parse as word
@@ -398,9 +407,17 @@ where
             readAssignsWordsAndRedirects assignAcc (word :: wordAcc) redirAcc
           else
             let redir ← readRedirect
+            let redir ←
+              match redir.inner with
+              | .T_IoFile op _ =>
+                  match op.inner with
+                  | .T_GREATAND =>
+                      mkTokenAt (.T_FdRedirect "" redir) redirStartLine redirStartCol
+                  | _ => pure redir
+              | _ => pure redir
             readAssignsWordsAndRedirects assignAcc wordAcc (redir :: redirAcc)
         -- Check for fd redirect like 2>, 1>&2
-        else if c.isDigit then
+        else if c.isDigit || c == '{' then
           match ← ShellCheck.Parser.Parsec.optional (attempt readFdRedirect) with
           | some redir => readAssignsWordsAndRedirects assignAcc wordAcc (redir :: redirAcc)
           | none =>
@@ -477,6 +494,9 @@ where
           | some '<' =>
               let _ ← pchar '<'
               match ← peek? with
+              | some '<' =>
+                  let _ ← pchar '<'
+                  pure "<<<"
               | some '-' =>
                   let _ ← pchar '-'
                   pure "<<-"
@@ -489,7 +509,6 @@ where
               pure "<&"
           | _ => pure "<"
       | _ => failure
-    let opTok ← mkToken (.T_Literal op)
     skipHSpace
     -- Handle here-doc specially
     if op == "<<" || op == "<<-" then
@@ -503,7 +522,22 @@ where
       let quotedFlag := if isQuoted then Quoted.quoted else Quoted.unquoted
       -- Create T_HereDoc with empty content for now - actual content consumed later
       mkToken (.T_HereDoc dashedFlag quotedFlag delimStr [delimTok])
+    else if op == "<<<" then
+      let target ← readWord
+      mkToken (.T_HereString target)
     else
+      let opTok ←
+        match op with
+        | ">" => mkToken .T_Greater
+        | ">>" => mkToken .T_DGREAT
+        | ">&" => mkToken .T_GREATAND
+        | ">|" => mkToken .T_CLOBBER
+        | "<" => mkToken .T_Less
+        | "<<" => mkToken .T_DLESS
+        | "<<-" => mkToken .T_DLESSDASH
+        | "<>" => mkToken .T_LESSGREAT
+        | "<&" => mkToken .T_LESSAND
+        | _ => mkToken (.T_Literal op)
       -- For file redirects, read the target
       match ← peek? with
       | some '-' =>
@@ -524,7 +558,22 @@ where
   /-- Read a fd redirect like 2>, 2>>, 2>&1 -/
   readFdRedirect : Parser Token := do
     let (startLine, startCol) ← getPos
-    let fd ← takeWhile1 Char.isDigit
+    let fd ←
+      match ← peek? with
+      | some '{' =>
+          let _ ← pchar '{'
+          let name ← takeWhile (· != '}')
+          let _ ← pchar '}'
+          pure ("{" ++ name ++ "}")
+      | some '&' =>
+          let _ ← pchar '&'
+          pure "&"
+      | some c =>
+          if c.isDigit then
+            takeWhile1 Char.isDigit
+          else
+            failure
+      | none => failure
     let opStart ← peek?
     if opStart != some '>' && opStart != some '<' then failure
     let redir ← readRedirect

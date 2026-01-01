@@ -195,6 +195,24 @@ partial def checkBashisms : ForShell := {
       startsAfterOptionalIndex modifier ['/']
     let isCaseModification (modifier : String) : Bool :=
       startsAfterOptionalIndex modifier [',', '^']
+    let rec isArithmeticAncestor (tok : Token) : Bool :=
+      match params.parentMap.get? tok.id with
+      | some parent =>
+          match parent.inner with
+          | .T_DollarArithmetic _ => true
+          | .T_DollarBracket _ => true
+          | .T_Arithmetic _ => true
+          | .T_ForArithmetic _ _ _ _ => true
+          | .TA_Binary _ _ _ => isArithmeticAncestor parent
+          | .TA_Assignment _ _ _ => isArithmeticAncestor parent
+          | .TA_Variable _ _ => isArithmeticAncestor parent
+          | .TA_Trinary _ _ _ => isArithmeticAncestor parent
+          | .TA_Parenthesis _ => isArithmeticAncestor parent
+          | .TA_Expansion _ => isArithmeticAncestor parent
+          | .TA_Sequence _ => isArithmeticAncestor parent
+          | .TA_Unary _ _ => isArithmeticAncestor parent
+          | _ => isArithmeticAncestor parent
+      | none => false
     let checkSimpleCommand : Token → List TokenComment := fun cmdTok =>
       let name := getCommandName cmdTok |>.getD ""
       let flags := getLeadingFlags cmdTok
@@ -536,6 +554,10 @@ partial def checkBashisms : ForShell := {
               [warnMsg tok.id 3052 "arithmetic base conversion is"]
             else []
         | _ => []
+    | .T_Literal str =>
+        if isRadix str && isArithmeticAncestor t then
+          [warnMsg t.id 3052 "arithmetic base conversion is"]
+        else []
     | .T_SimpleCommand _ _ =>
         checkSimpleCommand t
     | _ => []

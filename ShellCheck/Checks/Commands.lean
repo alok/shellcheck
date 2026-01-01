@@ -3565,12 +3565,12 @@ def checkPipeAmpersand : CommandCheck := {
     else []
 }
 
-/-- SC3021: In POSIX sh, `coproc` is undefined -/
+/-- SC3032: In POSIX sh, `coproc` is undefined -/
 def checkCoproc : CommandCheck := {
   name := .exactly "coproc"
   check := fun params t =>
     if params.shellType == .Sh then
-      [warnCmd t 3021 "In POSIX sh, coproc is undefined."]
+      [warnCmd t 3032 "In POSIX sh, coproc is undefined."]
     else []
 }
 
@@ -3857,6 +3857,7 @@ def commandChecks : List CommandCheck := [
   checkRmVar,           -- SC2115
   checkFindXargs,       -- SC2038
   checkPosixFeatures,   -- SC2039
+  checkCoproc,          -- SC3032
   checkLsIteration,     -- SC2045
   checkArrayExpansion,  -- SC2068
   checkDeclareAssignWithSub, -- SC2155 (local, export, declare, readonly, typeset)
