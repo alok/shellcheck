@@ -69,12 +69,12 @@ def reservedKeywords : List String :=
 /-! ## Spacing Parsers -/
 
 /-- Skip horizontal whitespace (space, tab) -/
-partial def skipHSpaceFull : ShellParser Unit := do
+partial def skipHSpace : ShellParser Unit := do
   let _ ← takeWhile (fun c => c == ' ' || c == '\t')
   match ← peek? with
   | some '\\' =>
       match ← ShellCheck.Parser.Parsec.optional (attempt (pstring "\\\n")) with
-      | some _ => skipHSpaceFull
+      | some _ => skipHSpace
       | none => pure ()
   | some '#' =>
       let _ ← takeWhile (· != '\n')
@@ -82,15 +82,15 @@ partial def skipHSpaceFull : ShellParser Unit := do
   | _ => pure ()
 
 /-- Skip all whitespace including newlines -/
-partial def skipAllSpaceFull : ShellParser Unit := do
+partial def skipAllSpace : ShellParser Unit := do
   let _ ← takeWhile (fun c => c.isWhitespace)
   match ← peek? with
   | some '#' =>
       let _ ← takeWhile (· != '\n')
-      skipAllSpaceFull
+      skipAllSpace
   | some '\\' =>
       match ← ShellCheck.Parser.Parsec.optional (attempt (pstring "\\\n")) with
-      | some _ => skipAllSpaceFull
+      | some _ => skipAllSpace
       | none => pure ()
   | _ => pure ()
 

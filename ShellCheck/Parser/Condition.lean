@@ -219,7 +219,7 @@ def parseSingleBracket (content : String) : Option Token :=
   parseCondition (tokenize content) .singleBracket
 
 /-
-  Token-based condition parsing (used by the full parser).
+  Token-based condition parsing (used by the parser).
 
   This is a substantial upgrade over the older `tokenize`-by-space approach:
   the full shell parser already tokenizes/quotes/escapes words into `Token`s.
@@ -358,7 +358,7 @@ end
 end TokenParse
 
 /-- Parse a list of already-tokenized condition arguments into a `TC_*` tree. -/
-partial def parseConditionTokensFull (ct : ConditionType) (tokens : List Token) : ShellParser Token := do
+partial def parseConditionTokens (ct : ConditionType) (tokens : List Token) : ShellParser Token := do
   let (expr, rest) := (← TokenParse.parseOr ct tokens)
   if rest.isEmpty then
     pure expr

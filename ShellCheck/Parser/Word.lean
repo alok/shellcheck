@@ -20,7 +20,7 @@ open ShellCheck.Parser.Expansion
 open ShellCheck.Parser.Lexer
 
 /-!
-Word parsing helpers for the full parser.
+Word parsing helpers for the parser.
 
 These functions are used by the grammar in `ShellCheck/Parser.lean` and are
 intended to be the single source of truth for word parsing during the Parsec
@@ -28,7 +28,7 @@ migration.
 -/
 
 /-- Read a literal word part -/
-def readLiteralFull : ShellParser Token := do
+def readLiteral : ShellParser Token := do
   let (startLine, startCol) ← getPos
   let content ← takeWhile1 fun c =>
     ¬ (c.isWhitespace ||
@@ -42,7 +42,7 @@ def readLiteralFull : ShellParser Token := do
   mkTokenAt (.T_Literal content) startLine startCol
 
 /-- Read a single-quoted string -/
-def readSingleQuotedFull : ShellParser Token := do
+def readSingleQuoted : ShellParser Token := do
   let (startLine, startCol) ← getPos
   let _ ← pchar '\''
   let content ← takeWhile (· != '\'')
@@ -91,7 +91,7 @@ partial def readBacktickContent : ShellParser String := do
   go [] false false false
 
 /-- Read a backtick command substitution -/
-partial def readBacktickFull : ShellParser Token := do
+partial def readBacktick : ShellParser Token := do
   let (startLine, startCol) ← getPos
   let _ ← pchar '`'
   let (contentStartLine, contentStartCol) ← getPos
@@ -261,7 +261,7 @@ nested `${...}` are represented in the AST instead of left as raw strings.
 -/
 
 /-- Read a literal word part inside a `${...}` argument, allowing whitespace and operators. -/
-def readLiteralInBracedArgFull : ShellParser Token := do
+def readLiteralInBracedArg : ShellParser Token := do
   let (startLine, startCol) ← getPos
   let content ← takeWhile1 fun c =>
     c != '"' && c != '\'' && c != '`' && c != '$' && c != '\\'
@@ -301,7 +301,7 @@ partial def readSubshellContent : ShellParser String := do
   readUntilStr ")"
 
 /-- Read ANSI-C quoted content, keeping escape sequences like `\\'`. -/
-partial def readAnsiCContentFull : ShellParser String := do
+partial def readAnsiCContent : ShellParser String := do
   let rec go (acc : List Char) : ShellParser String := do
     match ← peek? with
     | none => pure (String.ofList acc.reverse)
@@ -320,23 +320,23 @@ partial def readAnsiCContentFull : ShellParser String := do
   go []
 
 /-- Read a `${...}` argument as a list of word-part tokens (until EOF). -/
-partial def readBracedArgPartsFull : ShellParser (List Token) := do
+partial def readBracedArgParts : ShellParser (List Token) := do
   let rec go (acc : List Token) : ShellParser (List Token) := do
     match ← peek? with
     | none => pure acc.reverse
     | some '\'' =>
-        let tok ← readSingleQuotedFull
+        let tok ← readSingleQuoted
         go (tok :: acc)
     | some '"' =>
-        let tok ← readDoubleQuotedFull
+        let tok ← readDoubleQuoted
         go (tok :: acc)
     | some '`' =>
-        let tok ← readBacktickFull
+        let tok ← readBacktick
         go (tok :: acc)
     | some '$' =>
         let (startLine, startCol) ← getPos
         let _ ← anyChar
-        let tok ← readDollarFull startLine startCol
+        let tok ← readDollar startLine startCol
         go (tok :: acc)
     | some '\\' =>
         let (escStartLine, escStartCol) ← getPos
@@ -353,7 +353,7 @@ partial def readBracedArgPartsFull : ShellParser (List Token) := do
             let tok ← mkTokenAt (.T_Literal "\\") escStartLine escStartCol
             go (tok :: acc)
     | some _ =>
-        let tok ← readLiteralInBracedArgFull
+        let tok ← readLiteralInBracedArg
         go (tok :: acc)
   go []
 
@@ -365,7 +365,7 @@ private partial def parseBracedArgParts
   let it := ShellCheck.Parser.Parsec.PosIterator.create arg
   let initState : ShellState :=
     { ShellCheck.Parser.Parsec.mkShellState filename with nextId := startId }
-  match readBracedArgPartsFull initState it with
+  match readBracedArgParts initState it with
   | .success _ (parts, st) =>
       let pos := offsetPositions st.positions offsetLine offsetCol
       (parts, st.nextId, pos)
@@ -376,7 +376,7 @@ private partial def parseBracedArgParts
 /-- Parse the content of a `${...}` expansion into a structured token tree.
 
 If parsing fails, fall back to a single literal token with the raw content. -/
-private partial def parseBracedExpansionContentFull (content : String) (startLine startCol : Nat) : ShellParser Token := do
+private partial def parseBracedExpansionContent (content : String) (startLine startCol : Nat) : ShellParser Token := do
   let mkLitAt (s : String) : ShellParser Token :=
     mkTokenAt (.T_Literal s) startLine startCol
   let mkOpAt (s : String) : ShellParser Token :=
@@ -514,13 +514,13 @@ private partial def parseBracedExpansionContentFull (content : String) (startLin
           mkTokenAt (.T_NormalWord ([varTok, opTok] ++ argParts)) startLine startCol
 
 /-- Read a `$...` expansion inside double quotes (assumes `$` already consumed). -/
-partial def readDollarInDQFull (startLine startCol : Nat) : ShellParser Token := do
+partial def readDollarInDQ (startLine startCol : Nat) : ShellParser Token := do
   match ← peek? with
   | some '{' =>
       let _ ← pchar '{'
       let (contentStartLine, contentStartCol) ← getPos
       let content ← readBracedExpansionContent
-      let inner ← parseBracedExpansionContentFull content contentStartLine contentStartCol
+      let inner ← parseBracedExpansionContent content contentStartLine contentStartCol
       let _ ← pchar '}'
       mkTokenAt (.T_DollarBraced true inner) startLine startCol
   | some '(' =>
@@ -557,13 +557,13 @@ partial def readDollarInDQFull (startLine startCol : Nat) : ShellParser Token :=
       mkTokenAt (.T_Literal "$") startLine startCol
 
 /-- Read a `$...` expansion in normal word context (assumes `$` already consumed). -/
-partial def readDollarFull (startLine startCol : Nat) : ShellParser Token := do
+partial def readDollar (startLine startCol : Nat) : ShellParser Token := do
   match ← peek? with
   | some '{' =>
       let _ ← pchar '{'
       let (contentStartLine, contentStartCol) ← getPos
       let content ← readBracedExpansionContent
-      let inner ← parseBracedExpansionContentFull content contentStartLine contentStartCol
+      let inner ← parseBracedExpansionContent content contentStartLine contentStartCol
       let _ ← pchar '}'
       mkTokenAt (.T_DollarBraced true inner) startLine startCol
   | some '(' =>
@@ -586,7 +586,7 @@ partial def readDollarFull (startLine startCol : Nat) : ShellParser Token := do
   | some '\'' =>
       -- $'...' ANSI-C quoting - keep escape sequences in the raw content.
       let _ ← pchar '\''
-      let content ← readAnsiCContentFull
+      let content ← readAnsiCContent
       let _ ← pchar '\''
       mkTokenAt (.T_DollarSingleQuoted content) startLine startCol
   | some '"' =>
@@ -614,7 +614,7 @@ partial def readDollarFull (startLine startCol : Nat) : ShellParser Token := do
       mkTokenAt (.T_Literal "$") startLine startCol
 
 /-- Read a double-quoted string. -/
-partial def readDoubleQuotedFull : ShellParser Token := do
+partial def readDoubleQuoted : ShellParser Token := do
   let (startLine, startCol) ← getPos
   let _ ← pchar '"'
   let parts ← readDQParts []
@@ -637,10 +637,10 @@ where
     | some '$' =>
         let (startLine, startCol) ← getPos
         let _ ← anyChar
-        let tok ← readDollarInDQFull startLine startCol
+        let tok ← readDollarInDQ startLine startCol
         readDQParts (tok :: acc)
     | some '`' =>
-        let tok ← readBacktickFull
+        let tok ← readBacktick
         readDQParts (tok :: acc)
     | some _ =>
         let (litStartLine, litStartCol) ← getPos
@@ -651,7 +651,7 @@ where
           readDQParts (tok :: acc)
 
 /-- Read process substitution <(...) or >(...) -/
-partial def readProcSubFull : ShellParser Token := do
+partial def readProcSub : ShellParser Token := do
   let (startLine, startCol) ← getPos
   let dir ← anyChar  -- < or >
   let _ ← pchar '('
@@ -703,7 +703,7 @@ where
 end
 
 /-- Read a complete word (multiple parts) -/
-partial def readWordFull : ShellParser Token := do
+partial def readWord : ShellParser Token := do
   let (startLine, startCol) ← getPos
   let parts ← readWordParts []
   if parts.isEmpty then
@@ -719,7 +719,7 @@ where
         if c == '<' || c == '>' then
           let nextTwo ← peekString 2
           if nextTwo == "<(" || nextTwo == ">(" then
-            let tok ← readProcSubFull
+            let tok ← readProcSub
             readWordParts (tok :: acc)
           else
             -- Regular < or > is an operator, stop word
@@ -727,18 +727,18 @@ where
         else if c.isWhitespace || isOperatorStart c || c == '#' then
           pure acc.reverse
         else if c == '\'' then
-          let tok ← readSingleQuotedFull
+          let tok ← readSingleQuoted
           readWordParts (tok :: acc)
         else if c == '"' then
-          let tok ← readDoubleQuotedFull
+          let tok ← readDoubleQuoted
           readWordParts (tok :: acc)
         else if c == '`' then
-          let tok ← readBacktickFull
+          let tok ← readBacktick
           readWordParts (tok :: acc)
         else if c == '$' then
           let (startLine, startCol) ← getPos
           let _ ← anyChar
-          let tok ← readDollarFull startLine startCol
+          let tok ← readDollar startLine startCol
           readWordParts (tok :: acc)
         else if c == '\\' then
           let (escStartLine, escStartCol) ← getPos
@@ -755,7 +755,7 @@ where
               let tok ← mkTokenAt (.T_Literal "\\") escStartLine escStartCol
               readWordParts (tok :: acc)
         else
-          let tok ← readLiteralFull
+          let tok ← readLiteral
           readWordParts (tok :: acc)
 
 /-- Read a word as it appears in `case` patterns.
@@ -771,7 +771,7 @@ operators. This reader:
 
 This is a best-effort parser intended to improve `case` pattern coverage without
 rewriting the full word lexer. -/
-partial def readPatternWordFull : ShellParser Token := do
+partial def readPatternWord : ShellParser Token := do
   let (startLine, startCol) ← getPos
   let parts ← readParts [] none [] 0 false 0 false false
   if parts.isEmpty then
@@ -855,21 +855,21 @@ where
           pure acc.reverse
         else if c == '\'' then
           let acc ← flushLiteral acc litStart litRev
-          let tok ← readSingleQuotedFull
+          let tok ← readSingleQuoted
           readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation false
         else if c == '"' then
           let acc ← flushLiteral acc litStart litRev
-          let tok ← readDoubleQuotedFull
+          let tok ← readDoubleQuoted
           readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation false
         else if c == '`' then
           let acc ← flushLiteral acc litStart litRev
-          let tok ← readBacktickFull
+          let tok ← readBacktick
           readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation false
         else if c == '$' then
           let acc ← flushLiteral acc litStart litRev
           let (dl, dc) ← getPos
           let _ ← anyChar
-          let tok ← readDollarFull dl dc
+          let tok ← readDollar dl dc
           readParts (tok :: acc) none [] parenDepth inClass classChars sawNegation false
         else if c == '\\' then
           let (escLine, escCol) ← getPos
