@@ -5,11 +5,11 @@
   Lexical analysis: character classes, keywords, spacing, operators
 -/
 
-import ShellCheck.Parser.Core
+import ShellCheck.Parser.Parsec
 
 namespace ShellCheck.Parser.Lexer
 
-open ShellCheck.Parser.Core
+open ShellCheck.Parser.Parsec
 
 /-! ## Character Classes -/
 
@@ -69,27 +69,27 @@ def reservedKeywords : List String :=
 /-! ## Spacing Parsers -/
 
 /-- Skip horizontal whitespace (space, tab) -/
-partial def skipHSpaceFull : FullParser Unit := do
-  let _ ← takeWhileFull (fun c => c == ' ' || c == '\t')
-  match ← peekFull with
+partial def skipHSpaceFull : ShellParser Unit := do
+  let _ ← takeWhile (fun c => c == ' ' || c == '\t')
+  match ← peek? with
   | some '\\' =>
-      match ← optionalFull (attemptFull (stringFull "\\\n")) with
+      match ← ShellCheck.Parser.Parsec.optional (attempt (pstring "\\\n")) with
       | some _ => skipHSpaceFull
       | none => pure ()
   | some '#' =>
-      let _ ← takeWhileFull (· != '\n')
+      let _ ← takeWhile (· != '\n')
       pure ()
   | _ => pure ()
 
 /-- Skip all whitespace including newlines -/
-partial def skipAllSpaceFull : FullParser Unit := do
-  let _ ← takeWhileFull (fun c => c.isWhitespace)
-  match ← peekFull with
+partial def skipAllSpaceFull : ShellParser Unit := do
+  let _ ← takeWhile (fun c => c.isWhitespace)
+  match ← peek? with
   | some '#' =>
-      let _ ← takeWhileFull (· != '\n')
+      let _ ← takeWhile (· != '\n')
       skipAllSpaceFull
   | some '\\' =>
-      match ← optionalFull (attemptFull (stringFull "\\\n")) with
+      match ← ShellCheck.Parser.Parsec.optional (attempt (pstring "\\\n")) with
       | some _ => skipAllSpaceFull
       | none => pure ()
   | _ => pure ()
@@ -97,7 +97,7 @@ partial def skipAllSpaceFull : FullParser Unit := do
 /-! ## Keyword Parsers -/
 
 /-- Check if next token is a specific keyword (without consuming) -/
-partial def peekKeyword (kw : String) : FullParser Bool := fun st it =>
+partial def peekKeyword (kw : String) : ShellParser Bool := fun st it =>
   let remaining := it.str.drop it.pos.byteIdx
   if remaining.startsWith kw then
     let afterKw := remaining.drop kw.length
@@ -111,16 +111,16 @@ partial def peekKeyword (kw : String) : FullParser Bool := fun st it =>
     .success it (false, st)
 
 /-- Consume a keyword -/
-partial def consumeKeyword (kw : String) : FullParser Unit := do
+partial def consumeKeyword (kw : String) : ShellParser Unit := do
   let isKw ← peekKeyword kw
   if isKw then
-    let _ ← stringFull kw
+    let _ ← pstring kw
     pure ()
   else
     failure
 
 /-- Check if at reserved keyword -/
-def isReservedKeyword : FullParser Bool := do
+def isReservedKeyword : ShellParser Bool := do
   let checks ← reservedKeywords.mapM peekKeyword
   pure (checks.any id)
 
