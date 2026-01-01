@@ -39,16 +39,12 @@ def readLiteral : Parser Token := do
        c == '|' || c == '&' || c == ';' ||
        c == '<' || c == '>' ||
        c == '(' || c == ')' ||
+       c == '{' || c == '}' ||
        c == '#')
-       -- Note: { and } are allowed in word literals for brace expansion
   let isBracketToken :=
     content == "[" || content == "]" || content == "[[" || content == "]]"
   let inner :=
-    if hasExtGlob content then
-      .T_Extglob content []
-    else if hasBraceExpansion content then
-      .T_BraceExpansion []
-    else if content.toList.any isGlobChar && !isBracketToken then
+    if content.toList.any isGlobChar && !isBracketToken then
       .T_Glob content
     else
       .T_Literal content
@@ -852,15 +848,27 @@ where
           | none =>
               let tok ← mkTokenAt (.T_Literal "\\") escStartLine escStartCol
               readWordParts (tok :: acc)
+        else if c == '{' then
+          let (braceLine, braceCol) ← getPos
+          let tok ← readBraceExpansionOrLiteral braceLine braceCol
+          readWordParts (tok :: acc)
+        else if c == '}' then
+          let (braceLine, braceCol) ← getPos
+          let _ ← anyChar
+          let tok ← mkTokenAt (.T_Literal "}") braceLine braceCol
+          readWordParts (tok :: acc)
         else if extglobStartChars.toList.contains c then
           let look ← peekString 2
           if look.length == 2 && (String.Pos.Raw.mk 1).get look == '(' then
             let (extLine, extCol) ← getPos
             let opChar ← anyChar
             let _ ← anyChar  -- '('
-            let content ← readExtglobContent 1 []
+            let (contentStartLine, contentStartCol) ← getPos
+            let content ← readExtglobContent 1 [] false false false false
             let pattern := String.ofList (opChar :: '(' :: content ++ [')'])
-            let tok ← mkTokenAt (.T_Extglob pattern []) extLine extCol
+            let parts ←
+              parseExtglobAlternatives (String.ofList content) contentStartLine contentStartCol
+            let tok ← mkTokenAt (.T_Extglob pattern parts) extLine extCol
             readWordParts (tok :: acc)
           else
             let tok ← readLiteral
@@ -868,20 +876,281 @@ where
         else
           let tok ← readLiteral
           readWordParts (tok :: acc)
-  readExtglobContent (depth : Nat) (acc : List Char) : Parser (List Char) := do
+
+  readBraceExpansionOrLiteral (startLine startCol : Nat) : Parser Token := do
+    attempt
+      (do
+        let _ ← pchar '{'
+        let (contentStartLine, contentStartCol) ← getPos
+        let content ← readBracedExpansionContent
+        let _ ← pchar '}'
+        let hasRange := hasTopLevelRange content
+        let alts := splitBraceAlternatives content
+        if alts.length <= 1 && !hasRange then
+          let literal := "{" ++ content ++ "}"
+          mkTokenAt (.T_Literal literal) startLine startCol
+        else
+          let parts ← parseBraceAlternatives content contentStartLine contentStartCol
+          mkTokenAt (.T_BraceExpansion parts) startLine startCol)
+    <|> (do
+      let _ ← anyChar
+      mkTokenAt (.T_Literal "{") startLine startCol)
+
+  parseBraceAlternatives
+      (content : String) (contentStartLine contentStartCol : Nat) : Parser (List Token) := do
+    let alts := splitBraceAlternatives content
+    alts.mapM (fun (alt, offset) =>
+      parseAltWord content contentStartLine contentStartCol alt offset)
+
+  parseExtglobAlternatives
+      (content : String) (contentStartLine contentStartCol : Nat) : Parser (List Token) := do
+    let alts := splitExtglobAlternatives content
+    alts.mapM (fun (alt, offset) =>
+      parseAltWord content contentStartLine contentStartCol alt offset)
+
+  parseAltWord
+      (content : String) (contentStartLine contentStartCol : Nat)
+      (alt : String) (offset : Nat) : Parser Token := do
+    let st ← ShellCheck.Parser.Parsec.getState
+    let (altLine, altCol) := posAtCharOffset contentStartLine contentStartCol content offset
+    let (parts, newNextId, newPositions) :=
+      parseBracedArgParts alt st.filename st.nextId altLine altCol
+    ShellCheck.Parser.Parsec.modifyState fun st =>
+      { st with
+        nextId := newNextId
+        positions := newPositions.fold (init := st.positions) fun m k v => m.insert k v }
+    let (altEndLine, altEndCol) :=
+      posAtCharOffset contentStartLine contentStartCol content (offset + alt.length)
+    let id ← freshId
+    recordPosition id altLine altCol altEndLine altEndCol
+    pure ⟨id, .T_NormalWord parts⟩
+
+  splitBraceAlternatives (content : String) : List (String × Nat) :=
+    let chars := content.toList
+    let rec go (rest : List Char) (idx : Nat) (startIdx : Nat)
+        (accRev : List Char) (braceDepth : Nat)
+        (inSingle inDouble inBacktick escaped : Bool)
+        (acc : List (String × Nat)) : List (String × Nat) :=
+      match rest with
+      | [] =>
+          let alt := String.ofList accRev.reverse
+          (alt, startIdx) :: acc |>.reverse
+      | c :: cs =>
+          if escaped then
+            go cs (idx + 1) startIdx (c :: accRev) braceDepth inSingle inDouble inBacktick false acc
+          else if inSingle then
+            let inSingle' := c != '\''
+            go cs (idx + 1) startIdx (c :: accRev) braceDepth inSingle' inDouble inBacktick false acc
+          else if inDouble then
+            if c == '\\' then
+              go cs (idx + 1) startIdx ('\\' :: accRev) braceDepth inSingle inDouble inBacktick true acc
+            else
+              let inDouble' := c != '"'
+              go cs (idx + 1) startIdx (c :: accRev) braceDepth inSingle inDouble' inBacktick false acc
+          else if inBacktick then
+            if c == '\\' then
+              go cs (idx + 1) startIdx ('\\' :: accRev) braceDepth inSingle inDouble inBacktick true acc
+            else
+              let inBacktick' := c != '`'
+              go cs (idx + 1) startIdx (c :: accRev) braceDepth inSingle inDouble inBacktick' false acc
+          else if c == '\\' then
+            go cs (idx + 1) startIdx ('\\' :: accRev) braceDepth inSingle inDouble inBacktick true acc
+          else if c == '\'' then
+            go cs (idx + 1) startIdx (c :: accRev) braceDepth true inDouble inBacktick false acc
+          else if c == '"' then
+            go cs (idx + 1) startIdx (c :: accRev) braceDepth inSingle true inBacktick false acc
+          else if c == '`' then
+            go cs (idx + 1) startIdx (c :: accRev) braceDepth inSingle inDouble true false acc
+          else if c == '{' then
+            go cs (idx + 1) startIdx (c :: accRev) (braceDepth + 1) inSingle inDouble inBacktick false acc
+          else if c == '}' && braceDepth > 0 then
+            go cs (idx + 1) startIdx (c :: accRev) (braceDepth - 1) inSingle inDouble inBacktick false acc
+          else if c == ',' && braceDepth == 0 then
+            let alt := String.ofList accRev.reverse
+            go cs (idx + 1) (idx + 1) [] braceDepth inSingle inDouble inBacktick false ((alt, startIdx) :: acc)
+          else
+            go cs (idx + 1) startIdx (c :: accRev) braceDepth inSingle inDouble inBacktick false acc
+    go chars 0 0 [] 0 false false false false []
+
+  hasTopLevelRange (content : String) : Bool :=
+    let chars := content.toList
+    let rec go (rest : List Char) (braceDepth : Nat)
+        (inSingle inDouble inBacktick escaped : Bool) : Bool :=
+      match rest with
+      | [] => false
+      | c :: cs =>
+          if escaped then
+            go cs braceDepth inSingle inDouble inBacktick false
+          else if inSingle then
+            let inSingle' := c != '\''
+            go cs braceDepth inSingle' inDouble inBacktick false
+          else if inDouble then
+            if c == '\\' then
+              go cs braceDepth inSingle inDouble inBacktick true
+            else
+              let inDouble' := c != '"'
+              go cs braceDepth inSingle inDouble' inBacktick false
+          else if inBacktick then
+            if c == '\\' then
+              go cs braceDepth inSingle inDouble inBacktick true
+            else
+              let inBacktick' := c != '`'
+              go cs braceDepth inSingle inDouble inBacktick' false
+          else if c == '\\' then
+            go cs braceDepth inSingle inDouble inBacktick true
+          else if c == '\'' then
+            go cs braceDepth true inDouble inBacktick false
+          else if c == '"' then
+            go cs braceDepth inSingle true inBacktick false
+          else if c == '`' then
+            go cs braceDepth inSingle inDouble true false
+          else if c == '{' then
+            go cs (braceDepth + 1) inSingle inDouble inBacktick false
+          else if c == '}' && braceDepth > 0 then
+            go cs (braceDepth - 1) inSingle inDouble inBacktick false
+          else
+            match cs with
+            | '.' :: _ =>
+                if c == '.' && braceDepth == 0 then
+                  true
+                else
+                  go cs braceDepth inSingle inDouble inBacktick false
+            | _ => go cs braceDepth inSingle inDouble inBacktick false
+    go chars 0 false false false false
+
+  splitExtglobAlternatives (content : String) : List (String × Nat) :=
+    let chars := content.toList
+    let rec go (rest : List Char) (idx : Nat) (startIdx : Nat)
+        (accRev : List Char) (parenDepth : Nat)
+        (inSingle inDouble inBacktick escaped : Bool)
+        (inClass : Bool) (classChars : Nat) (sawNegation : Bool)
+        (acc : List (String × Nat)) : List (String × Nat) :=
+      match rest with
+      | [] =>
+          let alt := String.ofList accRev.reverse
+          (alt, startIdx) :: acc |>.reverse
+      | c :: cs =>
+          if escaped then
+            go cs (idx + 1) startIdx (c :: accRev) parenDepth inSingle inDouble inBacktick false
+              inClass classChars sawNegation acc
+          else if inSingle then
+            let inSingle' := c != '\''
+            go cs (idx + 1) startIdx (c :: accRev) parenDepth inSingle' inDouble inBacktick false
+              inClass classChars sawNegation acc
+          else if inDouble then
+            if c == '\\' then
+              go cs (idx + 1) startIdx ('\\' :: accRev) parenDepth inSingle inDouble inBacktick true
+                inClass classChars sawNegation acc
+            else
+              let inDouble' := c != '"'
+              go cs (idx + 1) startIdx (c :: accRev) parenDepth inSingle inDouble' inBacktick false
+                inClass classChars sawNegation acc
+          else if inBacktick then
+            if c == '\\' then
+              go cs (idx + 1) startIdx ('\\' :: accRev) parenDepth inSingle inDouble inBacktick true
+                inClass classChars sawNegation acc
+            else
+              let inBacktick' := c != '`'
+              go cs (idx + 1) startIdx (c :: accRev) parenDepth inSingle inDouble inBacktick' false
+                inClass classChars sawNegation acc
+          else if c == '\\' then
+            go cs (idx + 1) startIdx ('\\' :: accRev) parenDepth inSingle inDouble inBacktick true
+              inClass classChars sawNegation acc
+          else if c == '\'' then
+            go cs (idx + 1) startIdx (c :: accRev) parenDepth true inDouble inBacktick false
+              inClass classChars sawNegation acc
+          else if c == '"' then
+            go cs (idx + 1) startIdx (c :: accRev) parenDepth inSingle true inBacktick false
+              inClass classChars sawNegation acc
+          else if c == '`' then
+            go cs (idx + 1) startIdx (c :: accRev) parenDepth inSingle inDouble true false
+              inClass classChars sawNegation acc
+          else
+            let (inClass', classChars', sawNegation') := updateBracket inClass classChars sawNegation c
+            if !inClass' && c == '(' then
+              go cs (idx + 1) startIdx (c :: accRev) (parenDepth + 1) inSingle inDouble inBacktick false
+                inClass' classChars' sawNegation' acc
+            else if !inClass' && c == ')' && parenDepth > 0 then
+              go cs (idx + 1) startIdx (c :: accRev) (parenDepth - 1) inSingle inDouble inBacktick false
+                inClass' classChars' sawNegation' acc
+            else if c == '|' && parenDepth == 0 && !inClass' then
+              let alt := String.ofList accRev.reverse
+              go cs (idx + 1) (idx + 1) [] parenDepth inSingle inDouble inBacktick false
+                inClass' classChars' sawNegation' ((alt, startIdx) :: acc)
+            else
+              go cs (idx + 1) startIdx (c :: accRev) parenDepth inSingle inDouble inBacktick false
+                inClass' classChars' sawNegation' acc
+    go chars 0 0 [] 0 false false false false false 0 false []
+
+  updateBracket (inClass : Bool) (classChars : Nat) (sawNegation : Bool) (c : Char) :
+      Bool × Nat × Bool :=
+    if inClass then
+      if classChars == 0 && !sawNegation && (c == '!' || c == '^') then
+        (true, 0, true)
+      else if c == ']' && classChars == 0 then
+        (true, 1, sawNegation)
+      else if c == ']' then
+        (false, 0, false)
+      else
+        (true, classChars + 1, sawNegation)
+    else
+      if c == '[' then
+        (true, 0, false)
+      else
+        (false, 0, false)
+
+  readExtglobContent (depth : Nat) (acc : List Char)
+      (inSingle inDouble inBacktick escaped : Bool) : Parser (List Char) := do
     match ← peek? with
     | none => failure
     | some c =>
-        let _ ← anyChar
-        if c == '(' then
-          readExtglobContent (depth + 1) (c :: acc)
+        if escaped then
+          let _ ← anyChar
+          readExtglobContent depth (c :: acc) inSingle inDouble inBacktick false
+        else if inSingle then
+          let _ ← anyChar
+          let inSingle' := c != '\''
+          readExtglobContent depth (c :: acc) inSingle' inDouble inBacktick false
+        else if inDouble then
+          if c == '\\' then
+            let _ ← anyChar
+            readExtglobContent depth ('\\' :: acc) inSingle inDouble inBacktick true
+          else
+            let _ ← anyChar
+            let inDouble' := c != '"'
+            readExtglobContent depth (c :: acc) inSingle inDouble' inBacktick false
+        else if inBacktick then
+          if c == '\\' then
+            let _ ← anyChar
+            readExtglobContent depth ('\\' :: acc) inSingle inDouble inBacktick true
+          else
+            let _ ← anyChar
+            let inBacktick' := c != '`'
+            readExtglobContent depth (c :: acc) inSingle inDouble inBacktick' false
+        else if c == '\\' then
+          let _ ← anyChar
+          readExtglobContent depth ('\\' :: acc) inSingle inDouble inBacktick true
+        else if c == '\'' then
+          let _ ← anyChar
+          readExtglobContent depth (c :: acc) true inDouble inBacktick false
+        else if c == '"' then
+          let _ ← anyChar
+          readExtglobContent depth (c :: acc) inSingle true inBacktick false
+        else if c == '`' then
+          let _ ← anyChar
+          readExtglobContent depth (c :: acc) inSingle inDouble true false
+        else if c == '(' then
+          let _ ← anyChar
+          readExtglobContent (depth + 1) (c :: acc) inSingle inDouble inBacktick false
         else if c == ')' then
           if depth == 1 then
             pure acc.reverse
           else
-            readExtglobContent (depth - 1) (c :: acc)
+            let _ ← anyChar
+            readExtglobContent (depth - 1) (c :: acc) inSingle inDouble inBacktick false
         else
-          readExtglobContent depth (c :: acc)
+          let _ ← anyChar
+          readExtglobContent depth (c :: acc) inSingle inDouble inBacktick false
 
 /-- Read a word as it appears in `case` patterns.
 
