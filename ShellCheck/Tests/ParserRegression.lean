@@ -1,8 +1,10 @@
+import ShellCheck.ASTLib
 import ShellCheck.Parser
 
 namespace ShellCheck.Tests.ParserRegression
 
 open ShellCheck.AST
+open ShellCheck.ASTLib
 open ShellCheck.Parser
 open ShellCheck.Parser.Parsec
 
@@ -88,10 +90,59 @@ def firstHereDoc? (t : Token) : Option (Quoted × List Token) :=
       (m := StateM (Option (Quoted × List Token)))
       (f := fun tok => do
         match tok.inner with
-        | .T_HereDoc _ quoted _ content =>
+        | .T_HereDoc _ quotedFlag _ content =>
             match (← get) with
             | some _ => pure ()
-            | none => set (some (quoted, content))
+            | none => set (some (quotedFlag, content))
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run none
+  found
+
+def collectHereDocs (t : Token) : List (Quoted × List Token) :=
+  let scan : StateM (List (Quoted × List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (List (Quoted × List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_HereDoc _ quotedFlag _ content =>
+            modify (fun acc => (quotedFlag, content) :: acc)
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run []
+  found.reverse
+
+def firstExtglob? (t : Token) : Option (String × List Token) :=
+  let scan : StateM (Option (String × List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (Option (String × List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_Extglob pattern parts =>
+            match (← get) with
+            | some _ => pure ()
+            | none => set (some (pattern, parts))
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run none
+  found
+
+def firstBraceExpansion? (t : Token) : Option (List Token) :=
+  let scan : StateM (Option (List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (Option (List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_BraceExpansion parts =>
+            match (← get) with
+            | some _ => pure ()
+            | none => set (some parts)
         | _ => pure ())
       (g := fun _ => pure ())
       (transform := fun tok => pure tok)
@@ -309,5 +360,63 @@ def test_heredoc_quoted_skips_expansions : Except String Bool := do
       .error "expected quoted heredoc"
   | none =>
       .error "did not find heredoc"
+
+def test_heredoc_multiple_parses : Except String Bool := do
+  let root ← parseScriptOk "cat <<EOF1 <<EOF2\n$foo\nEOF1\n$bar\nEOF2\n"
+  let docs := collectHereDocs root
+  let okCount := docs.length == 2
+  let okContent := docs.all (fun (quotedFlag, content) =>
+    quotedFlag == .unquoted && content.any hasAnyDollarExpansion)
+  pure (okCount && okContent)
+
+def test_heredoc_dashed_strips_tabs : Except String Bool := do
+  let root ← parseScriptOk "cat <<-EOF\n\t$foo\n\tEOF\n"
+  match firstHereDoc? root with
+  | some (.unquoted, content) =>
+      pure (content.any hasAnyDollarExpansion)
+  | some (.quoted, _) =>
+      .error "expected unquoted heredoc"
+  | none =>
+      .error "did not find heredoc"
+
+def test_braceExpansion_splits_alternatives : Except String Bool := do
+  let root ← parseScriptOk "echo {foo,bar}"
+  match firstBraceExpansion? root with
+  | some parts =>
+      let alts := parts.map getLiteralString
+      pure (alts == [some "foo", some "bar"])
+  | none => .error "did not find brace expansion"
+
+def test_braceExpansion_nested_brace_literal : Except String Bool := do
+  let root ← parseScriptOk "echo {a,{b,c}}"
+  match firstBraceExpansion? root with
+  | some parts =>
+      let alts := parts.map getLiteralString
+      pure (alts == [some "a", some "{b,c}"])
+  | none => .error "did not find brace expansion"
+
+def test_braceExpansion_range_is_expansion : Except String Bool := do
+  let root ← parseScriptOk "echo {1..3}"
+  match firstBraceExpansion? root with
+  | some parts =>
+      let alts := parts.map getLiteralString
+      pure (alts == [some "1..3"])
+  | none => .error "did not find brace expansion"
+
+def test_extglob_splits_alternatives : Except String Bool := do
+  let root ← parseScriptOk "echo @(foo|bar)"
+  match firstExtglob? root with
+  | some (_pattern, parts) =>
+      let alts := parts.map getLiteralString
+      pure (alts == [some "foo", some "bar"])
+  | none => .error "did not find extglob"
+
+def test_extglob_bracket_class_keeps_pipe : Except String Bool := do
+  let root ← parseScriptOk "echo @([|]|foo)"
+  match firstExtglob? root with
+  | some (_pattern, parts) =>
+      let alts := parts.map getLiteralString
+      pure (alts == [some "[|]", some "foo"])
+  | none => .error "did not find extglob"
 
 end ShellCheck.Tests.ParserRegression
