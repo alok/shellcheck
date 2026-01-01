@@ -311,54 +311,160 @@ partial def readSimpleCommand : Parser Token := do
               | _ => mkToken (.T_SimpleCommand assigns words)
           | [] => mkToken (.T_SimpleCommand assigns words)
       | _ => mkToken (.T_SimpleCommand assigns words)
+    let redirects ← fillHereDocs redirects
     let result ← if redirects.isEmpty then
       pure cmd
     else
       mkToken (.T_Redirecting redirects cmd)
-    -- Check if there are heredocs in redirects and consume their content
-    let heredocDelims := redirects.filterMap getHereDocDelimiter
-    for (delim, dashedFlag) in heredocDelims do
-      consumeHereDocContent delim dashedFlag
     pure result
 where
-  /-- Extract heredoc delimiter from a T_HereDoc token -/
-  getHereDocDelimiter (t : Token) : Option (String × Dashed) :=
-    match t.inner with
-    | .T_HereDoc dashedFlag _ delim _ => some (delim, dashedFlag)
-    | _ => none
+  /-- Consume heredoc content and update any T_HereDoc redirects with parsed content. -/
+  fillHereDocs (redirects : List Token) : Parser (List Token) := do
+    let rec go (acc : List Token) (rest : List Token) (started : Bool) : Parser (List Token) := do
+      match rest with
+      | [] => pure acc.reverse
+      | t :: ts =>
+          match t.inner with
+          | .T_HereDoc dashFlag quoteFlag delim _ =>
+              -- Skip to the start of heredoc content once (after the command line).
+              if !started then
+                skipToHereDocStart
+              else
+                pure ()
+              let content ←
+                match quoteFlag with
+                | .quoted =>
+                    skipHereDocContent delim dashFlag
+                    pure []
+                | .unquoted =>
+                    readHereDocContentTokens delim dashFlag
+              let updated : Token := ⟨t.id, .T_HereDoc dashFlag quoteFlag delim content⟩
+              go (updated :: acc) ts true
+          | _ =>
+              go (t :: acc) ts started
+    go [] redirects false
 
-  /-- Consume heredoc content until we find the delimiter line -/
-  consumeHereDocContent (delim : String) (dashedFlag : Dashed) : Parser Unit := do
-    -- First skip to end of current line if not already there
+  /-- Skip to the start of here-doc content (first line after command). -/
+  skipToHereDocStart : Parser Unit := do
     let _ ← takeWhile (· != '\n')
-    -- Consume the newline
     match ← peek? with
     | some '\n' => let _ ← pchar '\n'; pure ()
     | _ => pure ()
-    -- Now consume lines until we hit the delimiter
+
+  /-- Consume heredoc content (quoted) without parsing expansions. -/
+  skipHereDocContent (delim : String) (dashedFlag : Dashed) : Parser Unit := do
     let rec consumeLines : Parser Unit := do
       match ← peek? with
-      | none => pure ()  -- EOF
-      | some _ =>
-          -- Read current line
+      | none => pure ()
+      | some _ => do
+          -- Optionally strip leading tabs for <<-
+          if dashedFlag == .dashed then
+            do
+              let _ ← takeWhile (· == '\t')
+              pure ()
+          else
+            pure ()
           let line ← takeWhile (· != '\n')
-          -- Check if this line matches the delimiter
-          let lineToCheck := match dashedFlag with
-            | .dashed => line.dropWhile (· == '\t')
-            | .undashed => line
-          if lineToCheck == delim then
-            -- Found delimiter, consume the newline and we're done
+          if line == delim then
             match ← peek? with
             | some '\n' => let _ ← pchar '\n'; pure ()
             | _ => pure ()
           else
-            -- Not the delimiter, consume newline and continue
             match ← peek? with
             | some '\n' =>
                 let _ ← pchar '\n'
                 consumeLines
-            | _ => pure ()  -- EOF without delimiter
+            | _ => pure ()
     consumeLines
+
+  /-- Parse heredoc content (unquoted), collecting word-part tokens. -/
+  readHereDocContentTokens (delim : String) (dashedFlag : Dashed) : Parser (List Token) := do
+    let rec readLines (acc : List Token) : Parser (List Token) := do
+      match ← peek? with
+      | none => pure acc.reverse
+      | some _ => do
+          -- Optionally strip leading tabs for <<-
+          if dashedFlag == .dashed then
+            do
+              let _ ← takeWhile (· == '\t')
+              pure ()
+          else
+            pure ()
+          -- Check for delimiter line
+          let delimPrefix ← peekString delim.length
+          let after ← peekString (delim.length + 1)
+          let isDelim :=
+            delimPrefix == delim &&
+              (after.length == delim.length ||
+                let nextChar := (String.Pos.Raw.mk delim.length).get after
+                nextChar == '\n' || nextChar == '\r')
+          if isDelim then
+            let _ ← pstring delim
+            match ← peek? with
+            | some '\r' =>
+                let _ ← pchar '\r'
+                match ← peek? with
+                | some '\n' => let _ ← pchar '\n'; pure ()
+                | _ => pure ()
+            | some '\n' => let _ ← pchar '\n'; pure ()
+            | _ => pure ()
+            pure acc.reverse
+          else
+            let parts ← readHereDocLineParts []
+            let acc := parts.reverse ++ acc
+            match ← peek? with
+            | some '\n' =>
+                let _ ← pchar '\n'
+                readLines acc
+            | some '\r' =>
+                let _ ← pchar '\r'
+                match ← peek? with
+                | some '\n' => let _ ← pchar '\n'; pure ()
+                | _ => pure ()
+                readLines acc
+            | _ => pure acc.reverse
+    readLines []
+
+  /-- Read tokens for a single heredoc line (stops before newline). -/
+  readHereDocLineParts (acc : List Token) : Parser (List Token) := do
+    match ← peek? with
+    | none => pure acc.reverse
+    | some '\n' => pure acc.reverse
+    | some '$' =>
+        let (startLine, startCol) ← getPos
+        let _ ← anyChar
+        let tok ← readDollar startLine startCol
+        readHereDocLineParts (tok :: acc)
+    | some '`' =>
+        let tok ← readBacktick
+        readHereDocLineParts (tok :: acc)
+    | some '\\' =>
+        let (escLine, escCol) ← getPos
+        let _ ← anyChar
+        match ← peek? with
+        | some '$' =>
+            let _ ← anyChar
+            let tok ← mkTokenAt (.T_Literal "$") escLine escCol
+            readHereDocLineParts (tok :: acc)
+        | some '`' =>
+            let _ ← anyChar
+            let tok ← mkTokenAt (.T_Literal "`") escLine escCol
+            readHereDocLineParts (tok :: acc)
+        | some '\\' =>
+            let _ ← anyChar
+            let tok ← mkTokenAt (.T_Literal "\\") escLine escCol
+            readHereDocLineParts (tok :: acc)
+        | _ =>
+            let tok ← mkTokenAt (.T_Literal "\\") escLine escCol
+            readHereDocLineParts (tok :: acc)
+    | some _ =>
+        let (litLine, litCol) ← getPos
+        let lit ← takeWhile fun c => c != '\n' && c != '$' && c != '`' && c != '\\'
+        if lit.isEmpty then
+          pure acc.reverse
+        else
+          let tok ← mkTokenAt (.T_Literal lit) litLine litCol
+          readHereDocLineParts (tok :: acc)
   -- Check if a word represents a declaration builtin that accepts assignments after options
   isDeclarationBuiltin (word : Token) : Bool :=
     match word.inner with
@@ -514,14 +620,11 @@ where
     if op == "<<" || op == "<<-" then
       -- Read the delimiter and determine if it's quoted
       let (delimStr, isQuoted) ← readHereDocDelimiter
-      -- After reading the command line, we need to consume the heredoc content
-      -- For now, register it to be consumed after the current line
-      -- Mark whether content should be analyzed (unquoted) or not (quoted)
-      let delimTok ← mkToken (.T_Literal delimStr)
+      -- After reading the command line, we consume heredoc content and attach it later.
       let dashedFlag := if op == "<<-" then Dashed.dashed else Dashed.undashed
       let quotedFlag := if isQuoted then Quoted.quoted else Quoted.unquoted
-      -- Create T_HereDoc with empty content for now - actual content consumed later
-      mkToken (.T_HereDoc dashedFlag quotedFlag delimStr [delimTok])
+      -- Create T_HereDoc with empty content for now; filled in after command line.
+      mkToken (.T_HereDoc dashedFlag quotedFlag delimStr [])
     else if op == "<<<" then
       let target ← readWord
       mkToken (.T_HereString target)
