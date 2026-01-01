@@ -152,6 +152,22 @@ def test_sc2215_quoted_flag_ok : Except String Bool := do
   let cr := runCheck "'--myexec--' args"
   pure (!hasCode cr 2215)
 
+def test_sc2286_empty_command : Except String Bool := do
+  let cr := runCheck "\"\""
+  pure (hasCode cr 2286)
+
+def test_sc2287_trailing_slash_command : Except String Bool := do
+  let cr := runCheck "/foo/ bar"
+  pure (hasCode cr 2287)
+
+def test_sc2288_trailing_symbol_command : Except String Bool := do
+  let cr := runCheck "foo, bar"
+  pure (hasCode cr 2288)
+
+def test_sc2289_tab_in_command : Except String Bool := do
+  let cr := runCheck "$'foo\tbar' baz"
+  pure (hasCode cr 2289)
+
 def test_sc2223_default_assignment : Except String Bool := do
   let cr := runCheckWithExtended ": ${var:=*}"
   pure (hasCode cr 2223)

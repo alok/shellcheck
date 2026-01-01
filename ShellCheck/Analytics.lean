@@ -4439,6 +4439,43 @@ def checkSecondArgIsComparison (_params : Parameters) (t : Token) : List TokenCo
     | Option.none => []
   | _ => []
 
+/-- SC2286-SC2289: Command name ends with suspicious trailing symbols. -/
+def checkCommandWithTrailingSymbol (_params : Parameters) (t : Token) : List TokenComment :=
+  match t.inner with
+  | .T_SimpleCommand _ (cmd :: _) =>
+      let str := getLiteralStringDef "x" cmd
+      let last := ShellCheck.Prelude.lastOrDefault 'x' str.toList
+      if str == "." || str == ":" || str == " " || str == "//" then
+        []
+      else if str == "" then
+        [makeComment .errorC cmd.id 2286
+          "This empty string is interpreted as a command name. Double check syntax (or use 'true' as a no-op)."]
+      else if last == '/' then
+        [makeComment .errorC cmd.id 2287
+          "This is interpreted as a command name ending with '/'. Double check syntax."]
+      else if trailingSymbols.contains last then
+        [makeComment .warningC cmd.id 2288
+          s!"This is interpreted as a command name ending with {formatChar last}. Double check syntax."]
+      else if str.toList.contains '\t' then
+        [makeComment .errorC cmd.id 2289
+          "This is interpreted as a command name containing a tab. Double check syntax."]
+      else if str.toList.contains '\n' then
+        [makeComment .errorC cmd.id 2289
+          "This is interpreted as a command name containing a linefeed. Double check syntax."]
+      else
+        []
+  | _ => []
+where
+  trailingSymbols : List Char :=
+    "\\.,([{<>}])#\"'% ".toList
+
+  formatChar (c : Char) : String :=
+    match c with
+    | ' ' => "space"
+    | '\'' => "apostrophe"
+    | '\"' => "doublequote"
+    | other => s!"'{other}'"
+
 /-- SC2292: Prefer [[ ]] over [ ] for tests in Bash/Ksh/Busybox -/
 def checkRequireDoubleBracket (params : Parameters) (t : Token) : List TokenComment :=
   if params.shellType == .Bash || params.shellType == .Ksh || params.shellType == .BusyboxSh then
@@ -5735,6 +5772,7 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkPrefixAssignment,
   checkEqualsInCommand,
   checkSecondArgIsComparison,
+  checkCommandWithTrailingSymbol,
   checkSpuriousExec,
   checkLoopKeywordScope,
   checkCdAndBack,
