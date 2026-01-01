@@ -265,6 +265,16 @@ def procSubEscapedQuote (seed : String) : Bool :=
       | none => false
       | some _ => true
 
+def unparsedIndexPreservesContent (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "arr[" ++ w1 ++ "]=1"
+  match parseRoot? script with
+  | none => false
+  | some root =>
+      match firstUnparsedIndex? root with
+      | some content => content == w1
+      | none => false
+
 abbrev prop_simple_roundtrip : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     simpleRoundtrip seed = true
@@ -316,5 +326,9 @@ abbrev prop_heredoc_dashed_expands : Prop :=
 abbrev prop_procsub_escaped_quote : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     procSubEscapedQuote seed = true
+
+abbrev prop_unparsed_index_preserves_content : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    unparsedIndexPreservesContent seed = true
 
 end ShellCheck.Tests.ParserProps

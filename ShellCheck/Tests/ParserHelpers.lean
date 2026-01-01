@@ -110,4 +110,21 @@ def firstBraceExpansion? (t : Token) : Option (List Token) :=
   let (_, found) := scan.run none
   found
 
+def firstUnparsedIndex? (t : Token) : Option String :=
+  let scan : StateM (Option String) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (Option String))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_UnparsedIndex _ content =>
+            match (← get) with
+            | some _ => pure ()
+            | none => set (some content)
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run none
+  found
+
 end ShellCheck.Tests.ParserHelpers

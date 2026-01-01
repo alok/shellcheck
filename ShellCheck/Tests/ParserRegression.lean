@@ -334,6 +334,18 @@ def test_extglob_bracket_class_keeps_pipe : Except String Bool := do
       pure (alts == [some "[|]", some "foo"])
   | none => .error "did not find extglob"
 
+def test_unparsedIndex_nested_brackets : Except String Bool := do
+  let root ← parseScriptOk "arr[x[y]]=1"
+  match firstUnparsedIndex? root with
+  | some content => pure (content == "x[y]")
+  | none => .error "did not find unparsed index"
+
+def test_unparsedIndex_quoted_bracket : Except String Bool := do
+  let root ← parseScriptOk "arr[\"a]b\"]=1"
+  match firstUnparsedIndex? root with
+  | some content => pure (content == "\"a]b\"")
+  | none => .error "did not find unparsed index"
+
 def test_procsub_escaped_quote_parses : Except String Bool := do
   let root ← parseScriptOk "cat <(echo \"\\\"\")"
   match firstProcSub? root with

@@ -73,6 +73,7 @@ def main : IO UInt32 := do
   ok := ok && (← checkProp "heredoc multiple expands" prop_heredoc_multiple_expands cfg)
   ok := ok && (← checkProp "heredoc <<- expands" prop_heredoc_dashed_expands cfg)
   ok := ok && (← checkProp "procsub escaped quotes parse" prop_procsub_escaped_quote cfg)
+  ok := ok && (← checkProp "unparsed index preserves content" prop_unparsed_index_preserves_content cfg)
   ok := ok && (← checkProp "SC2xxx coverage cases" prop_sc2xxx_coverage cfg)
   ok := ok && (← checkProp "SC3xxx coverage cases" prop_sc3xxx_coverage cfg)
 
@@ -100,6 +101,8 @@ def main : IO UInt32 := do
   ok := ok && (← checkRegression "brace expansion range is expansion" test_braceExpansion_range_is_expansion)
   ok := ok && (← checkRegression "extglob splits alternatives" test_extglob_splits_alternatives)
   ok := ok && (← checkRegression "extglob keeps | in bracket class" test_extglob_bracket_class_keeps_pipe)
+  ok := ok && (← checkRegression "unparsed index nested brackets" test_unparsedIndex_nested_brackets)
+  ok := ok && (← checkRegression "unparsed index quoted bracket" test_unparsedIndex_quoted_bracket)
   ok := ok && (← checkRegression "procsub handles escaped quote" test_procsub_escaped_quote_parses)
   ok := ok && (← checkRegression "tty format line group basic" test_tty_format_line_group_basic)
   ok := ok && (← checkRegression "tty footer summary" test_tty_footer_summary)
