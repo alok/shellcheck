@@ -132,8 +132,94 @@ partial def getLiteralStringExt (more : Token → Option String) (t : Token) : O
   | _ => more t
 where
   decodeEscapes (s : String) : String :=
-    -- TODO: Implement proper $'...' escape decoding
-    s
+    let chars := s.toList
+    let rec go (acc : List Char) (rest : List Char) : List Char :=
+      match rest with
+      | [] => acc.reverse
+      | '\\' :: more =>
+          match more with
+          | [] => ('\\' :: acc).reverse
+          | c :: cs =>
+              match c with
+              | 'a' => go ('\x07' :: acc) cs
+              | 'b' => go ('\x08' :: acc) cs
+              | 'e' => go ('\x1B' :: acc) cs
+              | 'E' => go ('\x1B' :: acc) cs
+              | 'f' => go ('\x0C' :: acc) cs
+              | 'n' => go ('\n' :: acc) cs
+              | 'r' => go ('\r' :: acc) cs
+              | 't' => go ('\t' :: acc) cs
+              | 'v' => go ('\x0B' :: acc) cs
+              | '\\' => go ('\\' :: acc) cs
+              | '\'' => go ('\'' :: acc) cs
+              | '"' => go ('"' :: acc) cs
+              | '?' => go ('?' :: acc) cs
+              | 'c' =>
+                  match cs with
+                  | [] => acc.reverse
+                  | d :: ds =>
+                      let code := d.toNat % 32
+                      go (Char.ofNat code :: acc) ds
+              | 'x' =>
+                  let (digits, rest') := takeDigits isHexDigit 2 cs
+                  if digits.isEmpty then
+                    go ('x' :: acc) cs
+                  else
+                    let code := digits.foldl (fun n ch => n * 16 + hexVal ch) 0
+                    go (Char.ofNat (clampCodepoint code) :: acc) rest'
+              | 'u' =>
+                  let (digits, rest') := takeDigits isHexDigit 4 cs
+                  if digits.length != 4 then
+                    go ('u' :: acc) cs
+                  else
+                    let code := digits.foldl (fun n ch => n * 16 + hexVal ch) 0
+                    go (Char.ofNat (clampCodepoint code) :: acc) rest'
+              | 'U' =>
+                  let (digits, rest') := takeDigits isHexDigit 8 cs
+                  if digits.length != 8 then
+                    go ('U' :: acc) cs
+                  else
+                    let code := digits.foldl (fun n ch => n * 16 + hexVal ch) 0
+                    go (Char.ofNat (clampCodepoint code) :: acc) rest'
+              | _ =>
+                  if isOctDigit c then
+                    let (digits, rest') := takeDigits isOctDigit 2 cs
+                    let all := c :: digits
+                    let code := all.foldl (fun n ch => n * 8 + (ch.toNat - '0'.toNat)) 0
+                    go (Char.ofNat (clampCodepoint code) :: acc) rest'
+                  else
+                    go (c :: acc) cs
+      | c :: cs => go (c :: acc) cs
+    String.ofList (go [] chars)
+
+  isOctDigit (c : Char) : Bool :=
+    c >= '0' && c <= '7'
+
+  isHexDigit (c : Char) : Bool :=
+    c.isDigit || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
+
+  hexVal (c : Char) : Nat :=
+    if c.isDigit then
+      c.toNat - '0'.toNat
+    else if c >= 'a' && c <= 'f' then
+      10 + (c.toNat - 'a'.toNat)
+    else
+      10 + (c.toNat - 'A'.toNat)
+
+  clampCodepoint (n : Nat) : Nat :=
+    if n <= 0x10FFFF then n else '?'.toNat
+
+  takeDigits (p : Char → Bool) (max : Nat) (input : List Char) : (List Char × List Char) :=
+    let rec go (acc : List Char) (n : Nat) (rest : List Char) :=
+      match n, rest with
+      | 0, _ => (acc.reverse, rest)
+      | Nat.succ n', c :: cs =>
+          if p c then
+            go (c :: acc) n' cs
+          else
+            (acc.reverse, rest)
+      | _, [] => (acc.reverse, [])
+    go [] max input
 
 /-- Get a literal string from a token, returning none for non-literals -/
 partial def getLiteralString (t : Token) : Option String :=
