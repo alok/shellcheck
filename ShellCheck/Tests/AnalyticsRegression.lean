@@ -236,4 +236,40 @@ def test_sc2336_cp_legacy_r : Except String Bool := do
   let cr := runCheck "cp -r foo bar"
   pure (hasCode cr 2336)
 
+def test_sc3053_indirect_expansion_busybox : Except String Bool := do
+  let cr := runCheckWithShell .BusyboxSh "x='test'\necho ${!x}"
+  pure (hasCode cr 3053)
+
+def test_sc3054_array_reference_busybox : Except String Bool := do
+  let cr := runCheckWithShell .BusyboxSh "x='test'\necho ${x[1]}"
+  pure (hasCode cr 3054)
+
+def test_sc3055_array_key_expansion_busybox : Except String Bool := do
+  let cr := runCheckWithShell .BusyboxSh "x='test'\necho ${!x[@]}"
+  pure (hasCode cr 3055)
+
+def test_sc3056_name_prefix_expansion_busybox : Except String Bool := do
+  let cr := runCheckWithShell .BusyboxSh "xyz=1\necho ${!x*}"
+  pure (hasCode cr 3056)
+
+def test_sc3057_string_indexing_dash : Except String Bool := do
+  let cr := runCheckWithShell .Dash "x='test'\necho ${x:0:3}"
+  pure (hasCode cr 3057)
+
+def test_sc3057_string_indexing_busybox_ok : Except String Bool := do
+  let cr := runCheckWithShell .BusyboxSh "x='test'\necho ${x:0:3}"
+  pure (!hasCode cr 3057)
+
+def test_sc3059_case_modification_busybox : Except String Bool := do
+  let cr := runCheckWithShell .BusyboxSh "x='test'\necho ${x^^[t]}"
+  pure (hasCode cr 3059)
+
+def test_sc3060_string_replacement_dash : Except String Bool := do
+  let cr := runCheckWithShell .Dash "x='test'\necho ${x/st/xt}"
+  pure (hasCode cr 3060)
+
+def test_sc3060_string_replacement_busybox_ok : Except String Bool := do
+  let cr := runCheckWithShell .BusyboxSh "x='test'\necho ${x/st/xt}"
+  pure (!hasCode cr 3060)
+
 end ShellCheck.Tests.AnalyticsRegression

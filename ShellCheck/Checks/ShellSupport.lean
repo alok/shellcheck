@@ -87,21 +87,457 @@ def checkForDecimals : ForShell := {
     | _ => []
 }
 
+abbrev TestOpSpec := Nat × List Shell × (String → String)
+
+def bashismBinaryTestFlags : List (String × TestOpSpec) := [
+  ("<", (3012, [.Dash, .BusyboxSh], fun op => s!"lexicographical {op} is")),
+  (">", (3012, [.Dash, .BusyboxSh], fun op => s!"lexicographical {op} is")),
+  ("\\<", (3012, [.Dash, .BusyboxSh], fun op => s!"lexicographical {op} is")),
+  ("\\>", (3012, [.Dash, .BusyboxSh], fun op => s!"lexicographical {op} is")),
+  ("<=", (3012, [.Dash, .BusyboxSh], fun op => s!"lexicographical {op} is")),
+  (">=", (3012, [.Dash, .BusyboxSh], fun op => s!"lexicographical {op} is")),
+  ("\\<=", (3012, [.Dash, .BusyboxSh], fun op => s!"lexicographical {op} is")),
+  ("\\>=", (3012, [.Dash, .BusyboxSh], fun op => s!"lexicographical {op} is")),
+  ("==", (3014, [.BusyboxSh], fun op => s!"{op} in place of = is")),
+  ("=~", (3015, [], fun op => s!"{op} regex matching is"))
+]
+
+def bashismUnaryTestFlags : List (String × TestOpSpec) := [
+  ("-v", (3016, [], fun op => "test " ++ op ++ " (in place of [ -n \"${var+x}\" ]) is")),
+  ("-a", (3017, [], fun op => s!"unary {op} in place of -e is")),
+  ("-o", (3062, [], fun op => s!"test {op} to check options is")),
+  ("-R", (3063, [], fun op => s!"test {op} and namerefs in general are")),
+  ("-N", (3064, [], fun op => s!"test {op} is")),
+  ("-k", (3065, [.Dash, .BusyboxSh], fun op => s!"test {op} is")),
+  ("-G", (3066, [.Dash, .BusyboxSh], fun op => s!"test {op} is")),
+  ("-O", (3067, [.Dash, .BusyboxSh], fun op => s!"test {op} is"))
+]
+
+def bashVars : List String := [
+  "OSTYPE", "MACHTYPE", "HOSTTYPE", "HOSTNAME",
+  "DIRSTACK", "EUID", "UID", "SHLVL", "PIPESTATUS", "SHELLOPTS",
+  "_", "BASH", "BASHOPTS", "BASHPID", "BASH_ALIASES", "BASH_ARGC",
+  "BASH_ARGV", "BASH_ARGV0", "BASH_CMDS", "BASH_COMMAND",
+  "BASH_EXECUTION_STRING", "BASH_LINENO", "BASH_LOADABLES_PATH",
+  "BASH_REMATCH", "BASH_SOURCE", "BASH_SUBSHELL", "BASH_VERSINFO",
+  "COMP_CWORD", "COMP_KEY", "COMP_LINE", "COMP_POINT", "COMP_TYPE",
+  "COMP_WORDBREAKS", "COMP_WORDS", "COPROC", "FUNCNAME", "GROUPS",
+  "HISTCMD", "MAPFILE"
+]
+
+def bashDynamicVars : List String := [
+  "BASH_MONOSECONDS", "EPOCHREALTIME", "EPOCHSECONDS", "RANDOM",
+  "SECONDS", "SRANDOM"
+]
+
+def dashVars : List String := ["_"]
+
+def isRadix (s : String) : Bool :=
+  let chars := s.toList
+  let digits := chars.takeWhile (·.isDigit)
+  match (chars.drop digits.length).head? with
+  | some '#' => !digits.isEmpty
+  | _ => false
+
 /-- Check for POSIX-incompatible bashisms in sh scripts -/
 partial def checkBashisms : ForShell := {
   shells := [.Sh, .Dash, .BusyboxSh]
-  check := fun _params t =>
+  check := fun params t =>
+    let isBusyboxSh := params.shellType == .BusyboxSh
+    let isDash := params.shellType == .Dash || isBusyboxSh
+    let warnMsg (id : Id) (code : Nat) (msg : String) : TokenComment :=
+      if isDash then
+        makeComment .errorC id code s!"In dash, {msg} not supported."
+      else
+        makeComment .warningC id code s!"In POSIX sh, {msg} undefined."
+    let checkTestOp (table : List (String × TestOpSpec)) (op : String) (id : Id) : List TokenComment :=
+      match table.find? (fun (name, _) => name == op) with
+      | some (_, (code, shells, msg)) =>
+          if shells.contains params.shellType then [] else [warnMsg id code (msg op)]
+      | none => []
+    let isAssigned (var : String) : Bool :=
+      params.variableFlow.any fun sd =>
+        match sd with
+        | .Assignment (_, _, name, _) => name == var
+        | _ => false
+    let isBashVariable (var : String) : Bool :=
+      let isDynamic := bashDynamicVars.contains var
+      let isStatic := bashVars.contains var && !isAssigned var
+      (isDynamic || isStatic) && !(isDash && dashVars.contains var)
+    let startsAfterOptionalIndex (modifier : String) (chars : List Char) : Bool :=
+      let mchars := modifier.toList
+      match mchars with
+      | [] => false
+      | c :: _ =>
+          if chars.contains c then
+            true
+          else if c == '[' then
+            let rec findAfter : List Char → Option Char
+              | [] => none
+              | ']' :: next :: _ => some next
+              | _ :: rest => findAfter rest
+            match findAfter mchars with
+            | some next => chars.contains next
+            | none => false
+          else
+            false
+    let isStringIndexing (modifier : String) : Bool :=
+      if modifier.startsWith ":" then
+        match (modifier.drop 1).toList.head? with
+        | some c => !(c == '-' || c == '=' || c == '?' || c == '+')
+        | none => false
+      else
+        false
+    let isStringOpsOnAtStar (str : String) : Bool :=
+      let prefixes := ["@%", "@#", "*%", "*#", "#@", "#*"]
+      prefixes.any str.startsWith
+    let isStringReplacement (modifier : String) : Bool :=
+      startsAfterOptionalIndex modifier ['/']
+    let isCaseModification (modifier : String) : Bool :=
+      startsAfterOptionalIndex modifier [',', '^']
+    let checkSimpleCommand : Token → List TokenComment := fun cmdTok =>
+      let name := getCommandName cmdTok |>.getD ""
+      let flags := getLeadingFlags cmdTok
+      let flagRegex := Regex.mkRegex "^-[eEsn]+$"
+      let busyboxFlagRegex := Regex.mkRegex "^-[en]+$"
+      let rec getLiteralArgs : List Token → List (Token × String)
+        | [] => []
+        | arg :: rest =>
+            match getLiteralString arg with
+            | some s => (arg, s) :: getLiteralArgs rest
+            | none => []
+      let options := "abCefhmnuvxo"
+      let optionsSet := options.toList
+      let isOptionChar (c : Char) : Bool := optionsSet.contains c
+      let startsOption (s : String) : Bool :=
+        (s.startsWith "+" && s.length > 1) ||
+        (s.startsWith "-" && !s.startsWith "--" && s.length > 1)
+      let beginsWithDoubleDash (s : String) : Bool :=
+        s.startsWith "--" && s.length > 2
+      let isValidFlags (s : String) : Bool :=
+        match s.toList with
+        | sign :: rest =>
+            (sign == '-' || sign == '+') && !rest.isEmpty && rest.all isOptionChar
+        | [] => false
+      let isOFlag (s : String) : Bool :=
+        match s.toList with
+        | sign :: rest =>
+            if sign == '-' || sign == '+' then
+              match rest.getLast? with
+              | some 'o' => (rest.dropLast).all isOptionChar
+              | _ => false
+            else
+              false
+        | [] => false
+      let longOptions : List String :=
+        [ "allexport", "errexit", "ignoreeof", "monitor", "noclobber"
+        , "noexec", "noglob", "nolog", "notify" , "nounset", "pipefail"
+        , "verbose", "vi", "xtrace" ]
+      let rec checkSetArgs : List (Token × String) → List TokenComment := fun opts =>
+        match opts with
+        | [] => []
+        | (flagTok, flagStr) :: rest =>
+            if startsOption flagStr then
+              let warnFlags :=
+                if isValidFlags flagStr then [] else
+                  (flagStr.drop 1).toList.filterMap (fun c =>
+                    if isOptionChar c then none
+                    else some (warnMsg flagTok.id 3041 s!"set flag -{c} is"))
+              if isOFlag flagStr then
+                match rest with
+                | (optTok, optStr) :: rest' =>
+                    let warnOpt :=
+                      if longOptions.contains optStr then [] else
+                        [warnMsg optTok.id 3040 s!"set option {optStr} is"]
+                    warnOpt ++ warnFlags ++ checkSetArgs rest'
+                | [] => warnFlags
+              else
+                warnFlags ++ checkSetArgs rest
+            else if beginsWithDoubleDash flagStr then
+              [warnMsg flagTok.id 3042 s!"set flag {flagStr} is"] ++ checkSetArgs rest
+            else
+              []
+      let allowedFlags : String → Option (List String)
+        | "cd" => some ["L", "P"]
+        | "exec" => some []
+        | "export" => some ["p"]
+        | "hash" => some (if isDash then ["r", "v"] else ["r"])
+        | "jobs" => some ["l", "p"]
+        | "printf" => some []
+        | "read" => some (if isDash then ["r", "p"] else ["r"])
+        | "readonly" => some ["p"]
+        | "trap" => some []
+        | "type" => some (if isBusyboxSh then ["p"] else [])
+        | "ulimit" =>
+            some (
+              if isDash then
+                ["H", "S", "a", "c", "d", "f", "l", "m", "n", "p", "r", "s", "t", "v", "w"]
+              else
+                ["H", "S", "a", "c", "d", "f", "n", "s", "t", "v"]
+            )
+        | "umask" => some ["S"]
+        | "unset" => some ["f", "v"]
+        | "wait" => some []
+        | _ => none
+      let unsupportedCommands : List String :=
+        [ "let", "caller", "builtin", "complete", "compgen", "declare", "dirs", "disown"
+        , "enable", "mapfile", "readarray", "pushd", "popd", "shopt", "suspend"
+        , "typeset" ]
+      match getCommandArgv cmdTok with
+      | none => []
+      | some [] => []
+      | some (cmdWord :: rest) =>
+          let echoCheck : Option (List TokenComment) :=
+            match rest with
+            | arg :: _ =>
+                let argString := String.join (oversimplify arg)
+                if isCommand cmdTok "echo" && Regex.isMatch argString flagRegex then
+                  if isBusyboxSh then
+                    if Regex.isMatch argString busyboxFlagRegex then some [] else
+                      some [warnMsg arg.id 3036 "echo flags besides -n and -e"]
+                  else if isDash then
+                    if argString == "-n" then some [] else
+                      some [warnMsg arg.id 3036 "echo flags besides -n"]
+                  else
+                    some [warnMsg arg.id 3037 "echo flags are"]
+                else
+                  none
+            | [] => none
+          match echoCheck with
+          | some res => res
+          | none =>
+              let execCheck : Option (List TokenComment) :=
+                match rest with
+                | arg :: _ =>
+                    let argString := String.join (oversimplify arg)
+                    if getLiteralString cmdWord == some "exec" && argString.startsWith "-" then
+                      some [warnMsg arg.id 3038 "exec flags are"]
+                    else
+                      none
+                | [] => none
+              match execCheck with
+              | some res => res
+              | none =>
+                  if isCommand cmdTok "let" then
+                    [warnMsg cmdTok.id 3039 "'let' is"]
+                  else if isCommand cmdTok "set" then
+                    if isDash then [] else checkSetArgs (getLiteralArgs rest)
+                  else
+                    let acc : List TokenComment := []
+                    let acc :=
+                      if name == "local" && !isDash then
+                        acc ++ [warnMsg cmdTok.id 3043 "'local' is"]
+                      else acc
+                    let acc :=
+                      if unsupportedCommands.contains name then
+                        acc ++ [warnMsg cmdTok.id 3044 s!"'{name}' is"]
+                      else acc
+                    let acc :=
+                      match allowedFlags name with
+                      | some allowed =>
+                          match flags.find? (fun (_, flag) => !flag.isEmpty && !allowed.contains flag) with
+                          | some (word, flag) =>
+                              acc ++ [warnMsg word.id 3045 s!"{name} -{flag} is"]
+                          | none => acc
+                      | none => acc
+                    let acc :=
+                      if name == "source" && !isBusyboxSh then
+                        acc ++ [warnMsg cmdTok.id 3046 "'source' in place of '.' is"]
+                      else acc
+                    let acc :=
+                      if name == "trap" then
+                        let args := rest.drop 1
+                        args.foldl (fun acc token =>
+                          match getLiteralString token with
+                          | some s =>
+                              let upper := s.toUpper
+                              let acc :=
+                                if upper == "ERR" || upper == "DEBUG" || upper == "RETURN" then
+                                  acc ++ [warnMsg token.id 3047 s!"trapping {s} is"]
+                                else acc
+                              let acc :=
+                                if !isBusyboxSh && upper.startsWith "SIG" then
+                                  acc ++ [warnMsg token.id 3048 "prefixing signal names with 'SIG' is"]
+                                else acc
+                              let acc :=
+                                if !isDash && upper != s then
+                                  acc ++ [warnMsg token.id 3049 "using lower/mixed case for signal names is"]
+                                else acc
+                              acc
+                          | none => acc
+                        ) acc
+                      else acc
+                    let acc :=
+                      if name == "printf" then
+                        match rest.head? with
+                        | some formatTok =>
+                            let literal := onlyLiteralString formatTok
+                            if Regex.containsSubstring literal "%q" then
+                              acc ++ [warnMsg formatTok.id 3050 "printf %q is"]
+                            else acc
+                        | none => acc
+                      else acc
+                    let acc :=
+                      if name == "read" && rest.all isFlag then
+                        acc ++ [warnMsg cmdWord.id 3061 "read without a variable is"]
+                      else acc
+                    acc
     match t.inner with
     | .T_ProcSub _ _ =>
-      [makeComment .errorC t.id 2039 "In POSIX sh, process substitution is undefined."]
+        [warnMsg t.id 3001 "process substitution is"]
     | .T_Extglob _ _ =>
-      [makeComment .errorC t.id 2039 "In POSIX sh, extglob is undefined."]
-    | .T_DoubleQuoted parts =>
-      parts.filterMap fun part =>
-        match part.inner with
-        | .T_DollarSingleQuoted _ =>
-          some (makeComment .errorC part.id 2039 "In POSIX sh, $'...' is undefined.")
-        | _ => Option.none
+        [warnMsg t.id 3002 "extglob is"]
+    | .T_DollarSingleQuoted _ =>
+        if isBusyboxSh then [] else [warnMsg t.id 3003 "$'..' is"]
+    | .T_DollarDoubleQuoted _ =>
+        [warnMsg t.id 3004 "$\"..\" is"]
+    | .T_ForArithmetic _ _ _ _ =>
+        [warnMsg t.id 3005 "arithmetic for loops are"]
+    | .T_Arithmetic _ =>
+        [warnMsg t.id 3006 "standalone ((..)) is"]
+    | .T_DollarBracket _ =>
+        [warnMsg t.id 3007 "$[..] in place of $((..)) is"]
+    | .T_SelectIn _ _ _ =>
+        [warnMsg t.id 3008 "select loops are"]
+    | .T_BraceExpansion _ =>
+        [warnMsg t.id 3009 "brace expansion is"]
+    | .T_Condition .doubleBracket _ =>
+        if isBusyboxSh then [] else [warnMsg t.id 3010 "[[ ]] is"]
+    | .T_HereString _ =>
+        [warnMsg t.id 3011 "here-strings are"]
+    | .TC_Binary _ op _ _ =>
+        checkTestOp bashismBinaryTestFlags op t.id
+    | .T_SimpleCommand _ [testTok, _lhs, opTok, _rhs] =>
+        match getLiteralString testTok, getLiteralString opTok with
+        | some "test", some op => checkTestOp bashismBinaryTestFlags op t.id
+        | _, _ => checkSimpleCommand t
+    | .TC_Unary _ op _ =>
+        checkTestOp bashismUnaryTestFlags op t.id
+    | .T_SimpleCommand _ [testTok, opTok, _arg] =>
+        match getLiteralString testTok, getLiteralString opTok with
+        | some "test", some op => checkTestOp bashismUnaryTestFlags op t.id
+        | _, _ => checkSimpleCommand t
+    | .TA_Unary op _ =>
+        if op == "|++" || op == "|--" || op == "++|" || op == "--|" then
+          let cleaned := String.join (op.toList.filter (· != '|') |>.map String.singleton)
+          [warnMsg t.id 3018 s!"{cleaned} is"]
+        else []
+    | .TA_Binary "**" _ _ =>
+        [warnMsg t.id 3019 "exponentials are"]
+    | .T_FdRedirect fd target =>
+        match fd, target.inner with
+        | "&", .T_IoFile op _ =>
+            match op.inner with
+            | .T_Greater =>
+                if isBusyboxSh then [] else [warnMsg t.id 3020 "&> is"]
+            | _ => []
+        | "", .T_IoFile op file =>
+            match op.inner with
+            | .T_GREATAND =>
+                let literal := onlyLiteralString file
+                if literal.toList.all (·.isDigit) then [] else [warnMsg t.id 3021 ">& filename (as opposed to >& fd) is"]
+            | _ => []
+        | _, _ =>
+            if fd.startsWith "{" then
+              [warnMsg t.id 3022 "named file descriptors are"]
+            else if fd.toList.all (·.isDigit) && fd.length > 1 then
+              [warnMsg t.id 3023 "FDs outside 0-9 are"]
+            else []
+    | .T_Assignment .append _ _ _ =>
+        [warnMsg t.id 3024 "+= is"]
+    | .T_IoFile _ word =>
+        let file := onlyLiteralString word
+        if file.startsWith "/dev/tcp" || file.startsWith "/dev/udp" then
+          [warnMsg t.id 3025 "/dev/{tcp,udp} is"]
+        else if isGlob word then
+          [warnMsg t.id 3031 "redirecting to/from globs is"]
+        else []
+    | .T_Glob str =>
+        if Regex.containsSubstring str "[^" then
+          [warnMsg t.id 3026 "^ in place of ! in glob bracket expressions is"]
+        else []
+    | .TA_Variable name _ =>
+        if isBashVariable name then
+          [warnMsg t.id 3028 s!"{name} is"]
+        else []
+    | .T_DollarBraced _ content =>
+        let str := String.join (oversimplify content)
+        let var := ShellCheck.ASTLib.getBracedReference str
+        let modifier := ShellCheck.ASTLib.getBracedModifier str
+        let acc : List TokenComment := []
+        let acc :=
+          if !isBusyboxSh && isStringIndexing modifier then
+            acc ++ [warnMsg t.id 3057 "string indexing is"]
+          else acc
+        let acc :=
+          if !isBusyboxSh && isStringOpsOnAtStar str then
+            acc ++ [warnMsg t.id 3058 "string operations on $@/$* are"]
+          else acc
+        let acc :=
+          if !isBusyboxSh && isStringReplacement modifier then
+            acc ++ [warnMsg t.id 3060 "string replacement is"]
+          else acc
+        let acc :=
+          if str.startsWith "!" then
+            match (str.drop 1).toList.head? with
+            | some c =>
+                if isVariableChar c then
+                  acc ++ [warnMsg t.id 3053 "indirect expansion is"]
+                else
+                  acc
+            | none => acc
+          else acc
+        let acc :=
+          if !str.startsWith "!" && !var.isEmpty &&
+              modifier.startsWith "[" && modifier.endsWith "]" then
+            acc ++ [warnMsg t.id 3054 "array references are"]
+          else acc
+        let acc :=
+          if str.startsWith "!" && (modifier == "[@]" || modifier == "[*]") then
+            acc ++ [warnMsg t.id 3055 "array key expansion is"]
+          else acc
+        let acc :=
+          if str.startsWith "!" && (modifier == "*" || modifier == "@") then
+            acc ++ [warnMsg t.id 3056 "name matching prefixes are"]
+          else acc
+        let acc :=
+          if isCaseModification modifier then
+            acc ++ [warnMsg t.id 3059 "case modification is"]
+          else acc
+        let acc :=
+          if isBashVariable var then
+            acc ++ [warnMsg t.id 3028 s!"{var} is"]
+          else acc
+        acc
+    | .T_Pipe "|&" =>
+        [warnMsg t.id 3029 "|& in place of 2>&1 | is"]
+    | .T_Array _ =>
+        [warnMsg t.id 3030 "arrays are"]
+    | .T_CoProc _ _ =>
+        [warnMsg t.id 3032 "coproc is"]
+    | .T_Function _ _ name _ =>
+        if isVariableName name then [] else [warnMsg t.id 3033 "naming functions outside [a-zA-Z_][a-zA-Z0-9_]* is"]
+    | .T_DollarExpansion [cmd] =>
+        if isOnlyRedirection cmd then
+          [warnMsg t.id 3034 "$(<file) to read files is"]
+        else []
+    | .T_Backticked [cmd] =>
+        if isOnlyRedirection cmd then
+          [warnMsg t.id 3035 "`<file` to read files is"]
+        else []
+    | .T_SourceCommand src _ =>
+        if getCommandName src == some "source" && !isBusyboxSh then
+          [warnMsg t.id 3051 "'source' in place of '.' is"]
+        else []
+    | .TA_Expansion (tok :: _) =>
+        match tok.inner with
+        | .T_Literal str =>
+            if isRadix str then
+              [warnMsg tok.id 3052 "arithmetic base conversion is"]
+            else []
+        | _ => []
+    | .T_SimpleCommand _ _ =>
+        checkSimpleCommand t
     | _ => []
 }
 
