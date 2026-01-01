@@ -144,6 +144,14 @@ def test_sc2103_set_e_ok : Except String Bool := do
   let cr := runCheck "set -e; for dir in */; do cd \"$dir\"; some_cmd; cd ..; done"
   pure (!hasCode cr 2103)
 
+def test_sc2215_flag_as_command : Except String Bool := do
+  let cr := runCheck "-e file"
+  pure (hasCode cr 2215)
+
+def test_sc2215_quoted_flag_ok : Except String Bool := do
+  let cr := runCheck "'--myexec--' args"
+  pure (!hasCode cr 2215)
+
 def test_sc2223_default_assignment : Except String Bool := do
   let cr := runCheckWithExtended ": ${var:=*}"
   pure (hasCode cr 2223)

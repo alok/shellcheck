@@ -3331,11 +3331,15 @@ def checkGlobAsCommand : CommandCheck := {
 def checkFlagAsCommand : CommandCheck := {
   name := .any
   check := fun _params t =>
-    match getCommandName t with
+    let (nameOpt, token) := getCommandNameAndToken false t
+    match nameOpt with
     | some name =>
-      if name.startsWith "-" && name.length >= 2 then
-        [warnCmd t 2215 "This flag is used as a command name."]
-      else []
+      match ASTLib.getUnquotedLiteral token with
+      | some s =>
+        if name.startsWith "-" && name.length >= 2 && s.startsWith "-" then
+          [warnCmd t 2215 "This flag is used as a command name."]
+        else []
+      | Option.none => []
     | Option.none => []
 }
 
