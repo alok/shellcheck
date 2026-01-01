@@ -27,6 +27,17 @@ def hasAnyDollarExpansion (t : Token) : Bool :=
   let (_, found) := scan.run false
   found
 
+def collectTokenIds (t : Token) : List Id :=
+  let scan : StateM (List Id) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (List Id))
+      (f := fun tok => modify (fun acc => tok.id :: acc))
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, ids) := scan.run []
+  ids.reverse
+
 def firstHereDoc? (t : Token) : Option (Quoted × List Token) :=
   let scan : StateM (Option (Quoted × List Token)) Token :=
     ShellCheck.AST.analyze
