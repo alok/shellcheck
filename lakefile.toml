@@ -1,12 +1,24 @@
 name = "ShellCheck4"
 version = "0.1.0"
 defaultTargets = ["shellcheck4"]
+testDriver = "shellcheck4_tests"
 
 [[require]]
 name = "mathlib"
 scope = "leanprover-community"
 git = "https://github.com/leanprover-community/mathlib4"
 rev = "master"
+
+[[require]]
+name = "LSpec"
+git = "https://github.com/argumentcomputer/LSpec"
+rev = "main"
+
+[[require]]
+name = "Regex"
+git = "https://github.com/pandaman64/lean-regex"
+rev = "v4.26.0"
+subDir = "regex"
 
 # TODO: Add lean-regex when compatible with Lean 4.26+
 # [[require]]

@@ -3030,7 +3030,7 @@ def checkShebangAbsolutePath : CommandCheck := {
       match shebang.inner with
       | .T_Literal s =>
         if !s.isEmpty && !s.startsWith "/" then
-          let path := s.dropWhile (· == ' ')
+          let path := (s.dropWhile (· == ' ')).toString
           if !path.startsWith "/" && !"env ".isPrefixOf path then
             [errorCmd t 2239
               "Ensure the shebang uses an absolute path to the interpreter."]

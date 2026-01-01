@@ -106,8 +106,8 @@ def runFixer (f : Fixer α) : α :=
 def doReplace (startPos endPos : Int) (original replacement : String) : String :=
   let si := (startPos - 1).toNat
   let ei := (endPos - 1).toNat
-  let pre := original.take si
-  let suf := original.drop ei
+  let pre := (original.take si).toString
+  let suf := (original.drop ei).toString
   pre ++ replacement ++ suf
 
 /-- Apply a single replacement to a string.
@@ -264,7 +264,8 @@ theorem doReplace_empty_replacement (start «end» : Int) (s : String) :
     start = «end» → doReplace start «end» s "" = s := sorry
 
 theorem doReplace_start_equals_end (pos : Int) (s repl : String) :
-    doReplace pos pos s repl = s.take (pos.toNat - 1) ++ repl ++ s.drop (pos.toNat - 1) := sorry
+    doReplace pos pos s repl =
+      (s.take (pos.toNat - 1)).toString ++ repl ++ (s.drop (pos.toNat - 1)).toString := sorry
 
 theorem runFixer_pure (a : α) :
     runFixer (pure a) = a := rfl

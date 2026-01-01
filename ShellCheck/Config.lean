@@ -27,8 +27,11 @@ def RcConfig.merge (a b : RcConfig) : RcConfig :=
     sourcePaths := (a.sourcePaths ++ b.sourcePaths).eraseDups
   }
 
+def trimAsciiString (s : String) : String :=
+  s.trimAscii.toString
+
 def parseShell? (s : String) : Option Shell :=
-  match s.trim.toLower with
+  match (trimAsciiString s).toLower with
   | "sh" => some .Sh
   | "posix" => some .Sh
   | "bash" => some .Bash
@@ -40,19 +43,19 @@ def parseShell? (s : String) : Option Shell :=
   | _ => none
 
 def parseBool? (s : String) : Option Bool :=
-  match s.trim.toLower with
+  match (trimAsciiString s).toLower with
   | "true" => some true
   | "false" => some false
   | _ => none
 
 def parseScCode? (s : String) : Option Int :=
-  let s := s.trim
+  let s := trimAsciiString s
   let s :=
-    if s.length ≥ 2 && (s.take 2).toLower == "sc" then
-      s.drop 2
+    if s.length ≥ 2 && (s.take 2).toString.toLower == "sc" then
+      (s.drop 2).toString
     else
       s
-  match s.trim.toNat? with
+  match (trimAsciiString s).toNat? with
   | some n => some (Int.ofNat n)
   | none => none
 
@@ -61,12 +64,12 @@ def splitListValues (s : String) : List String :=
   -- We also accept spaces as separators to be forgiving.
   s.splitOn ","
     |>.flatMap (fun seg => seg.splitOn " ")
-    |>.map String.trim
+    |>.map trimAsciiString
     |>.filter (fun seg => !seg.isEmpty)
 
 def parseRcLine (line : String) (cfg : RcConfig) : RcConfig :=
   let withoutComment := (line.splitOn "#").headD line
-  let trimmed := withoutComment.trim
+  let trimmed := trimAsciiString withoutComment
   if trimmed.isEmpty then
     cfg
   else
@@ -75,8 +78,8 @@ def parseRcLine (line : String) (cfg : RcConfig) : RcConfig :=
     | [] => cfg
     | [_onlyKey] => cfg
     | key :: rest =>
-        let value := String.intercalate "=" rest |>.trim
-        let key := key.trim.toLower
+        let value := trimAsciiString (String.intercalate "=" rest)
+        let key := (trimAsciiString key).toLower
         match key with
         | "disable" =>
             let codes := splitListValues value |>.filterMap parseScCode?
@@ -94,7 +97,7 @@ def parseRcLine (line : String) (cfg : RcConfig) : RcConfig :=
             | none => cfg
         | "source-path" =>
             -- ShellCheck accepts a colon-separated search path.
-            let paths := value.splitOn ":" |>.map String.trim |>.filter (fun p => !p.isEmpty)
+            let paths := value.splitOn ":" |>.map trimAsciiString |>.filter (fun p => !p.isEmpty)
             { cfg with sourcePaths := (cfg.sourcePaths ++ paths).eraseDups }
         | _ =>
             cfg
@@ -110,4 +113,3 @@ def applyRcConfig (cfg : RcConfig) (spec : CheckSpec) : CheckSpec :=
   }
 
 end ShellCheck.Config
-

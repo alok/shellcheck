@@ -98,9 +98,9 @@ partial def skipAllSpace : Parser Unit := do
 
 /-- Check if next token is a specific keyword (without consuming) -/
 partial def peekKeyword (kw : String) : Parser Bool := fun st it =>
-  let remaining := it.str.drop it.pos.byteIdx
+  let remaining := (it.str.drop it.pos.byteIdx).toString
   if remaining.startsWith kw then
-    let afterKw := remaining.drop kw.length
+    let afterKw := (remaining.drop kw.length).toString
     let isTerminated :=
       afterKw.isEmpty ||
         match (0 : String.Pos.Raw).get? afterKw with

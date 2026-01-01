@@ -18,6 +18,11 @@ open ShellCheck.Data
 open ShellCheck.Formatter.GCC
 open ShellCheck.Formatters
 
+/-- Trim ASCII whitespace and return a String. -/
+@[inline]
+def trimAsciiString (s : String) : String :=
+  s.trimAscii.toString
+
 /-- IO-based system interface that can read files -/
 def ioSystemInterface : SystemInterface IO := {
   siReadFile := fun _ filename => do
@@ -34,7 +39,7 @@ def ioSystemInterface : SystemInterface IO := {
 instance : Cli.ParseableType Shell where
   name := "Shell"
   parse? s :=
-    match s.trim.toLower with
+    match (trimAsciiString s).toLower with
     | "sh" => some .Sh
     | "posix" => some .Sh
     | "bash" => some .Bash
@@ -48,7 +53,7 @@ instance : Cli.ParseableType Shell where
 /-- Support parsing `-f gcc|tty|json|...` via `Cli`. -/
 instance : Cli.ParseableType OutputFormat where
   name := "Format"
-  parse? s := OutputFormat.fromString s.trim.toLower
+  parse? s := OutputFormat.fromString (trimAsciiString s).toLower
 
 structure ScCode where
   n : Int
@@ -58,13 +63,13 @@ structure ScCode where
 instance : Cli.ParseableType ScCode where
   name := "SCCode"
   parse? s :=
-    let s := s.trim
+    let s := trimAsciiString s
     let s :=
-      if s.length ≥ 2 && (s.take 2).toLower == "sc" then
-        s.drop 2
+      if s.length ≥ 2 && (s.take 2).toString.toLower == "sc" then
+        (s.drop 2).toString
       else
         s
-    match s.trim.toNat? with
+    match (trimAsciiString s).toNat? with
     | some n => some ⟨Int.ofNat n⟩
     | none => none
 
@@ -72,7 +77,7 @@ instance : Cli.ParseableType ScCode where
 instance : Cli.ParseableType Severity where
   name := "Severity"
   parse? s :=
-    match s.trim.toLower with
+    match (trimAsciiString s).toLower with
     | "error" => some .errorC
     | "warning" => some .warningC
     | "info" => some .infoC
@@ -83,7 +88,7 @@ instance : Cli.ParseableType Severity where
 instance : Cli.ParseableType ColorOption where
   name := "Color"
   parse? s :=
-    match s.trim.toLower with
+    match (trimAsciiString s).toLower with
     | "auto" => some .colorAuto
     | "always" => some .colorAlways
     | "never" => some .colorNever
@@ -159,7 +164,7 @@ private partial def preprocessArgsLoop (rest : List String)
       (out.push "--").append tail.toArray
   | arg :: tail =>
       if arg.startsWith "--" then
-        let content := arg.drop 2
+        let content := (arg.drop 2).toString
         let parts := content.splitOn "="
         match parts with
         | [] => preprocessArgsLoop tail (out.push arg) seen
@@ -179,7 +184,7 @@ private partial def preprocessArgsLoop (rest : List String)
             else
               preprocessArgsLoop tail (out.push arg) seen
       else if arg.startsWith "-" && !arg.startsWith "--" then
-        let short := arg.drop 1
+        let short := (arg.drop 1).toString
         match short.toList with
         | [] => preprocessArgsLoop tail (out.push arg) seen
         | _ =>
@@ -196,8 +201,8 @@ private partial def preprocessArgsLoop (rest : List String)
                   preprocessArgsLoop tail (out.push arg) seen
             else
               -- Support `-eVALUE` style for repeatable short flags.
-              let first := short.take 1
-              let restVal := short.drop 1
+              let first := (short.take 1).toString
+              let restVal := (short.drop 1).toString
               match repeatableShortToLong first with
               | some long =>
                   let (out, seen) := addRepeat long restVal out seen

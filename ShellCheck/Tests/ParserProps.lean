@@ -275,6 +275,34 @@ def unparsedIndexPreservesContent (seed : String) : Bool :=
       | some content => content == w1
       | none => false
 
+def unquotedDollarExpands (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "echo $" ++ w1
+  match parseRoot? script with
+  | none => false
+  | some root => hasAnyDollarExpansion root
+
+def doubleQuotedDollarExpands (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "echo \"$" ++ w1 ++ "\""
+  match parseRoot? script with
+  | none => false
+  | some root => hasAnyDollarExpansion root
+
+def singleQuotedDollarLiteral (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "echo '$" ++ w1 ++ "'"
+  match parseRoot? script with
+  | none => false
+  | some root => !hasAnyDollarExpansion root
+
+def escapedDollarLiteral (seed : String) : Bool :=
+  let w1 := sanitizeWord seed
+  let script := "echo \\$" ++ w1
+  match parseRoot? script with
+  | none => false
+  | some root => !hasAnyDollarExpansion root
+
 abbrev prop_simple_roundtrip : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     simpleRoundtrip seed = true
@@ -330,5 +358,21 @@ abbrev prop_procsub_escaped_quote : Prop :=
 abbrev prop_unparsed_index_preserves_content : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     unparsedIndexPreservesContent seed = true
+
+abbrev prop_unquoted_dollar_expands : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    unquotedDollarExpands seed = true
+
+abbrev prop_double_quoted_dollar_expands : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    doubleQuotedDollarExpands seed = true
+
+abbrev prop_single_quoted_dollar_literal : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    singleQuotedDollarLiteral seed = true
+
+abbrev prop_escaped_dollar_literal : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    escapedDollarLiteral seed = true
 
 end ShellCheck.Tests.ParserProps

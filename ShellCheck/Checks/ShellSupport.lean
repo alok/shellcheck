@@ -183,14 +183,14 @@ partial def checkBashisms : ForShell := {
             false
     let isStringIndexing (modifier : String) : Bool :=
       if modifier.startsWith ":" then
-        match (modifier.drop 1).toList.head? with
+        match (modifier.drop 1).toString.toList.head? with
         | some c => !(c == '-' || c == '=' || c == '?' || c == '+')
         | none => false
       else
         false
     let isStringOpsOnAtStar (str : String) : Bool :=
       let prefixes := ["@%", "@#", "*%", "*#", "#@", "#*"]
-      prefixes.any str.startsWith
+      prefixes.any (fun pfx => str.startsWith pfx)
     let isStringReplacement (modifier : String) : Bool :=
       startsAfterOptionalIndex modifier ['/']
     let isCaseModification (modifier : String) : Bool :=
@@ -258,7 +258,7 @@ partial def checkBashisms : ForShell := {
             if startsOption flagStr then
               let warnFlags :=
                 if isValidFlags flagStr then [] else
-                  (flagStr.drop 1).toList.filterMap (fun c =>
+                  (flagStr.drop 1).toString.toList.filterMap (fun c =>
                     if isOptionChar c then none
                     else some (warnMsg flagTok.id 3041 s!"set flag -{c} is"))
               if isOFlag flagStr then
@@ -497,7 +497,7 @@ partial def checkBashisms : ForShell := {
           else acc
         let acc :=
           if str.startsWith "!" then
-            match (str.drop 1).toList.head? with
+            match (str.drop 1).toString.toList.head? with
             | some c =>
                 if isVariableChar c then
                   acc ++ [warnMsg t.id 3053 "indirect expansion is"]

@@ -297,7 +297,7 @@ private def offsetPositions
 private def posAtCharOffset (startLine startCol : Nat) (s : String) (n : Nat) : (Nat × Nat) :=
   let step (lc : Nat × Nat) (c : Char) : (Nat × Nat) :=
     if c == '\n' then (lc.1 + 1, 1) else (lc.1, lc.2 + 1)
-  (s.take n).toList.foldl step (startLine, startCol)
+  (s.take n).toString.toList.foldl step (startLine, startCol)
 
 mutual
 

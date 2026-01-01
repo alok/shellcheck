@@ -118,6 +118,11 @@ def composeAnalyzers (f g : α → Analysis) (x : α) : Analysis := do
   let r2 ← g x
   return r1 ++ r2
 
+/-- Trim ASCII whitespace and return a String. -/
+@[inline]
+def trimAsciiString (s : String) : String :=
+  s.trimAscii.toString
+
 /-- Combine two checkers -/
 instance : Append Checker where
   append x y := {
@@ -254,8 +259,8 @@ def styleWithFix (id : Id) (code : Code) (str : String) (fix : Fix) : Analysis :
 /-- Extract executable name from shebang -/
 def executableFromShebang (s : String) : String :=
   -- Extract the executable from shebang like "#!/bin/bash" or "#!/usr/bin/env bash"
-  let s := s.trim
-  let s := if s.startsWith "#!" then s.drop 2 else s
+  let s := trimAsciiString s
+  let s := if s.startsWith "#!" then (s.drop 2).toString else s
   let parts := s.splitOn " "
   match parts with
   | [] => ""
@@ -284,7 +289,8 @@ where
         -- Approximate `[[:space:]]-[^-]*e` by scanning for a `-...e` flag word.
         let words := s.splitOn " "
         words.any fun w =>
-          w.startsWith "-" && !w.startsWith "--" && (w.drop 1).contains 'e' && !(w.drop 1).contains '-'
+          let rest := (w.drop 1).toString
+          w.startsWith "-" && !w.startsWith "--" && rest.contains 'e' && !rest.contains '-'
       | none => false
     | _ => false
 
@@ -494,7 +500,7 @@ def getModifiedVariables (t : Token) : List (Token × Token × String × DataTyp
 
 /-- Get braced variable reference from string like "foo:-bar" -> "foo" -/
 def getBracedReference (s : String) : String :=
-  s.takeWhile fun c => c.isAlpha || c.isDigit || c == '_'
+  (s.takeWhile fun c => c.isAlpha || c.isDigit || c == '_').toString
 
 /-- Get referenced variables from a token -/
 def getReferencedVariables (_parents : Std.HashMap Id Token) (t : Token) : List (Token × Token × String) :=
@@ -627,7 +633,7 @@ partial def getModifiedVariablesImpl (t : Token) : List (Token × Token × Strin
     else []
   | .T_FdRedirect varStr op =>
     if varStr.startsWith "{" then
-      let varName := (varStr.drop 1).takeWhile (· != '}')
+      let varName := ((varStr.drop 1).takeWhile (· != '}')).toString
       if not (isClosingFileOp op) then
         [(t, t, varName, .DataString .SourceInteger)]
       else []
@@ -654,7 +660,7 @@ where
       match t.inner with
       | .T_Glob s => some s
       | _ => some (String.singleton (Char.ofNat 0))) token
-    let varName := str.takeWhile (· != '[')
+    let varName := (str.takeWhile (· != '[')).toString
     if isVariableName varName then some varName else none
 
   markAsChecked (place : Token) (token : Token) : List (Token × Token × String × DataType) :=
@@ -816,8 +822,8 @@ where
       List (Token × Token × String × DataType) :=
     args.filterMap fun arg =>
       let s := String.join (oversimplify arg)
-      let varName := s.dropWhile (fun c => c == '+' || c == '-')
-                      |>.takeWhile isVariableChar
+      let varName := (s.dropWhile (fun c => c == '+' || c == '-')
+                      |>.takeWhile isVariableChar).toString
       if varName.isEmpty then none
       else some (base, arg, varName, .DataString (.SourceFrom [stripEqualsFrom arg]))
 
@@ -848,8 +854,8 @@ where
     let flags ← flags?
     let (_, (_, value)) ← flags.find? (fun (f, _) => f == flag)
     let variableName ← getLiteralStringExt (fun _ => some "!") value
-    let baseName := variableName.takeWhile (· != '[')
-    let index := variableName.drop baseName.length
+    let baseName := (variableName.takeWhile (· != '[')).toString
+    let index := (variableName.drop baseName.length).toString
     let dtype :=
       if index.isEmpty then
         DataType.DataString source
@@ -937,7 +943,7 @@ partial def getReferencedVariablesImpl (parents : Std.HashMap Id Token) (t : Tok
     [(t, t, "lines"), (t, t, "status"), (t, t, "output")]
   | .T_FdRedirect varStr op =>
     if varStr.startsWith "{" then
-      let varName := (varStr.drop 1).takeWhile (· != '}')
+      let varName := ((varStr.drop 1).takeWhile (· != '}')).toString
       match op.inner with
       | .T_IoDuplicate _ s => if s == "-" then [(t, t, varName)] else []
       | _ => []
@@ -946,13 +952,13 @@ partial def getReferencedVariablesImpl (parents : Std.HashMap Id Token) (t : Tok
 where
   getIndexReferences (s : String) : List String :=
     -- Extract variable names from array indices like foo[bar]
-    let afterBracket := s.dropWhile (· != '[')
+    let afterBracket := (s.dropWhile (· != '[')).toString
     if afterBracket.isEmpty then []
     else
-      let rawIndex := (afterBracket.drop 1).takeWhile (· != ']')
+      let rawIndex := ((afterBracket.drop 1).takeWhile (· != ']')).toString
       let indexPart :=
         if rawIndex.startsWith "$" then
-          rawIndex.drop 1
+          (rawIndex.drop 1).toString
         else
           rawIndex
       if isVariableName indexPart then [indexPart] else []
@@ -962,7 +968,7 @@ where
     if modifier.startsWith ":" then
       let parts := modifier.splitOn ":"
       parts.filterMap fun p =>
-        let name := p.takeWhile isVariableChar
+        let name := (p.takeWhile isVariableChar).toString
         if isVariableName name then some name else none
     else []
 
@@ -990,7 +996,7 @@ where
       match t.inner with
       | .T_Glob s => some s
       | _ => some (String.singleton (Char.ofNat 0))) token
-    let varName := str.takeWhile (· != '[')
+    let varName := (str.takeWhile (· != '[')).toString
     if isVariableName varName then some varName else none
 
   isDereferencingBinaryOp (op : String) : Bool :=

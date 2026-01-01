@@ -1476,7 +1476,7 @@ where
       | _ => false
 
   invertOp (op : String) : Option String :=
-    let op' := if op.startsWith "\\" then op.drop 1 else op
+    let op' := if op.startsWith "\\" then (op.drop 1).toString else op
     if op' == "<=" then some ">"
     else if op' == ">=" then some "<"
     else Option.none
@@ -1935,7 +1935,7 @@ private def warnArithIndex (id : Id) : List TokenComment :=
     "Array indices are already arithmetic contexts. Prefer removing the $(( and ))."]
 
 private def isArithExpansionIndex (content : String) : Bool :=
-  let trimmed := content.trim
+  let trimmed := content.trimAscii.toString
   trimmed.startsWith "$((" && trimmed.endsWith "))"
 
 private partial def checkArithIndexToken (tok : Token) : List TokenComment :=
@@ -2872,7 +2872,7 @@ def checkCharRangeGlob (params : Parameters) (t : Token) : List TokenComment :=
 where
   checkToken (tok : Token) (s : String) : List TokenComment :=
     if isCharClass s && !isIgnoredCommand tok && !isDereferenced tok then
-      let contents := dropNegation (s.drop 1 |>.dropRight 1)
+      let contents := dropNegation ((s.drop 1).dropEnd 1 |>.toString)
       if contents.startsWith ":" && contents.endsWith ":" && contents != ":" then
         [makeComment .warningC tok.id 2101
           "Named class needs outer [], e.g. [[:digit:]]."]
@@ -2887,7 +2887,7 @@ where
 
   dropNegation (str : String) : String :=
     if str.startsWith "!" || str.startsWith "^" then
-      str.drop 1
+      (str.drop 1).toString
     else
       str
 
@@ -4799,7 +4799,7 @@ where
     else if raw.startsWith "`" then
       raw.endsWith "`"
     else if raw.startsWith "$" then
-      isVariable (raw.drop 1)
+      isVariable ((raw.drop 1).toString)
     else
       false
 
@@ -4814,7 +4814,7 @@ where
       [makeComment .errorC id 2082
         "To expand via indirection, use arrays, ${!name} or (for sh only) eval."]
     else if raw.startsWith "\"" && raw.endsWith "\"" && raw.length >= 2 then
-      let inner := raw.drop 1 |>.dropRight 1
+      let inner := (raw.drop 1).dropEnd 1 |>.toString
       if isVariable inner then
         [makeComment .errorC id 2297
           "Double quotes must be outside ${}: ${\"invalid\"} vs \"${valid}\"."]
@@ -4830,8 +4830,7 @@ where
     else if raw.startsWith "${" then
       match firstIndexOf raw '}' with
       | some i =>
-        let nested := raw.take (i + 1)
-        let inner := nested.drop 2 |>.dropRight 1
+        let inner := ((raw.take (i + 1)).drop 2).dropEnd 1 |>.toString
         if isUnmodifiedExpansionString inner then
           [makeComment .errorC id 2298
             "${${x}} is invalid. For expansion, use ${x}. For indirection, use arrays, ${!x} or (for sh) eval."]

@@ -47,14 +47,17 @@ section Parser
 
 open ShellCheck.Parser.Parsec
 
+def trimAsciiString (s : String) : String :=
+  s.trimAscii.toString
+
 /-- Parse a shellcheck directive from comment text.
     Returns annotations for "# shellcheck disable=SC2001,SC2046" etc. -/
 def parseShellCheckDirective (comment : String) : List Annotation :=
-  let trimmed := comment.trim
+  let trimmed := trimAsciiString comment
   -- Check if it starts with "shellcheck "
   if !trimmed.startsWith "shellcheck " then []
   else
-    let rest := (trimmed.drop 11).trim  -- drop "shellcheck "
+    let rest := trimAsciiString (trimmed.drop 11).toString  -- drop "shellcheck "
     -- Parse key=value pairs
     parseDirectives (rest.splitOn " ")
 where
@@ -63,20 +66,20 @@ where
     | part :: rest =>
         let annotations := if part.startsWith "disable=" then
           -- Parse comma-separated SC codes
-          let codes := (part.drop 8).splitOn ","  -- drop "disable="
+          let codes := (part.drop 8).toString.splitOn ","  -- drop "disable="
           codes.filterMap parseCode
         else if part.startsWith "enable=" then
           -- For now just track that something is enabled
-          let names := (part.drop 7).splitOn ","
+          let names := (part.drop 7).toString.splitOn ","
           names.map Annotation.enableComment
         else if part.startsWith "source=" then
-          [Annotation.sourceOverride (part.drop 7)]
+          [Annotation.sourceOverride (part.drop 7).toString]
         else if part.startsWith "shell=" then
-          [Annotation.shellOverride (part.drop 6)]
+          [Annotation.shellOverride (part.drop 6).toString]
         else if part.startsWith "source-path=" then
-          [Annotation.sourcePath (part.drop 12)]
+          [Annotation.sourcePath (part.drop 12).toString]
         else if part.startsWith "external-sources=" then
-          let val := part.drop 17
+          let val := (part.drop 17).toString
           [Annotation.externalSources (val == "true")]
         else
           []
@@ -84,7 +87,7 @@ where
 
   parseCode (s : String) : Option Annotation :=
     -- Parse SCnnnn format
-    let stripped := if s.startsWith "SC" then s.drop 2 else s
+    let stripped := if s.startsWith "SC" then (s.drop 2).toString else s
     match stripped.toNat? with
     | some code => some (Annotation.disableComment (Int.ofNat code) (Int.ofNat code + 1))
     | none => none
@@ -2429,9 +2432,9 @@ def parseScript [Monad m] (_sys : SystemInterface m) (spec : ParseSpec) : m Pars
           pcFix := none }
       match msg.splitOn ":" with
       | file :: lineStr :: colStr :: rest =>
-          match lineStr.trim.toNat?, colStr.trim.toNat? with
+          match (trimAsciiString lineStr).toNat?, (trimAsciiString colStr).toNat? with
           | some line, some col =>
-              let message := (String.intercalate ":" rest).trim
+              let message := trimAsciiString (String.intercalate ":" rest)
               mkAt file line col message
           | _, _ =>
               mkAt spec.psFilename 1 1 msg

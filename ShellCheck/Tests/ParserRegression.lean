@@ -244,6 +244,22 @@ def test_backtick_backtick_in_singleQuotes_parses : Except String Bool := do
   let root ← parseScriptOk "echo `echo '`'`"
   pure (hasNontrivialBackticked root)
 
+def test_unquoted_dollar_expands : Except String Bool := do
+  let root ← parseScriptOk "echo $foo"
+  pure (hasAnyDollarExpansion root)
+
+def test_double_quoted_dollar_expands : Except String Bool := do
+  let root ← parseScriptOk "echo \"$foo\""
+  pure (hasAnyDollarExpansion root)
+
+def test_single_quoted_dollar_literal : Except String Bool := do
+  let root ← parseScriptOk "echo '$foo'"
+  pure (!hasAnyDollarExpansion root)
+
+def test_escaped_dollar_literal : Except String Bool := do
+  let root ← parseScriptOk "echo \\$foo"
+  pure (!hasAnyDollarExpansion root)
+
 def test_bracedExpansion_nested_parameterExpansions_parses : Except String Bool := do
   let root ← parseScriptOk "echo ${a:-${b}}"
   match firstBracedUseDefaultTriple? root with

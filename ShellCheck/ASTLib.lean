@@ -425,18 +425,19 @@ def isSpecialVariableChar (c : Char) : Bool :=
 /-- Get the variable reference from a braced expansion like ${var:-foo} -/
 def getBracedReference (s : String) : String :=
   -- Simplified version - just takes the variable name part
-  let noPrefix := if s.startsWith "!" || s.startsWith "#" then s.drop 1 else s
-  let name := noPrefix.takeWhile isVariableChar
+  let noPrefixSlice : String.Slice :=
+    if s.startsWith "!" || s.startsWith "#" then s.drop 1 else s.toSlice
+  let name := (noPrefixSlice.takeWhile isVariableChar).toString
   if name.isEmpty then
-    match noPrefix.toList.head? with
-    | some c => if isSpecialVariableChar c then noPrefix.take 1 else s
+    match noPrefixSlice.toString.toList.head? with
+    | some c => if isSpecialVariableChar c then (noPrefixSlice.take 1).toString else s
     | none => s
   else name
 
 /-- Get the modifier from a braced expansion -/
 def getBracedModifier (s : String) : String :=
   let varRef := getBracedReference s
-  let rest := s.drop (if s.startsWith "!" || s.startsWith "#" then 1 + varRef.length else varRef.length)
+  let rest := (s.drop (if s.startsWith "!" || s.startsWith "#" then 1 + varRef.length else varRef.length)).toString
   rest
 
 -- Pseudoglob for pattern matching analysis
@@ -720,11 +721,11 @@ where
           (arg, "") :: listToArgs rest
         else if s.startsWith "--" && s.length > 2 then
           -- Long flag like --flag
-          let flagName := s.drop 2
+          let flagName := (s.drop 2).toString
           (arg, flagName) :: extractFlags stop rest
         else if s.startsWith "-" && s.length > 1 then
           -- Short flags like -abc -> ["a", "b", "c"]
-          let chars := (s.drop 1).toList
+          let chars := (s.drop 1).toString.toList
           chars.map (fun c => (arg, String.singleton c)) ++ extractFlags stop rest
         else
           (arg, "") :: extractFlags stop rest
@@ -849,7 +850,7 @@ where
       if s == "--" then
         some (listToArgs rest)
       else if s.startsWith "--" && s.length > 2 then
-        let word := s.drop 2
+        let word := (s.drop 2).toString
         let (name, hasEq) := splitLong word
         let needsArg? :=
           if arbitraryLongOpts then some (lookupNeedsArg name |>.getD false)
@@ -865,7 +866,7 @@ where
           else
             (fun more => (name, (token, token)) :: more) <$> process rest
       else if s.startsWith "-" && s.length > 1 then
-        shortToOpts (s.drop 1).toList token rest
+        shortToOpts ((s.drop 1).toString.toList) token rest
       else
         if gnu then
           (fun more => ("", (token, token)) :: more) <$> process rest
@@ -905,10 +906,10 @@ partial def getGenericOpts : List Token → List (String × (Token × Token))
       if s == "--" then
         rest.map (fun c => ("", (c, c)))
       else if s.startsWith "--" && s.length > 2 then
-        let name := s.drop 2 |>.takeWhile (fun c => c != '=' && c != '\x00')
+        let name := (s.drop 2).toString |>.takeWhile (fun c => c != '=' && c != '\x00') |>.toString
         (name, (token, token)) :: getGenericOpts rest
       else if s.startsWith "-" && s.length > 1 then
-        let opts := (s.drop 1).toList.takeWhile (fun c => c != '\x00')
+        let opts := (s.drop 1).toString.toList.takeWhile (fun c => c != '\x00')
         match rest with
         | next :: remainder =>
             if (getLiteralStringDef "∅" next).startsWith "-" then
