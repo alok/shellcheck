@@ -12,11 +12,10 @@ A Lean 4 port of [ShellCheck](https://github.com/koalaman/shellcheck), the shell
 ShellCheck/
 ├── AST.lean           # Shell script AST types (Token, InnerToken, etc.)
 ├── ASTLib.lean        # AST traversal utilities
-├── Parser.lean        # Main shell parser (~2700 lines) - FullParser monad
+├── Parser.lean        # Main shell parser (~2700 lines) - Parsec-based Parser monad
 ├── Parser/
-│   ├── Core.lean      # FullParser infrastructure with position tracking
 │   ├── Ext.lean       # Basic Parser combinators (simpler, no token tracking)
-│   ├── Parsec.lean    # NEW: Std.Internal.Parsec integration with MonadLift
+│   ├── Parsec.lean    # Std.Internal.Parsec integration with MonadLift
 │   ├── Arithmetic.lean # $(()) arithmetic expression parser
 │   └── ...
 ├── Analytics.lean     # Main analysis checks (~120 check functions)
@@ -56,29 +55,23 @@ structure Comment where
 
 ## Parser Architecture
 
-### Current: FullParser (Parser.lean + Parser/Core.lean)
+### Current: Parsec-based Parser (Parser.lean + Parser/Parsec.lean)
 ```lean
-def FullParser (α : Type) := FullParserState → FullResult α
+-- Built on Std.Internal.Parsec with position-tracking iterator
+abbrev BaseParser := Std.Internal.Parsec PosIterator
+def Parser (α : Type) := ParserState → BaseParser (α × ParserState)
 
-structure FullParserState where
-  input : String
-  pos : String.Pos.Raw
-  line : Nat
-  column : Nat
+structure ParserState where
   nextId : Nat
   positions : Std.HashMap Id (Position × Position)
   filename : String
   errors : List String
 ```
 
-### New: ShellParser with Parsec (Parser/Parsec.lean)
+### Parsec integration (Parser/Parsec.lean)
 ```lean
--- Built on Std.Internal.Parsec with position-tracking iterator
-abbrev BaseParser := Std.Internal.Parsec PosIterator
-def ShellParser (α : Type) := ShellState → BaseParser (α × ShellState)
-
 -- MonadLift allows using Parsec combinators directly
-instance : MonadLift BaseParser ShellParser
+instance : MonadLift BaseParser Parser
 ```
 
 ## MonadLift Explained
@@ -94,12 +87,12 @@ class MonadLift (m : Type u → Type v) (n : Type u → Type w) where
 
 We have two parser monads:
 1. **BaseParser** (`Std.Internal.Parsec PosIterator`) - Standard library parsec with our position-tracking iterator
-2. **ShellParser** - Wraps BaseParser with extra state (token IDs, positions map, errors)
+2. **Parser** - Wraps BaseParser with extra state (token IDs, positions map, errors)
 
 Without MonadLift, you'd have to manually convert:
 ```lean
 -- Tedious: manually wrapping every Parsec call
-def anyChar : ShellParser Char := fun st it =>
+def anyChar : Parser Char := fun st it =>
   match Std.Internal.Parsec.any it with
   | .success it' c => .success it' (c, st)
   | .error it' err => .error it' err
@@ -108,10 +101,10 @@ def anyChar : ShellParser Char := fun st it =>
 With MonadLift:
 ```lean
 -- Clean: automatic lifting
-def anyChar : ShellParser Char := liftBase Std.Internal.Parsec.any
+def anyChar : Parser Char := liftBase Std.Internal.Parsec.any
 
 -- Or even cleaner with the instance, just use `do` notation:
-def myParser : ShellParser String := do
+def myParser : Parser String := do
   let c ← (Std.Internal.Parsec.any : BaseParser Char)  -- auto-lifted!
   pure c.toString
 ```
@@ -121,34 +114,34 @@ def myParser : ShellParser String := do
 ```lean
 /-- Lift base parser into shell parser -/
 @[inline]
-def liftBase (p : BaseParser α) : ShellParser α := fun st it =>
+def liftBase (p : BaseParser α) : Parser α := fun st it =>
   match p it with
   | .success it' a => .success it' (a, st)  -- pass state through unchanged
   | .error it' err => .error it' err
 
-instance : MonadLift BaseParser ShellParser where
+instance : MonadLift BaseParser Parser where
   monadLift := liftBase
 ```
 
-The key insight: `liftBase` runs the BaseParser and threads the ShellState through unchanged. Position tracking happens automatically because `PosIterator` carries line/column.
+The key insight: `liftBase` runs the BaseParser and threads the ParserState through unchanged. Position tracking happens automatically because `PosIterator` carries line/column.
 
 ### Using MonadLift in Practice
 
 **Explicit lifting with `liftBase`:**
 ```lean
-def isEof : ShellParser Bool := liftBase Std.Internal.Parsec.isEof
-def satisfy (p : Char → Bool) : ShellParser Char := liftBase (Std.Internal.Parsec.satisfy p)
+def isEof : Parser Bool := liftBase Std.Internal.Parsec.isEof
+def satisfy (p : Char → Bool) : Parser Char := liftBase (Std.Internal.Parsec.satisfy p)
 ```
 
 **Combining lifted and stateful operations:**
 ```lean
-def mkToken (inner : InnerToken Token) : ShellParser Token := do
-  let (line, col) ← getPos          -- ShellParser operation (reads PosIterator)
-  let id ← freshId                   -- ShellParser operation (modifies ShellState)
-  recordPosition id line col line col -- ShellParser operation (modifies ShellState)
+def mkToken (inner : InnerToken Token) : Parser Token := do
+  let (line, col) ← getPos          -- Parser operation (reads PosIterator)
+  let id ← freshId                   -- Parser operation (modifies ParserState)
+  recordPosition id line col line col -- Parser operation (modifies ParserState)
   pure ⟨id, inner⟩
 
-def readWord : ShellParser Token := do
+def readWord : Parser Token := do
   let (startLine, startCol) ← getPos
   let content ← takeWhile1 isWordChar  -- Uses liftBase internally
   mkTokenAt (.T_Literal content) startLine startCol
@@ -156,22 +149,22 @@ def readWord : ShellParser Token := do
 
 **The `do` notation auto-lifts when types align:**
 ```lean
-def example : ShellParser Char := do
-  let _ ← ws                                    -- ShellParser Unit
+def example : Parser Char := do
+  let _ ← ws                                    -- Parser Unit
   let c ← (Std.Internal.Parsec.any : BaseParser Char)  -- Auto-lifted!
   pure c
 ```
 
 ### Migration Strategy
 
-To migrate `FullParser` code to `ShellParser`:
+Legacy `FullParser` has been removed; use `Parser` everywhere. If you encounter old snippets, migrate as follows:
 
 1. **Replace state access patterns:**
    ```lean
    -- Old (FullParser)
    fun s => .ok s.line s
 
-   -- New (ShellParser)
+   -- New (Parser)
    getPos  -- returns (line, column) from PosIterator
    ```
 
@@ -182,13 +175,13 @@ To migrate `FullParser` code to `ShellParser`:
      let c := s.pos.get s.input
      .ok c { s with pos := s.pos.next s.input, ... }
 
-   -- New (ShellParser)
+   -- New (Parser)
    liftBase Std.Internal.Parsec.any  -- PosIterator handles position update
    ```
 
 3. **Keep state operations explicit:**
    ```lean
-   -- These stay as ShellParser operations
+   -- These stay as Parser operations
    freshId        -- generates token ID
    recordPosition -- stores position in HashMap
    modifyState    -- general state modification
@@ -249,10 +242,10 @@ diff <(.lake/build/bin/shellcheck4 -f json script.sh | jq) <(shellcheck -f json 
 
 ## Next Steps (Priority Order)
 
-### 1. Migrate Parser to New Parsec Infrastructure
-**Why**: The new `Parser/Parsec.lean` provides cleaner combinators via `MonadLift`.
+### 1. Parser Cleanup + Parsec-Only
+**Why**: The Parsec-based `Parser` is the only parser; keep naming and helpers consistent.
 **How**:
-- Update `Parser.lean` to use `ShellParser` instead of `FullParser`
+- Use `Parser`/`ParserState` everywhere (no compatibility layer)
 - The `PosIterator` already tracks line/column in the iterator itself
 - `liftBase` allows using any `Std.Internal.Parsec` combinator
 

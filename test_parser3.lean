@@ -3,7 +3,7 @@ import ShellCheck.Parser
 open ShellCheck.Parser
 
 def testScript (name : String) (script : String) : IO Unit := do
-  let (result, positions, errors) := runFullParser script "test.sh"
+  let (result, positions, errors) := runParser script "test.sh"
   match result with
   | some _ => IO.println s!"{name}: OK ({positions.size} tokens)"
   | none => IO.println s!"{name}: FAILED - {errors.take 1}"

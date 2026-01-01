@@ -54,8 +54,12 @@ def main : IO UInt32 := do
   ok := ok && (← checkProp "many rejects empty success" prop_many_rejects_empty_success cfg)
   ok := ok && (← checkProp "optional doesn't consume on mismatch" prop_optional_does_not_consume_on_mismatch cfg)
   ok := ok && (← checkProp "optional commits after partial consumption" prop_optional_commits_after_partial_consumption cfg)
+  ok := ok && (← checkProp "peekString does not consume input" prop_peekString_does_not_consume cfg)
+  ok := ok && (← checkProp "takeWhile1 requires a match" prop_takeWhile1_requires_match cfg)
   ok := ok && (← checkProp "parser roundtrip (simple subset)" prop_simple_roundtrip cfg)
   ok := ok && (← checkProp "parser positions within bounds" prop_positions_valid cfg)
+  ok := ok && (← checkProp "parser parses quoting subset" prop_parse_ok_quoted cfg)
+  ok := ok && (← checkProp "parser quoted positions within bounds" prop_positions_valid_quoted cfg)
 
   ok := ok && (← checkRegression "readUntil [[ ignores quoted terminator" test_readUntil_doubleBracket_ignores_quoted_terminator)
   ok := ok && (← checkRegression "readUntil [ ignores quoted terminator" test_readUntil_singleBracket_ignores_quoted_terminator)

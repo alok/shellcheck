@@ -21,6 +21,18 @@ def sanitizeWord (s : String) : String :=
 def reverseString (s : String) : String :=
   String.ofList s.toList.reverse
 
+def scriptFromSeedQuoted (seed : String) : String :=
+  let name := sanitizeWord seed
+  let value := sanitizeWord (reverseString seed)
+  let assign := name ++ "=\"" ++ value ++ "\""
+  let varRef := "$" ++ name
+  let echoLine := "echo \"" ++ varRef ++ "\" '" ++ value ++ "'"
+  let printfLine := "printf '%s\\n' \"" ++ varRef ++ "\""
+  if seed.length % 2 == 0 then
+    String.intercalate "\n" [assign, echoLine]
+  else
+    String.intercalate "\n" [assign, echoLine, printfLine]
+
 def scriptFromSeed (seed : String) : List (List String) :=
   let w1 := sanitizeWord seed
   let w2 := sanitizeWord (reverseString seed)
@@ -92,6 +104,12 @@ def positionsValid (script : String) (positions : Std.HashMap Id (Position × Po
     posInBounds script startPos &&
     posInBounds script endPos)
 
+def parseOk (script : String) : Bool :=
+  let (rootOpt, _positions, errors) := runParser script "<prop>"
+  match rootOpt with
+  | none => false
+  | some _ => errors.isEmpty
+
 def simpleRoundtrip (seed : String) : Bool :=
   let cmds := scriptFromSeed seed
   let script := renderScript cmds
@@ -120,6 +138,17 @@ def positionsOk (seed : String) : Bool :=
   | none => false
   | some _ => errors.isEmpty && positionsValid script positions
 
+def parseOkQuoted (seed : String) : Bool :=
+  let script := scriptFromSeedQuoted seed
+  parseOk script
+
+def positionsOkQuoted (seed : String) : Bool :=
+  let script := scriptFromSeedQuoted seed
+  let (rootOpt, positions, errors) := runParser script "<prop>"
+  match rootOpt with
+  | none => false
+  | some _ => errors.isEmpty && positionsValid script positions
+
 abbrev prop_simple_roundtrip : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     simpleRoundtrip seed = true
@@ -127,5 +156,13 @@ abbrev prop_simple_roundtrip : Prop :=
 abbrev prop_positions_valid : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     positionsOk seed = true
+
+abbrev prop_parse_ok_quoted : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    parseOkQuoted seed = true
+
+abbrev prop_positions_valid_quoted : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    positionsOkQuoted seed = true
 
 end ShellCheck.Tests.ParserProps

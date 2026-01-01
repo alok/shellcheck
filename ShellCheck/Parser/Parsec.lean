@@ -91,13 +91,13 @@ instance : Std.Internal.Parsec.Input PosIterator Char String.Pos.Raw where
   curr' := PosIterator.curr'
 
 /-!
-## Shell Parser Types
+## Parser Types
 
 Extended parser with shellcheck-specific state.
 -/
 
-/-- Extra state for shell parsing -/
-structure ShellState where
+/-- Extra state for parsing -/
+structure ParserState where
   /-- Next token ID to assign -/
   nextId : Nat
   /-- Map from token IDs to positions -/
@@ -108,8 +108,8 @@ structure ShellState where
   errors : List String
   deriving Inhabited
 
-/-- Create initial shell state -/
-def mkShellState (filename : String := "<stdin>") : ShellState :=
+/-- Create initial parser state -/
+def mkParserState (filename : String := "<stdin>") : ParserState :=
   { nextId := 1, positions := {}, filename, errors := [] }
 
 /-- Base parser type using Parsec with position tracking -/
@@ -119,30 +119,30 @@ abbrev BaseParser := Std.Internal.Parsec PosIterator
 instance : Nonempty (Std.Internal.Parsec.ParseResult α PosIterator) :=
   ⟨.error default .eof⟩
 
-/-- Shell parser with extra state -/
-def ShellParser (α : Type) := ShellState → BaseParser (α × ShellState)
+/-- Parser with extra state -/
+def Parser (α : Type) := ParserState → BaseParser (α × ParserState)
 
-namespace ShellParser
+namespace Parser
 
 /-- Pure value -/
 @[inline]
-protected def pure (a : α) : ShellParser α := fun st it =>
+protected def pure (a : α) : Parser α := fun st it =>
   .success it (a, st)
 
 /-- Bind -/
 @[inline]
-protected def bind (p : ShellParser α) (f : α → ShellParser β) : ShellParser β := fun st it =>
+protected def bind (p : Parser α) (f : α → Parser β) : Parser β := fun st it =>
   match p st it with
   | .success it' (a, st') => f a st' it'
   | .error it' err => .error it' err
 
-instance : Monad ShellParser where
-  pure := ShellParser.pure
-  bind := ShellParser.bind
+instance : Monad Parser where
+  pure := Parser.pure
+  bind := Parser.bind
 
 /-- Failure -/
 @[inline]
-protected def fail (msg : String) : ShellParser α := fun _ it =>
+protected def fail (msg : String) : Parser α := fun _ it =>
   .error it (.other msg)
 
   /-- Alternative (Parsec semantics).
@@ -153,7 +153,7 @@ protected def fail (msg : String) : ShellParser α := fun _ it =>
   Use `attempt` around a branch when it must backtrack even after
   consuming input. -/
   @[inline]
-  protected def orElse (p : ShellParser α) (q : Unit → ShellParser α) : ShellParser α := fun st it =>
+  protected def orElse (p : Parser α) (q : Unit → Parser α) : Parser α := fun st it =>
     match p st it with
     | .success it' res => .success it' res
     | .error it' err =>
@@ -162,26 +162,26 @@ protected def fail (msg : String) : ShellParser α := fun _ it =>
         else
           .error it' err
 
-instance : Alternative ShellParser where
-  failure := ShellParser.fail ""
-  orElse := ShellParser.orElse
+instance : Alternative Parser where
+  failure := Parser.fail ""
+  orElse := Parser.orElse
 
-end ShellParser
+end Parser
 
 /-!
-## MonadLift from BaseParser to ShellParser
+## MonadLift from BaseParser to Parser
 
-Allows using Parsec combinators directly in ShellParser.
+Allows using Parsec combinators directly in Parser.
 -/
 
-/-- Lift base parser into shell parser -/
+/-- Lift base parser into parser -/
 @[inline]
-def liftBase (p : BaseParser α) : ShellParser α := fun st it =>
+def liftBase (p : BaseParser α) : Parser α := fun st it =>
   match p it with
   | .success it' a => .success it' (a, st)
   | .error it' err => .error it' err
 
-instance : MonadLift BaseParser ShellParser where
+instance : MonadLift BaseParser Parser where
   monadLift := liftBase
 
 /-!
@@ -189,28 +189,28 @@ instance : MonadLift BaseParser ShellParser where
 -/
 
 /-- Get current position -/
-def getPos : ShellParser (Nat × Nat) := fun st it =>
+def getPos : Parser (Nat × Nat) := fun st it =>
   .success it ((it.line, it.column), st)
 
 /-- Get current iterator state -/
-def getIterator : ShellParser PosIterator := fun st it =>
+def getIterator : Parser PosIterator := fun st it =>
   .success it (it, st)
 
-/-- Get shell state -/
-def getState : ShellParser ShellState := fun st it =>
+/-- Get parser state -/
+def getState : Parser ParserState := fun st it =>
   .success it (st, st)
 
-/-- Modify shell state -/
-def modifyState (f : ShellState → ShellState) : ShellParser Unit := fun st it =>
+/-- Modify parser state -/
+def modifyState (f : ParserState → ParserState) : Parser Unit := fun st it =>
   .success it ((), f st)
 
 /-- Create a fresh token ID -/
-def freshId : ShellParser Id := fun st it =>
+def freshId : Parser Id := fun st it =>
   let id := Id.mk st.nextId
   .success it (id, { st with nextId := st.nextId + 1 })
 
 /-- Record a position for a token ID -/
-def recordPosition (id : Id) (startLine startCol endLine endCol : Nat) : ShellParser Unit := fun st it =>
+def recordPosition (id : Id) (startLine startCol endLine endCol : Nat) : Parser Unit := fun st it =>
   let startPos : Position := { posFile := st.filename, posLine := startLine, posColumn := startCol }
   let endPos : Position := { posFile := st.filename, posLine := endLine, posColumn := endCol }
   .success it ((), { st with positions := st.positions.insert id (startPos, endPos) })
@@ -218,26 +218,26 @@ def recordPosition (id : Id) (startLine startCol endLine endCol : Nat) : ShellPa
 /-!
 ## Basic Combinators
 
-Parsec combinators lifted into ShellParser.
+Parsec combinators lifted into Parser.
 -/
 
 /-- Check if at end of input -/
-def isEof : ShellParser Bool := liftBase Std.Internal.Parsec.isEof
+def isEof : Parser Bool := liftBase Std.Internal.Parsec.isEof
 
 /-- End of file -/
-def eof : ShellParser Unit := liftBase Std.Internal.Parsec.eof
+def eof : Parser Unit := liftBase Std.Internal.Parsec.eof
 
 /-- Any character -/
-def anyChar : ShellParser Char := liftBase Std.Internal.Parsec.any
+def anyChar : Parser Char := liftBase Std.Internal.Parsec.any
 
 /-- Peek at next character -/
-def peek? : ShellParser (Option Char) := liftBase Std.Internal.Parsec.peek?
+def peek? : Parser (Option Char) := liftBase Std.Internal.Parsec.peek?
 
 /-- Peek at next character (must exist) -/
-def peek! : ShellParser Char := liftBase Std.Internal.Parsec.peek!
+def peek! : Parser Char := liftBase Std.Internal.Parsec.peek!
 
 /-- Peek ahead `n` characters as a string without consuming input. -/
-def peekString (n : Nat) : ShellParser String := fun st it =>
+def peekString (n : Nat) : Parser String := fun st it =>
   let rec go (k : Nat) (pos : String.Pos.Raw) (acc : List Char) : List Char :=
     match k with
     | 0 => acc.reverse
@@ -251,16 +251,16 @@ def peekString (n : Nat) : ShellParser String := fun st it =>
   .success it (String.ofList chars, st)
 
 /-- Satisfy predicate -/
-def satisfy (pred : Char → Bool) : ShellParser Char := liftBase (Std.Internal.Parsec.satisfy pred)
+def satisfy (pred : Char → Bool) : Parser Char := liftBase (Std.Internal.Parsec.satisfy pred)
 
 /-- Skip one character -/
-def skip : ShellParser Unit := liftBase Std.Internal.Parsec.skip
+def skip : Parser Unit := liftBase Std.Internal.Parsec.skip
 
 /-- Many (zero or more) -/
-partial def many (p : ShellParser α) : ShellParser (Array α) := fun st it =>
+partial def many (p : Parser α) : Parser (Array α) := fun st it =>
   go #[] st it
 where
-  go (acc : Array α) (st' : ShellState) (it' : PosIterator) : Std.Internal.Parsec.ParseResult (Array α × ShellState) PosIterator :=
+  go (acc : Array α) (st' : ParserState) (it' : PosIterator) : Std.Internal.Parsec.ParseResult (Array α × ParserState) PosIterator :=
     match p st' it' with
     | .success it'' (a, st'') =>
         if it''.pos == it'.pos then
@@ -275,23 +275,23 @@ where
           .error it'' err
 
 /-- Many1 (one or more) -/
-def many1 (p : ShellParser α) : ShellParser (Array α) := do
+def many1 (p : Parser α) : Parser (Array α) := do
   let first ← p
   let rest ← ShellCheck.Parser.Parsec.many p
   return #[first] ++ rest
 
 /-- Many chars -/
-def manyChars (p : ShellParser Char) : ShellParser String := do
+def manyChars (p : Parser Char) : Parser String := do
   let chars ← ShellCheck.Parser.Parsec.many p
   return String.ofList chars.toList
 
 /-- Many1 chars -/
-def many1Chars (p : ShellParser Char) : ShellParser String := do
+def many1Chars (p : Parser Char) : Parser String := do
   let chars ← many1 p
   return String.ofList chars.toList
 
 /-- Optional -/
-def optional (p : ShellParser α) : ShellParser (Option α) := fun st it =>
+def optional (p : Parser α) : Parser (Option α) := fun st it =>
   match p st it with
   | .success it' (a, st') => .success it' (some a, st')
   | .error it' err =>
@@ -301,7 +301,7 @@ def optional (p : ShellParser α) : ShellParser (Option α) := fun st it =>
         .error it' err
 
 /-- Try with backtracking -/
-def attempt (p : ShellParser α) : ShellParser α := fun st it =>
+def attempt (p : Parser α) : Parser α := fun st it =>
   match p st it with
   | .success it' res => .success it' res
   | .error _ err => .error it err
@@ -313,12 +313,12 @@ Character and string matching.
 -/
 
 /-- Match specific character -/
-def pchar (c : Char) : ShellParser Char := do
+def pchar (c : Char) : Parser Char := do
   satisfy (fun actual => actual == c)
 
 /-- Match string -/
-partial def pstring (s : String) : ShellParser String := fun st it =>
-  let rec go (i : String.Pos.Raw) (it' : PosIterator) : Std.Internal.Parsec.ParseResult (String × ShellState) PosIterator :=
+partial def pstring (s : String) : Parser String := fun st it =>
+  let rec go (i : String.Pos.Raw) (it' : PosIterator) : Std.Internal.Parsec.ParseResult (String × ParserState) PosIterator :=
     if i >= s.rawEndPos then
       .success it' (s, st)
     else if !it'.hasNext then
@@ -333,16 +333,16 @@ partial def pstring (s : String) : ShellParser String := fun st it =>
   go 0 it
 
 /-- Skip whitespace -/
-def ws : ShellParser Unit := do
+def ws : Parser Unit := do
   let _ ← manyChars (satisfy fun c => c == ' ' || c == '\t' || c == '\n' || c == '\r')
   return ()
 
 /-- Take while predicate holds -/
-def takeWhile (pred : Char → Bool) : ShellParser String :=
+def takeWhile (pred : Char → Bool) : Parser String :=
   manyChars (satisfy pred)
 
 /-- Take while predicate holds (at least one) -/
-def takeWhile1 (pred : Char → Bool) : ShellParser String :=
+def takeWhile1 (pred : Char → Bool) : Parser String :=
   many1Chars (satisfy pred)
 
 /-!
@@ -350,14 +350,14 @@ def takeWhile1 (pred : Char → Bool) : ShellParser String :=
 -/
 
 /-- Create a token with current position -/
-def mkToken (inner : InnerToken Token) : ShellParser Token := do
+def mkToken (inner : InnerToken Token) : Parser Token := do
   let (line, col) ← getPos
   let id ← freshId
   recordPosition id line col line col
   return ⟨id, inner⟩
 
 /-- Create a token with explicit positions -/
-def mkTokenAt (inner : InnerToken Token) (startLine startCol : Nat) : ShellParser Token := do
+def mkTokenAt (inner : InnerToken Token) (startLine startCol : Nat) : Parser Token := do
   let (endLine, endCol) ← getPos
   let id ← freshId
   recordPosition id startLine startCol endLine endCol
@@ -368,10 +368,10 @@ def mkTokenAt (inner : InnerToken Token) (startLine startCol : Nat) : ShellParse
 -/
 
 /-- Run a shell parser -/
-def run (p : ShellParser α) (input : String) (filename : String := "<stdin>")
+def run (p : Parser α) (input : String) (filename : String := "<stdin>")
     : Option α × Std.HashMap Id (Position × Position) × List String :=
   let it := PosIterator.create input
-  let st := mkShellState filename
+  let st := mkParserState filename
   match p st it with
   | .success _ (a, st') => (some a, st'.positions, st'.errors)
   | .error it' err =>
@@ -379,10 +379,10 @@ def run (p : ShellParser α) (input : String) (filename : String := "<stdin>")
       (none, {}, [msg])
 
 /-- Run a shell parser, returning Except -/
-def runExcept (p : ShellParser α) (input : String) (filename : String := "<stdin>")
+def runExcept (p : Parser α) (input : String) (filename : String := "<stdin>")
     : Except String (α × Std.HashMap Id (Position × Position)) :=
   let it := PosIterator.create input
-  let st := mkShellState filename
+  let st := mkParserState filename
   match p st it with
   | .success _ (a, st') => .ok (a, st'.positions)
   | .error it' err => .error s!"{filename}:{it'.line}:{it'.column}: {err}"
