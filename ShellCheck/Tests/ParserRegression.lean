@@ -61,6 +61,44 @@ def hasNontrivialBackticked (t : Token) : Bool :=
   let (_, found) := scan.run false
   found
 
+def hasAnyDollarExpansion (t : Token) : Bool :=
+  let scan : StateM Bool Token :=
+    ShellCheck.AST.analyze
+      (m := StateM Bool)
+      (f := fun tok => do
+        match tok.inner with
+        | .T_DollarBraced _ _
+        | .T_DollarExpansion _
+        | .T_DollarArithmetic _
+        | .T_DollarBracket _
+        | .T_DollarSingleQuoted _
+        | .T_DollarDoubleQuoted _
+        | .T_DollarBraceCommandExpansion _ _ =>
+            modify (fun _ => true)
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run false
+  found
+
+def firstHereDoc? (t : Token) : Option (Quoted × List Token) :=
+  let scan : StateM (Option (Quoted × List Token)) Token :=
+    ShellCheck.AST.analyze
+      (m := StateM (Option (Quoted × List Token)))
+      (f := fun tok => do
+        match tok.inner with
+        | .T_HereDoc _ quoted _ content =>
+            match (← get) with
+            | some _ => pure ()
+            | none => set (some (quoted, content))
+        | _ => pure ())
+      (g := fun _ => pure ())
+      (transform := fun tok => pure tok)
+      t
+  let (_, found) := scan.run none
+  found
+
 def firstBracedUseDefaultTriple? (t : Token) : Option (String × String × String) :=
   let scan : StateM (Option (String × String × String)) Token :=
     ShellCheck.AST.analyze
@@ -251,5 +289,25 @@ def test_bracedExpansion_nested_braceExpansions_parses : Except String Bool := d
   match firstBracedUseDefaultTriple? root with
   | some (var, op, arg) => pure (var == "a" && op == ":-" && arg == "{x,y}")
   | none => .error "did not find braced expansion content"
+
+def test_heredoc_unquoted_parses_expansions : Except String Bool := do
+  let root ← parseScriptOk "cat <<EOF\n$foo\nEOF\n"
+  match firstHereDoc? root with
+  | some (.unquoted, content) =>
+      pure (content.any hasAnyDollarExpansion)
+  | some (.quoted, _) =>
+      .error "expected unquoted heredoc"
+  | none =>
+      .error "did not find heredoc"
+
+def test_heredoc_quoted_skips_expansions : Except String Bool := do
+  let root ← parseScriptOk "cat <<'EOF'\n$foo\nEOF\n"
+  match firstHereDoc? root with
+  | some (.quoted, content) =>
+      pure content.isEmpty
+  | some (.unquoted, _) =>
+      .error "expected quoted heredoc"
+  | none =>
+      .error "did not find heredoc"
 
 end ShellCheck.Tests.ParserRegression
