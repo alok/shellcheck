@@ -750,49 +750,12 @@ partial def readProcSub : Parser Token := do
   let dir ← anyChar  -- < or >
   let _ ← pchar '('
   -- Read content until matching )
-  let content ← readProcSubContent 1 []
+  let content ← readSubshellContent
   let _ ← pchar ')'
   let dirStr := String.ofList [dir]
   -- For now, create a T_ProcSub with the raw content as a literal
   let contentTok ← mkTokenAt (.T_Literal content) startLine startCol
   mkTokenAt (.T_ProcSub dirStr [contentTok]) startLine startCol
-where
-  /-- Read until matching ) accounting for nested parens and quotes -/
-  readProcSubContent (depth : Nat) (acc : List Char) : Parser String := do
-    match ← peek? with
-    | none => pure (String.ofList acc.reverse)
-    | some ')' =>
-        if depth <= 1 then
-          pure (String.ofList acc.reverse)
-        else
-          let _ ← anyChar
-          readProcSubContent (depth - 1) (')' :: acc)
-    | some '(' =>
-        let _ ← anyChar
-        readProcSubContent (depth + 1) ('(' :: acc)
-    | some '\'' =>
-        -- Skip single-quoted content
-        let _ ← anyChar
-        let quoted ← takeWhile (· != '\'')
-        match ← peek? with
-        | some '\'' =>
-            let _ ← anyChar
-            let newAcc := '\'' :: quoted.toList.reverse ++ ('\'' :: acc)
-            readProcSubContent depth newAcc
-        | _ => readProcSubContent depth ('\'' :: quoted.toList.reverse ++ ('\'' :: acc))
-    | some '"' =>
-        -- Skip double-quoted content (simplified - ignoring escapes within)
-        let _ ← anyChar
-        let quoted ← takeWhile (· != '"')
-        match ← peek? with
-        | some '"' =>
-            let _ ← anyChar
-            let newAcc := '"' :: quoted.toList.reverse ++ ('"' :: acc)
-            readProcSubContent depth newAcc
-        | _ => readProcSubContent depth ('"' :: quoted.toList.reverse ++ ('"' :: acc))
-    | some c =>
-        let _ ← anyChar
-        readProcSubContent depth (c :: acc)
 
 end
 
