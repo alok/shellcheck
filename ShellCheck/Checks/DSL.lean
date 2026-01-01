@@ -103,12 +103,12 @@ def argValueCheck (commands : List String) (code : Nat) (severity : CheckSeverit
 /-!
 ## SC Code Database
 
-All SC codes with their descriptions, organized by category.
-These are stubs - actual check logic to be filled in.
+SC code metadata organized by category.
+Only sc3xxxMissing is still used to generate stub checks.
 -/
 
-/-- SC2xxx codes (semantic warnings) - missing from current implementation -/
-def sc2xxxMissing : List SCCode := [
+/-- SC2xxx codes (semantic warnings) registry -/
+def sc2xxxRegistry : List SCCode := [
   -- Control flow
   { code := 2007, severity := .warn, message := "Use $((..)) instead of deprecated $((..))" },
   { code := 2019, severity := .info, message := "Use ${var//search/replace} instead of sed" },
@@ -278,6 +278,9 @@ def sc2xxxMissing : List SCCode := [
   { code := 2336, severity := .warn, message := "read in this position only affects subshell." }
 ]
 
+/-- SC2xxx codes missing from current implementation (empty: all implemented) -/
+def sc2xxxMissing : List SCCode := []
+
 /-- SC3xxx codes (POSIX portability) - missing from current implementation -/
 def sc3xxxMissing : List SCCode := [
   { code := 3002, severity := .warn, message := "In POSIX sh, extglob is not supported." },
@@ -348,7 +351,7 @@ def allMissingSCCodes : List SCCode :=
 
 /-- Look up an SC code's metadata -/
 def lookupSCCode (code : Nat) : Option SCCode :=
-  allMissingSCCodes.find? (·.code == code)
+  (sc2xxxRegistry ++ sc3xxxMissing).find? (·.code == code)
 
 /-- Get the wiki URL for an SC code -/
 def getWikiUrl (code : Nat) : String :=

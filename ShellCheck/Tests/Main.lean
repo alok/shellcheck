@@ -6,6 +6,7 @@ import ShellCheck.Tests.FormatterTTY
 import ShellCheck.Tests.FormatterGCC
 import ShellCheck.Tests.FormatterJSON
 import ShellCheck.Tests.AnalyticsRegression
+import ShellCheck.Tests.SCCoverage
 
 open Plausible
 open ShellCheck.Tests.ParsecProps
@@ -15,6 +16,7 @@ open ShellCheck.Tests.FormatterTTY
 open ShellCheck.Tests.FormatterGCC
 open ShellCheck.Tests.FormatterJSON
 open ShellCheck.Tests.AnalyticsRegression
+open ShellCheck.Tests.SCCoverage
 
 def checkProp (name : String) (p : Prop) (cfg : Configuration := {}) [Testable p] : IO Bool := do
   IO.println s!"[Plausible] {name}"
@@ -60,6 +62,7 @@ def main : IO UInt32 := do
   ok := ok && (← checkProp "parser positions within bounds" prop_positions_valid cfg)
   ok := ok && (← checkProp "parser parses quoting subset" prop_parse_ok_quoted cfg)
   ok := ok && (← checkProp "parser quoted positions within bounds" prop_positions_valid_quoted cfg)
+  ok := ok && (← checkProp "SC2xxx coverage cases" prop_sc2xxx_coverage cfg)
 
   ok := ok && (← checkRegression "readUntil [[ ignores quoted terminator" test_readUntil_doubleBracket_ignores_quoted_terminator)
   ok := ok && (← checkRegression "readUntil [ ignores quoted terminator" test_readUntil_singleBracket_ignores_quoted_terminator)
@@ -127,5 +130,6 @@ def main : IO UInt32 := do
   ok := ok && (← checkRegression "SC3059: case modification (busybox)" test_sc3059_case_modification_busybox)
   ok := ok && (← checkRegression "SC3060: string replacement (dash)" test_sc3060_string_replacement_dash)
   ok := ok && (← checkRegression "SC3060: string replacement (busybox ok)" test_sc3060_string_replacement_busybox_ok)
+  ok := ok && (← checkRegression "SC2xxx coverage cases" test_sc2xxx_coverage)
 
   pure (if ok then 0 else 1)
