@@ -6,7 +6,7 @@ namespace ShellCheck.Tests.ParsecProps
 open ShellCheck.Parser.Parsec
 
 def parseOnly (p : Parser α) (input : String) : Except String α :=
-  match ShellCheck.Parser.Parsec.runExcept p input with
+  match runExcept p input with
   | .ok (a, _) => .ok a
   | .error e => .error e
 

@@ -239,7 +239,7 @@ private def bareWordString? (t : Token) : Option String :=
   | _ => none
 
 private def spanOf (t : Token) : Parser (Nat × Nat × Nat × Nat) := do
-  let st ← ShellCheck.Parser.Parsec.getState
+  let st ← getState
   match st.positions.get? t.id with
   | some (startPos, endPos) =>
       pure (startPos.posLine, startPos.posColumn, endPos.posLine, endPos.posColumn)

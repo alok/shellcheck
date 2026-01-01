@@ -277,12 +277,12 @@ where
 /-- Many1 (one or more) -/
 def many1 (p : Parser α) : Parser (Array α) := do
   let first ← p
-  let rest ← ShellCheck.Parser.Parsec.many p
+  let rest ← many p
   return #[first] ++ rest
 
 /-- Many chars -/
 def manyChars (p : Parser Char) : Parser String := do
-  let chars ← ShellCheck.Parser.Parsec.many p
+  let chars ← many p
   return String.ofList chars.toList
 
 /-- Many1 chars -/

@@ -371,9 +371,9 @@ private partial def parseBracedArgParts
     (arg : String) (filename : String)
     (startId : Nat) (offsetLine offsetCol : Nat)
     : (List Token × Nat × Std.HashMap Id (Position × Position)) :=
-  let it := ShellCheck.Parser.Parsec.PosIterator.create arg
+  let it := PosIterator.create arg
   let initState : ParserState :=
-    { ShellCheck.Parser.Parsec.mkParserState filename with nextId := startId }
+    { mkParserState filename with nextId := startId }
   match readBracedArgParts initState it with
   | .success _ (parts, st) =>
       let pos := offsetPositions st.positions offsetLine offsetCol
@@ -392,11 +392,11 @@ private partial def parseBracedExpansionContent (content : String) (startLine st
     mkTokenAt (.T_ParamSubSpecialChar s) startLine startCol
 
   let parseArgAt (arg : String) (charOffset : Nat) : Parser (List Token) := do
-    let st ← ShellCheck.Parser.Parsec.getState
+    let st ← getState
     let (argLine, argCol) := posAtCharOffset startLine startCol content charOffset
     let (parts, newNextId, newPositions) :=
       parseBracedArgParts arg st.filename st.nextId argLine argCol
-    ShellCheck.Parser.Parsec.modifyState fun st =>
+    modifyState fun st =>
       { st with
         nextId := newNextId
         positions := newPositions.fold (init := st.positions) fun m k v => m.insert k v }
@@ -874,11 +874,11 @@ where
   parseAltWord
       (content : String) (contentStartLine contentStartCol : Nat)
       (alt : String) (offset : Nat) : Parser Token := do
-    let st ← ShellCheck.Parser.Parsec.getState
+    let st ← getState
     let (altLine, altCol) := posAtCharOffset contentStartLine contentStartCol content offset
     let (parts, newNextId, newPositions) :=
       parseBracedArgParts alt st.filename st.nextId altLine altCol
-    ShellCheck.Parser.Parsec.modifyState fun st =>
+    modifyState fun st =>
       { st with
         nextId := newNextId
         positions := newPositions.fold (init := st.positions) fun m k v => m.insert k v }
@@ -1203,9 +1203,9 @@ where
             let litStart := litStart <|> some (litLine, litCol)
             readParts acc litStart (c :: litRev) (parenDepth + 1) inClass classChars sawNegation false
           else
-            ShellCheck.Parser.Parsec.Parser.fail "case pattern: unexpected '('"
+            Parser.fail "case pattern: unexpected '('"
         else if c == ')' && parenDepth > 0 && inClass then
-          ShellCheck.Parser.Parsec.Parser.fail "case pattern: unexpected ')'"
+          Parser.fail "case pattern: unexpected ')'"
         else if c.isWhitespace || c == '#' ||
             (isOperatorStart c && c != ')' && c != '|') then
           let acc ← flushLiteral acc litStart litRev
