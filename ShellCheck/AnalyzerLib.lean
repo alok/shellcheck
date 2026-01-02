@@ -1485,7 +1485,8 @@ def makeParameters (spec : AnalysisSpec) : Parameters :=
 -- Theorems (stubs)
 
 theorem runChecker_empty (params : Parameters) :
-    runChecker params emptyChecker = [] := sorry
+    runChecker params emptyChecker = [] := by
+  sorry
 
 theorem composeAnalyzers_assoc (_f _g _h : Token → Analysis) (_t : Token) :
     True := trivial
@@ -1497,7 +1498,14 @@ theorem makeComment_has_code (sev : Severity) (id : Id) (code : Code) (msg : Str
     (makeComment sev id code msg).tcComment.cCode = code := rfl
 
 theorem filterByAnnotation_subset (spec : AnalysisSpec) (params : Parameters) (comments : List TokenComment) :
-    (filterByAnnotation spec params comments).length ≤ comments.length := sorry
+    (filterByAnnotation spec params comments).length ≤ comments.length := by
+  simpa [filterByAnnotation] using
+    (List.length_filter_le
+      (fun note =>
+        match params.idMap.get? note.tcId with
+        | some tok => !shouldIgnoreCode params note.tcComment.cCode tok
+        | none => true)
+      comments)
 
 theorem isOptionSet_or (opt : String) (root : Token) :
     isOptionSet opt root = (containsShopt opt root || containsSetOption opt root) := rfl

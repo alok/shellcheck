@@ -312,7 +312,8 @@ theorem grev_involutive (g : Gr α β) :
     grev (grev g) = g := sorry
 
 theorem grev_preserves_nodes (g : Gr α β) :
-    nodes (grev g) = nodes g := sorry
+    nodes (grev g) = nodes g := by
+  simp [grev, nodes, mkGraph]
 
 theorem dom_reflexive (g : Gr α β) (start n : Node) :
     n ∈ dfs g start →
