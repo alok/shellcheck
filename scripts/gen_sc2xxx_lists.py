@@ -14,6 +14,7 @@ OUT4 = ROOT / "ShellCheck" / "Tests" / "SC4xxxLists.lean"
 
 CODE_RE = re.compile(r"\b[1-4]\d{3}\b")
 LEAN_LINE_RE = None
+IGNORED_CODES = {1234}  # Upstream parser property placeholder, not a real check.
 
 
 def strip_lean_comments(text: str) -> str:
@@ -144,7 +145,13 @@ def filter_prefix(codes: list[int], prefix: int) -> list[int]:
     return [code for code in codes if code // 1000 == prefix]
 
 
-def write_list(out_path: Path, namespace: str, upstream: list[int], implemented: list[int]) -> None:
+def write_list(
+    out_path: Path,
+    namespace: str,
+    upstream: list[int],
+    implemented: list[int],
+    ignored: list[int],
+) -> None:
     content = f"""import Std
 
 namespace {namespace}
@@ -153,11 +160,19 @@ def upstream : List Nat := {format_list(upstream)}
 
 def implemented : List Nat := {format_list(implemented)}
 
+def ignored : List Nat := {format_list(ignored)}
+
+def upstreamFiltered : List Nat :=
+  upstream.filter (fun code => !ignored.contains code)
+
+def implementedFiltered : List Nat :=
+  implemented.filter (fun code => !ignored.contains code)
+
 def missing : List Nat :=
-  upstream.filter (fun code => !implemented.contains code)
+  upstreamFiltered.filter (fun code => !implementedFiltered.contains code)
 
 def extra : List Nat :=
-  implemented.filter (fun code => !upstream.contains code)
+  implementedFiltered.filter (fun code => !upstreamFiltered.contains code)
 
 end {namespace}
 """
@@ -169,28 +184,42 @@ def main() -> None:
     upstream_all = extract_haskell_codes()
     implemented_all = extract_lean_codes()
 
+    ignored_all = sorted(IGNORED_CODES)
     upstream1 = filter_prefix(upstream_all, 1)
     implemented1 = filter_prefix(implemented_all, 1)
+    ignored1 = filter_prefix(ignored_all, 1)
     upstream2 = filter_prefix(upstream_all, 2)
     implemented2 = filter_prefix(implemented_all, 2)
+    ignored2 = filter_prefix(ignored_all, 2)
     upstream3 = filter_prefix(upstream_all, 3)
     implemented3 = filter_prefix(implemented_all, 3)
+    ignored3 = filter_prefix(ignored_all, 3)
     upstream4 = filter_prefix(upstream_all, 4)
     implemented4 = filter_prefix(implemented_all, 4)
+    ignored4 = filter_prefix(ignored_all, 4)
 
-    write_list(OUT1, "ShellCheck.Tests.SC1xxxLists", upstream1, implemented1)
-    write_list(OUT2, "ShellCheck.Tests.SC2xxxLists", upstream2, implemented2)
-    write_list(OUT3, "ShellCheck.Tests.SC3xxxLists", upstream3, implemented3)
-    write_list(OUT4, "ShellCheck.Tests.SC4xxxLists", upstream4, implemented4)
+    write_list(OUT1, "ShellCheck.Tests.SC1xxxLists", upstream1, implemented1, ignored1)
+    write_list(OUT2, "ShellCheck.Tests.SC2xxxLists", upstream2, implemented2, ignored2)
+    write_list(OUT3, "ShellCheck.Tests.SC3xxxLists", upstream3, implemented3, ignored3)
+    write_list(OUT4, "ShellCheck.Tests.SC4xxxLists", upstream4, implemented4, ignored4)
 
-    missing1 = [code for code in upstream1 if code not in implemented1]
-    extra1 = [code for code in implemented1 if code not in upstream1]
-    missing2 = [code for code in upstream2 if code not in implemented2]
-    extra2 = [code for code in implemented2 if code not in upstream2]
-    missing3 = [code for code in upstream3 if code not in implemented3]
-    extra3 = [code for code in implemented3 if code not in upstream3]
-    missing4 = [code for code in upstream4 if code not in implemented4]
-    extra4 = [code for code in implemented4 if code not in upstream4]
+    upstream1_f = [code for code in upstream1 if code not in ignored1]
+    implemented1_f = [code for code in implemented1 if code not in ignored1]
+    upstream2_f = [code for code in upstream2 if code not in ignored2]
+    implemented2_f = [code for code in implemented2 if code not in ignored2]
+    upstream3_f = [code for code in upstream3 if code not in ignored3]
+    implemented3_f = [code for code in implemented3 if code not in ignored3]
+    upstream4_f = [code for code in upstream4 if code not in ignored4]
+    implemented4_f = [code for code in implemented4 if code not in ignored4]
+
+    missing1 = [code for code in upstream1_f if code not in implemented1_f]
+    extra1 = [code for code in implemented1_f if code not in upstream1_f]
+    missing2 = [code for code in upstream2_f if code not in implemented2_f]
+    extra2 = [code for code in implemented2_f if code not in upstream2_f]
+    missing3 = [code for code in upstream3_f if code not in implemented3_f]
+    extra3 = [code for code in implemented3_f if code not in upstream3_f]
+    missing4 = [code for code in upstream4_f if code not in implemented4_f]
+    extra4 = [code for code in implemented4_f if code not in upstream4_f]
 
     print(f"Wrote {OUT1}")
     print(f"Wrote {OUT2}")
