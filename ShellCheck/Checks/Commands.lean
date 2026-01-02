@@ -2206,6 +2206,15 @@ def checkUselessEcho : CommandCheck := {
       | .T_Backticked _ =>
         [styleArg arg 2005
           "Useless echo? Instead of 'echo `cmd`', just use 'cmd'."]
+      | .T_NormalWord [part] =>
+        match part.inner with
+        | .T_DollarExpansion _ =>
+          [styleArg arg 2005
+            "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'."]
+        | .T_Backticked _ =>
+          [styleArg arg 2005
+            "Useless echo? Instead of 'echo `cmd`', just use 'cmd'."]
+        | _ => []
       | _ => []
     | _ => []
 }
