@@ -2152,23 +2152,11 @@ def checkUselessEcho : CommandCheck := {
   check := fun _params t =>
     match getCommandArguments t with
     | some [arg] =>
-      match arg.inner with
-      | .T_DollarExpansion _ =>
+      if tokenIsJustCommandOutput arg then
         [styleArg arg 2005
           "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'."]
-      | .T_Backticked _ =>
-        [styleArg arg 2005
-          "Useless echo? Instead of 'echo `cmd`', just use 'cmd'."]
-      | .T_NormalWord [part] =>
-        match part.inner with
-        | .T_DollarExpansion _ =>
-          [styleArg arg 2005
-            "Useless echo? Instead of 'echo $(cmd)', just use 'cmd'."]
-        | .T_Backticked _ =>
-          [styleArg arg 2005
-            "Useless echo? Instead of 'echo `cmd`', just use 'cmd'."]
-        | _ => []
-      | _ => []
+      else
+        []
     | _ => []
 }
 

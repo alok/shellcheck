@@ -120,6 +120,30 @@ def test_sc2089_sc2090_quoted_ok : Except String Bool := do
   let cr := runCheck "param='--foo=\"bar\"'; app \"$param\""
   pure (!hasCode cr 2089 && !hasCode cr 2090)
 
+def test_sc2005_useless_echo_subst : Except String Bool := do
+  let cr := runCheck "echo $(date)"
+  pure (hasCode cr 2005)
+
+def test_sc2005_useless_echo_backticks : Except String Bool := do
+  let cr := runCheck "echo `date`"
+  pure (hasCode cr 2005)
+
+def test_sc2005_useless_echo_quoted_subst : Except String Bool := do
+  let cr := runCheck "echo \"$(date)\""
+  pure (hasCode cr 2005)
+
+def test_sc2005_useless_echo_quoted_backticks : Except String Bool := do
+  let cr := runCheck "echo \"`date`\""
+  pure (hasCode cr 2005)
+
+def test_sc2005_useless_echo_mixed_text_ok : Except String Bool := do
+  let cr := runCheck "echo \"The time is $(date)\""
+  pure (!hasCode cr 2005)
+
+def test_sc2005_useless_echo_redir_only_ok : Except String Bool := do
+  let cr := runCheck "echo \"$(<file)\""
+  pure (!hasCode cr 2005)
+
 def test_sc2018_tr_lower_class : Except String Bool := do
   let cr := runCheck "tr a-z A-Z"
   pure (hasCode cr 2018)
