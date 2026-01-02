@@ -18,6 +18,9 @@ All SC1xxx codes with their severity and messages.
 These are used by the parser to emit diagnostics.
 -/
 
+/-- Upstream parser property tests use SC1234 as a placeholder; not a real check. -/
+def upstreamPlaceholderCodes : List Nat := [1234]
+
 /-- Parser error metadata -/
 structure ParserError where
   code : Nat
