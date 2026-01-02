@@ -8,10 +8,12 @@ ROOT = Path(__file__).resolve().parents[1]
 HS_DIR = ROOT / "src" / "ShellCheck"
 LEAN_ANALYTICS = ROOT / "ShellCheck" / "Analytics.lean"
 LEAN_CHECKS = ROOT / "ShellCheck" / "Checks"
+OUT1 = ROOT / "ShellCheck" / "Tests" / "SC1xxxLists.lean"
 OUT2 = ROOT / "ShellCheck" / "Tests" / "SC2xxxLists.lean"
 OUT3 = ROOT / "ShellCheck" / "Tests" / "SC3xxxLists.lean"
+OUT4 = ROOT / "ShellCheck" / "Tests" / "SC4xxxLists.lean"
 
-CODE_RE = re.compile(r"\b[23]\d{3}\b")
+CODE_RE = re.compile(r"\b[1-4]\d{3}\b")
 LEAN_LINE_RE = None
 
 
@@ -164,21 +166,41 @@ def main() -> None:
     upstream_all = extract_haskell_codes()
     implemented_all = extract_lean_codes()
 
+    upstream1 = filter_prefix(upstream_all, 1)
+    implemented1 = filter_prefix(implemented_all, 1)
     upstream2 = filter_prefix(upstream_all, 2)
     implemented2 = filter_prefix(implemented_all, 2)
     upstream3 = filter_prefix(upstream_all, 3)
     implemented3 = filter_prefix(implemented_all, 3)
+    upstream4 = filter_prefix(upstream_all, 4)
+    implemented4 = filter_prefix(implemented_all, 4)
 
+    write_list(OUT1, "ShellCheck.Tests.SC1xxxLists", upstream1, implemented1)
     write_list(OUT2, "ShellCheck.Tests.SC2xxxLists", upstream2, implemented2)
     write_list(OUT3, "ShellCheck.Tests.SC3xxxLists", upstream3, implemented3)
+    write_list(OUT4, "ShellCheck.Tests.SC4xxxLists", upstream4, implemented4)
 
+    missing1 = [code for code in upstream1 if code not in implemented1]
+    extra1 = [code for code in implemented1 if code not in upstream1]
     missing2 = [code for code in upstream2 if code not in implemented2]
     extra2 = [code for code in implemented2 if code not in upstream2]
     missing3 = [code for code in upstream3 if code not in implemented3]
     extra3 = [code for code in implemented3 if code not in upstream3]
+    missing4 = [code for code in upstream4 if code not in implemented4]
+    extra4 = [code for code in implemented4 if code not in upstream4]
 
+    print(f"Wrote {OUT1}")
     print(f"Wrote {OUT2}")
     print(f"Wrote {OUT3}")
+    print(f"Wrote {OUT4}")
+    print(f"Upstream SC1xxx: {len(upstream1)}")
+    print(f"Implemented SC1xxx: {len(implemented1)}")
+    print(f"Missing SC1xxx: {len(missing1)}")
+    print(f"Extra SC1xxx: {len(extra1)}")
+    if missing1:
+        print("Missing SC1xxx codes:", ", ".join(str(code) for code in missing1))
+    if extra1:
+        print("Extra SC1xxx codes:", ", ".join(str(code) for code in extra1))
     print(f"Upstream SC2xxx: {len(upstream2)}")
     print(f"Implemented SC2xxx: {len(implemented2)}")
     print(f"Missing SC2xxx: {len(missing2)}")
@@ -195,6 +217,14 @@ def main() -> None:
         print("Missing SC3xxx codes:", ", ".join(str(code) for code in missing3))
     if extra3:
         print("Extra SC3xxx codes:", ", ".join(str(code) for code in extra3))
+    print(f"Upstream SC4xxx: {len(upstream4)}")
+    print(f"Implemented SC4xxx: {len(implemented4)}")
+    print(f"Missing SC4xxx: {len(missing4)}")
+    print(f"Extra SC4xxx: {len(extra4)}")
+    if missing4:
+        print("Missing SC4xxx codes:", ", ".join(str(code) for code in missing4))
+    if extra4:
+        print("Extra SC4xxx codes:", ", ".join(str(code) for code in extra4))
 
 
 if __name__ == "__main__":
