@@ -65,6 +65,21 @@ def scriptFromSeedComplex (seed : String) : String :=
   let line7 := heredocTag
   String.intercalate "\n" [line1, line2, line3, line4, line5, line6, line7]
 
+def scriptFromSeedVariants (seed : String) : String :=
+  let name := sanitizeIdent seed
+  let value := sanitizeWord (reverseString seed)
+  let alt := sanitizeWord (seed ++ "alt")
+  let line1 := s!"{name}={value}"
+  let line2 := s!"echo $'{value}\\n{alt}\\t'"
+  let line3 := s!"echo $\"{alt}\""
+  let line4 := "echo \"${" ++ name ++ ":-" ++ alt ++ "}\""
+  let line5 := "cat <<< \"${" ++ name ++ "}\""
+  let line6 := s!"echo $(printf '%s' \"{value}\")"
+  let line7 := "echo `printf '%s' \"" ++ alt ++ "\"`"
+  let line8 := s!"echo <(printf '%s' {value})"
+  let line9 := "echo $((1+2))"
+  String.intercalate "\n" [line1, line2, line3, line4, line5, line6, line7, line8, line9]
+
 def renderScript (cmds : List (List String)) : String :=
   String.intercalate "\n" (cmds.map (String.intercalate " "))
 
@@ -189,11 +204,17 @@ def parseOkQuoted (seed : String) : Bool :=
 def parseOkComplex (seed : String) : Bool :=
   parseOk (scriptFromSeedComplex seed)
 
+def parseOkVariants (seed : String) : Bool :=
+  parseOk (scriptFromSeedVariants seed)
+
 def positionsOkQuoted (seed : String) : Bool :=
   positionsOkScript (scriptFromSeedQuoted seed)
 
 def positionsOkComplex (seed : String) : Bool :=
   positionsOkScript (scriptFromSeedComplex seed)
+
+def positionsOkVariants (seed : String) : Bool :=
+  positionsOkScript (scriptFromSeedVariants seed)
 
 def tokenIdsUnique (root : Token) : Bool :=
   let ids := collectTokenIds root
@@ -210,6 +231,9 @@ def idsUnique (seed : String) : Bool :=
 
 def idsUniqueComplex (seed : String) : Bool :=
   idsUniqueScript (scriptFromSeedComplex seed)
+
+def idsUniqueVariants (seed : String) : Bool :=
+  idsUniqueScript (scriptFromSeedVariants seed)
 
 def braceExpansionSplits (seed : String) : Bool :=
   let w1 := sanitizeWord seed
@@ -380,6 +404,14 @@ abbrev prop_positions_valid_complex : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     positionsOkComplex seed = true
 
+abbrev prop_parse_ok_variants : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    parseOkVariants seed = true
+
+abbrev prop_positions_valid_variants : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    positionsOkVariants seed = true
+
 abbrev prop_ids_unique_simple : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     idsUnique seed = true
@@ -387,6 +419,10 @@ abbrev prop_ids_unique_simple : Prop :=
 abbrev prop_ids_unique_complex : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     idsUniqueComplex seed = true
+
+abbrev prop_ids_unique_variants : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    idsUniqueVariants seed = true
 
 abbrev prop_brace_expansion_splits : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
