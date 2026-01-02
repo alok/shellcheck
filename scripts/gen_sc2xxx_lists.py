@@ -8,9 +8,10 @@ ROOT = Path(__file__).resolve().parents[1]
 HS_DIR = ROOT / "src" / "ShellCheck"
 LEAN_ANALYTICS = ROOT / "ShellCheck" / "Analytics.lean"
 LEAN_CHECKS = ROOT / "ShellCheck" / "Checks"
-OUT = ROOT / "ShellCheck" / "Tests" / "SC2xxxLists.lean"
+OUT2 = ROOT / "ShellCheck" / "Tests" / "SC2xxxLists.lean"
+OUT3 = ROOT / "ShellCheck" / "Tests" / "SC3xxxLists.lean"
 
-CODE_RE = re.compile(r"\b2\d{3}\b")
+CODE_RE = re.compile(r"\b[23]\d{3}\b")
 LEAN_LINE_RE = None
 
 
@@ -134,41 +135,66 @@ def format_list(codes: list[int]) -> str:
     return "[" + ", ".join(str(code) for code in codes) + "]"
 
 
-def main() -> None:
-    upstream = extract_haskell_codes()
-    implemented = extract_lean_codes()
+def filter_prefix(codes: list[int], prefix: int) -> list[int]:
+    return [code for code in codes if code // 1000 == prefix]
 
-    OUT.parent.mkdir(parents=True, exist_ok=True)
+
+def write_list(out_path: Path, namespace: str, upstream: list[int], implemented: list[int]) -> None:
     content = f"""import Std
 
-namespace ShellCheck.Tests.SC2xxxLists
+namespace {namespace}
 
-def upstreamSC2xxx : List Nat := {format_list(upstream)}
+def upstream : List Nat := {format_list(upstream)}
 
-def implementedSC2xxx : List Nat := {format_list(implemented)}
+def implemented : List Nat := {format_list(implemented)}
 
-def missingSC2xxx : List Nat :=
-  upstreamSC2xxx.filter (fun code => !implementedSC2xxx.contains code)
+def missing : List Nat :=
+  upstream.filter (fun code => !implemented.contains code)
 
-def extraSC2xxx : List Nat :=
-  implementedSC2xxx.filter (fun code => !upstreamSC2xxx.contains code)
+def extra : List Nat :=
+  implemented.filter (fun code => !upstream.contains code)
 
-end ShellCheck.Tests.SC2xxxLists
+end {namespace}
 """
-    OUT.write_text(content, encoding="utf-8")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(content, encoding="utf-8")
 
-    missing = [code for code in upstream if code not in implemented]
-    extra = [code for code in implemented if code not in upstream]
 
-    print(f"Wrote {OUT}")
-    print(f"Upstream SC2xxx: {len(upstream)}")
-    print(f"Implemented SC2xxx: {len(implemented)}")
-    print(f"Missing: {len(missing)}")
-    print(f"Extra: {len(extra)}")
-    if missing:
-        print("Missing codes:", ", ".join(str(code) for code in missing))
-    if extra:
-        print("Extra codes:", ", ".join(str(code) for code in extra))
+def main() -> None:
+    upstream_all = extract_haskell_codes()
+    implemented_all = extract_lean_codes()
+
+    upstream2 = filter_prefix(upstream_all, 2)
+    implemented2 = filter_prefix(implemented_all, 2)
+    upstream3 = filter_prefix(upstream_all, 3)
+    implemented3 = filter_prefix(implemented_all, 3)
+
+    write_list(OUT2, "ShellCheck.Tests.SC2xxxLists", upstream2, implemented2)
+    write_list(OUT3, "ShellCheck.Tests.SC3xxxLists", upstream3, implemented3)
+
+    missing2 = [code for code in upstream2 if code not in implemented2]
+    extra2 = [code for code in implemented2 if code not in upstream2]
+    missing3 = [code for code in upstream3 if code not in implemented3]
+    extra3 = [code for code in implemented3 if code not in upstream3]
+
+    print(f"Wrote {OUT2}")
+    print(f"Wrote {OUT3}")
+    print(f"Upstream SC2xxx: {len(upstream2)}")
+    print(f"Implemented SC2xxx: {len(implemented2)}")
+    print(f"Missing SC2xxx: {len(missing2)}")
+    print(f"Extra SC2xxx: {len(extra2)}")
+    if missing2:
+        print("Missing SC2xxx codes:", ", ".join(str(code) for code in missing2))
+    if extra2:
+        print("Extra SC2xxx codes:", ", ".join(str(code) for code in extra2))
+    print(f"Upstream SC3xxx: {len(upstream3)}")
+    print(f"Implemented SC3xxx: {len(implemented3)}")
+    print(f"Missing SC3xxx: {len(missing3)}")
+    print(f"Extra SC3xxx: {len(extra3)}")
+    if missing3:
+        print("Missing SC3xxx codes:", ", ".join(str(code) for code in missing3))
+    if extra3:
+        print("Extra SC3xxx codes:", ", ".join(str(code) for code in extra3))
 
 
 if __name__ == "__main__":
