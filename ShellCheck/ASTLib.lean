@@ -1012,16 +1012,20 @@ theorem isLoop_for (id : Id) (v : String) (ws body : List Token) :
 -- Note: These theorems require partial def unfolding which is non-trivial
 -- They are correct by inspection of the code but can't be proven with rfl
 theorem isConstant_literal (id : Id) (s : String) :
-    isConstant ⟨id, .T_Literal s⟩ = true := sorry
+    isConstant ⟨id, .T_Literal s⟩ = true := by
+  simp [isConstant]
 
 theorem isConstant_singleQuoted (id : Id) (s : String) :
-    isConstant ⟨id, .T_SingleQuoted s⟩ = true := sorry
+    isConstant ⟨id, .T_SingleQuoted s⟩ = true := by
+  simp [isConstant]
 
 theorem getLiteralString_literal (id : Id) (s : String) :
-    getLiteralString ⟨id, .T_Literal s⟩ = some s := sorry
+    getLiteralString ⟨id, .T_Literal s⟩ = some s := by
+  simp [getLiteralString, getLiteralStringExt]
 
 theorem getLiteralString_singleQuoted (id : Id) (s : String) :
-    getLiteralString ⟨id, .T_SingleQuoted s⟩ = some s := sorry
+    getLiteralString ⟨id, .T_SingleQuoted s⟩ = some s := by
+  simp [getLiteralString, getLiteralStringExt]
 
 theorem isVariableName_valid :
     isVariableName "foo_bar123" = true := by native_decide

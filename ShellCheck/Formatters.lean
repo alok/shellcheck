@@ -53,7 +53,8 @@ def allFormats : List OutputFormat :=
 -- Theorems (stubs)
 
 theorem fromString_name_roundtrip (fmt : OutputFormat) :
-    OutputFormat.fromString fmt.name = some fmt := sorry
+    OutputFormat.fromString fmt.name = some fmt := by
+  cases fmt <;> rfl
 
 theorem allFormats_complete :
     allFormats.length = 6 := by native_decide
