@@ -2806,6 +2806,16 @@ def checkTestArgumentSplitting (params : Parameters) (t : Token) : List TokenCom
       else
         [makeComment .errorC token.id 2144 s!"{op} doesn't work with globs. Use a for loop."]
     else []
+  | .TC_Binary condType op lhs rhs =>
+    if condType == .singleBracket && (op == "=" || op == "==" || op == "!=") then
+      if isGlobToken lhs then
+        [makeComment .warningC lhs.id 2131
+          "Globs expand in [ ]. Use [[ ]] for literal matching."]
+      else if isGlobToken rhs then
+        [makeComment .warningC rhs.id 2131
+          "Globs expand in [ ]. Use [[ ]] for literal matching."]
+      else []
+    else []
   | .TC_Nullary condType token =>
     if isGlobToken token then
       [makeComment .errorC token.id 2144 "This test always fails. Globs don't work in test expressions."]

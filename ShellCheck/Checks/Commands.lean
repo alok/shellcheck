@@ -2229,15 +2229,24 @@ def checkUnquotedSubstitution : CommandCheck := {
   check := fun _params t =>
     match t.inner with
     | .T_SimpleCommand _ args =>
+      let hasUnquotedSubstitution : Token → Bool :=
+        fun arg =>
+          match arg.inner with
+          | .T_DollarExpansion _ => true
+          | .T_Backticked _ => true
+          | .T_NormalWord parts =>
+            parts.any fun part =>
+              match part.inner with
+              | .T_DollarExpansion _ => true
+              | .T_Backticked _ => true
+              | _ => false
+          | _ => false
       args.filterMap fun arg =>
-        match arg.inner with
-        | .T_DollarExpansion _ =>
+        if hasUnquotedSubstitution arg then
           some (infoArg arg 2085
             "Double quote command substitution to avoid re-splitting.")
-        | .T_Backticked _ =>
-          some (infoArg arg 2085
-            "Double quote command substitution to avoid re-splitting.")
-        | _ => Option.none
+        else
+          Option.none
     | _ => []
 }
 
@@ -2356,7 +2365,7 @@ def checkSingleBracketGlob : CommandCheck := {
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
-        match getLiteralString arg with
+        match getGlobOrLiteralString arg with
         | some s =>
           if hasGlobChars s then
             some (warnArg arg 2131
