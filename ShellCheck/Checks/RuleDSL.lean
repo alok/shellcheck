@@ -58,4 +58,16 @@ def pipelineTargets (name : String) (cmds : List Token) : List Token :=
   cmds.filterMap fun c =>
     if getCommandBasename c == some name then some c else none
 
+def pipelineRule (code : Code) (severity : Severity) (message : String)
+    (pattern : List String) (targetName : String) (requireLeading : Bool := false)
+    : Token → List TokenComment :=
+  fun t =>
+    match pipelineCommands t with
+    | some cmds =>
+        if pipelineMatches pattern cmds (requireLeading := requireLeading) then
+          pipelineTargets targetName cmds |>.map fun c =>
+            makeComment severity c.id code message
+        else []
+    | none => []
+
 end ShellCheck.Checks.RuleDSL
