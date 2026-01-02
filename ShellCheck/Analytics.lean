@@ -990,36 +990,21 @@ where
 
 /-- SC2009: Consider using pgrep instead of grepping ps output -/
 def checkPsGrep (_params : Parameters) (t : Token) : List TokenComment :=
-  match pipelineCommands t with
-  | some cmds =>
-    if pipelineMatches ["ps", "grep"] cmds (requireLeading := true) then
-      pipelineTargets "ps" cmds |>.map fun c =>
-        makeComment .infoC c.id 2009
-          "Consider using pgrep instead of grepping ps output."
-    else []
-  | _ => []
+  pipelineRule 2009 .infoC
+    "Consider using pgrep instead of grepping ps output."
+    ["ps", "grep"] "ps" (requireLeading := true) t
 
 /-- SC2010: Don't use ls | grep -/
 def checkLsGrep (_params : Parameters) (t : Token) : List TokenComment :=
-  match pipelineCommands t with
-  | some cmds =>
-    if pipelineMatches ["ls", "grep"] cmds (requireLeading := true) then
-      pipelineTargets "ls" cmds |>.map fun c =>
-        makeComment .warningC c.id 2010
-          "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames."
-    else []
-  | _ => []
+  pipelineRule 2010 .warningC
+    "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames."
+    ["ls", "grep"] "ls" (requireLeading := true) t
 
 /-- SC2011: Use find .. -print0 | xargs -0 instead of ls | xargs -/
 def checkLsXargs (_params : Parameters) (t : Token) : List TokenComment :=
-  match pipelineCommands t with
-  | some cmds =>
-    if pipelineMatches ["ls", "xargs"] cmds (requireLeading := true) then
-      pipelineTargets "ls" cmds |>.map fun c =>
-        makeComment .warningC c.id 2011
-          "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."
-    else []
-  | _ => []
+  pipelineRule 2011 .warningC
+    "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."
+    ["ls", "xargs"] "ls" (requireLeading := true) t
 
 /-- SC2038: Use find -print0 | xargs -0 -/
 def checkFindXargs (_params : Parameters) (t : Token) : List TokenComment :=
@@ -1030,9 +1015,9 @@ def checkFindXargs (_params : Parameters) (t : Token) : List TokenComment :=
       -- Check if -print0 or -0 is used
       if not (allArgs.any (· == "-print0") || allArgs.any (· == "-0") ||
               allArgs.any (· == "--null") || allArgs.any fun s => s.endsWith "printf") then
-        pipelineTargets "find" cmds |>.map fun c =>
-          makeComment .warningC c.id 2038
-            "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."
+        pipelineRule 2038 .warningC
+          "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."
+          ["find", "xargs"] "find" (requireLeading := true) t
       else []
     else []
   | _ => []
