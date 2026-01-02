@@ -5,6 +5,8 @@
   Generic basic utility functions for ShellCheck
 -/
 
+import ShellCheck.DocRoles
+
 namespace ShellCheck.Prelude
 
 /-- Get element 0 or a default. Like `head` but safe. -/
