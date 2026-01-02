@@ -65,6 +65,8 @@ def sc2xxxCases : List CoverageCase := [
   mkCase 2037 "var=ls -l",
   mkCase 2078 "[ foo ]",
   mkCase 2086 "echo $foo",
+  mkCase 2089 "param='--foo=\"bar\"'; app $param",
+  mkCase 2090 "param='--foo=\"bar\"'; app $param",
   mkCase 2098 "var=foo echo ${var}",
   mkCase 2102 "ls [10-15]",
   mkCase 2103 "for f in *; do cd $f; git pull; cd ..; done",

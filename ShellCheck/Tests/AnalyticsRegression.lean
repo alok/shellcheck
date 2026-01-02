@@ -108,6 +108,18 @@ def test_sc2086_fix_present : Except String Bool := do
   let cr := runCheck "echo $foo"
   pure (hasFix cr 2086)
 
+def test_sc2089_quotes_literal_warn : Except String Bool := do
+  let cr := runCheck "param='--foo=\"bar\"'; app $param"
+  pure (hasCode cr 2089)
+
+def test_sc2090_quotes_literal_warn : Except String Bool := do
+  let cr := runCheck "param='--foo=\"bar\"'; app $param"
+  pure (hasCode cr 2090)
+
+def test_sc2089_sc2090_quoted_ok : Except String Bool := do
+  let cr := runCheck "param='--foo=\"bar\"'; app \"$param\""
+  pure (!hasCode cr 2089 && !hasCode cr 2090)
+
 def test_sc2125_glob_assignment : Except String Bool := do
   let cr := runCheck "a=*.png"
   pure (hasCode cr 2125)

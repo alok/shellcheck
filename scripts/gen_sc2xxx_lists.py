@@ -11,13 +11,110 @@ LEAN_CHECKS = ROOT / "ShellCheck" / "Checks"
 OUT = ROOT / "ShellCheck" / "Tests" / "SC2xxxLists.lean"
 
 CODE_RE = re.compile(r"\b2\d{3}\b")
-LEAN_LINE_RE = re.compile(r"\b(makeCommentWithFix|makeComment|warnOn|warn)\b")
+LEAN_LINE_RE = None
+
+
+def strip_lean_comments(text: str) -> str:
+    out: list[str] = []
+    i = 0
+    depth = 0
+    in_string = False
+    while i < len(text):
+        if depth > 0:
+            if text.startswith("/-", i):
+                depth += 1
+                i += 2
+            elif text.startswith("-/", i):
+                depth -= 1
+                i += 2
+            else:
+                i += 1
+            continue
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < len(text):
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == "\"":
+                in_string = False
+            i += 1
+            continue
+        if text.startswith("/-", i):
+            depth += 1
+            i += 2
+            continue
+        if text.startswith("--", i):
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            continue
+        if ch == "\"":
+            in_string = True
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def strip_haskell_comments(text: str) -> str:
+    out: list[str] = []
+    i = 0
+    depth = 0
+    in_string = False
+    in_char = False
+    while i < len(text):
+        if depth > 0:
+            if text.startswith("{-", i):
+                depth += 1
+                i += 2
+            elif text.startswith("-}", i):
+                depth -= 1
+                i += 2
+            else:
+                i += 1
+            continue
+        ch = text[i]
+        if in_string:
+            out.append(ch)
+            if ch == "\\" and i + 1 < len(text):
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == "\"":
+                in_string = False
+            i += 1
+            continue
+        if in_char:
+            out.append(ch)
+            if ch == "\\" and i + 1 < len(text):
+                out.append(text[i + 1])
+                i += 2
+                continue
+            if ch == "'":
+                in_char = False
+            i += 1
+            continue
+        if text.startswith("{-", i):
+            depth += 1
+            i += 2
+            continue
+        if text.startswith("--", i):
+            while i < len(text) and text[i] != "\n":
+                i += 1
+            continue
+        if ch == "\"":
+            in_string = True
+        if ch == "'":
+            in_char = True
+        out.append(ch)
+        i += 1
+    return "".join(out)
 
 
 def extract_haskell_codes() -> list[int]:
     codes: set[int] = set()
     for path in HS_DIR.rglob("*.hs"):
-        text = path.read_text(encoding="utf-8")
+        text = strip_haskell_comments(path.read_text(encoding="utf-8"))
         for match in CODE_RE.findall(text):
             codes.add(int(match))
     return sorted(codes)
@@ -27,10 +124,9 @@ def extract_lean_codes() -> list[int]:
     codes: set[int] = set()
     lean_files = [LEAN_ANALYTICS] + list(LEAN_CHECKS.rglob("*.lean"))
     for path in lean_files:
-        for line in path.read_text(encoding="utf-8").splitlines():
-            if LEAN_LINE_RE.search(line):
-                for match in CODE_RE.findall(line):
-                    codes.add(int(match))
+        text = strip_lean_comments(path.read_text(encoding="utf-8"))
+        for match in CODE_RE.findall(text):
+            codes.add(int(match))
     return sorted(codes)
 
 
@@ -71,6 +167,8 @@ end ShellCheck.Tests.SC2xxxLists
     print(f"Extra: {len(extra)}")
     if missing:
         print("Missing codes:", ", ".join(str(code) for code in missing))
+    if extra:
+        print("Extra codes:", ", ".join(str(code) for code in extra))
 
 
 if __name__ == "__main__":

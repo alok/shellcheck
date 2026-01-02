@@ -3864,18 +3864,100 @@ def checkTildeExpansion (_params : Parameters) (t : Token) : List TokenComment :
     ) []
   | _ => []
 
+/-- Find first mapped element in a list. -/
+def findMap? (f : α → Option β) : List α → Option β
+  | [] => Option.none
+  | x :: xs =>
+    match f x with
+    | Option.some y => Option.some y
+    | Option.none => findMap? f xs
+
+def containsQuotedLiteral (s : String) : Bool :=
+  let rec loop (prev : Option Char) : List Char → Bool
+    | [] => false
+    | c :: cs =>
+      if c == '"' then
+        true
+      else if c == '\\' then
+        match cs with
+        | ' ' :: _ => true
+        | _ => loop (Option.some c) cs
+      else if c == '\'' then
+        let prevOk :=
+          match prev with
+          | Option.none => true
+          | Option.some p => p == '/' || p == '=' || p == ' '
+        let nextOk :=
+          match cs with
+          | [] => true
+          | n :: _ => n == ' '
+        if prevOk || nextOk then true else loop (Option.some c) cs
+      else
+        loop (Option.some c) cs
+  loop Option.none s.toList
+
+partial def quoteOriginForToken (quoteMap : Std.HashMap String Token) (tok : Token) : Option Token :=
+  match tok.inner with
+  | .T_DollarBraced _ content =>
+    quoteMap.get? (String.join (oversimplify content))
+  | .T_DoubleQuoted parts =>
+    findMap? (quoteOriginForToken quoteMap) parts
+  | .T_NormalWord parts =>
+    findMap? (quoteOriginForToken quoteMap) parts
+  | _ =>
+    if containsQuotedLiteral (String.join (oversimplify tok)) then
+      Option.some tok
+    else
+      Option.none
+
 /-- SC2089/2090: Quotes/backslashes will be treated literally -/
-def checkQuotesInVariables (_params : Parameters) (t : Token) : List TokenComment :=
-  match t.inner with
-  | .T_Assignment _ _name _ value =>
-    let valStr := getLiteralStringDef "" value
-    if Regex.containsSubstring valStr "'" ||
-       Regex.containsSubstring valStr "\"" ||
-       Regex.containsSubstring valStr "\\" then
-      -- Would need to track if this variable is later used unquoted
-      []  -- Complex check requiring flow analysis
-    else []
-  | _ => []
+def checkQuotesInVariables (params : Parameters) (_root : Token) : List TokenComment :=
+  doVariableFlowAnalysis readF writeF ({} : Std.HashMap String Token) params.variableFlow
+where
+  parents : Std.HashMap Id Token := params.parentMap
+
+  suggestion : String :=
+    if supportsArrays params.shellType then
+      "Use an array."
+    else
+      "Rewrite using set/\"$@\" or functions."
+
+  squashesQuotes (tok : Token) : Bool :=
+    match tok.inner with
+    | .T_DollarBraced _ content =>
+      String.join (oversimplify content) |>.startsWith "#"
+    | _ => false
+
+  writeF (_base : Token) (_token : Token) (name : String) (values : DataType) :
+      StateM (Std.HashMap String Token) (List TokenComment) := do
+    match values with
+    | .DataString (.SourceFrom vals) =>
+      let quoteMap ← get
+      let quoted := findMap? (quoteOriginForToken quoteMap) vals
+      match quoted with
+      | Option.some tok => modify (fun m => Std.HashMap.insert m name tok)
+      | Option.none => modify (fun m => Std.HashMap.erase m name)
+      pure []
+    | _ =>
+      pure []
+
+  readF (_base : Token) (expr : Token) (name : String) :
+      StateM (Std.HashMap String Token) (List TokenComment) := do
+    let quoteMap ← get
+    match quoteMap.get? name with
+    | Option.none => pure []
+    | Option.some origin =>
+      if !isParamTo parents "eval" expr &&
+         !isQuoteFree params.shellType parents expr &&
+         !squashesQuotes expr then
+        pure [
+          makeComment .warningC origin.id 2089
+            s!"Quotes/backslashes will be treated literally. {suggestion}",
+          makeComment .warningC expr.id 2090
+            "Quotes/backslashes in this variable will not be respected."
+        ]
+      else
+        pure []
 
 /-- SC2091: Remove surrounding $() to run command (or use quotes) -/
 def checkSubshellAsTest (_params : Parameters) (t : Token) : List TokenComment :=
