@@ -38,6 +38,18 @@ inductive CommandName where
   | any : CommandName  -- matches any command
   deriving Repr, Inhabited
 
+class ToCommandName (α : Type) where
+  toCommandName : α → CommandName
+
+instance : ToCommandName CommandName where
+  toCommandName name := name
+
+instance : ToCommandName String where
+  toCommandName name := .basename name
+
+instance : ToCommandName (List String) where
+  toCommandName names := .anyBasename names
+
 instance : BEq CommandName where
   beq a b := match a, b with
     | .exactly s1, .exactly s2 => s1 == s2
@@ -51,6 +63,10 @@ instance : BEq CommandName where
 structure CommandCheck where
   name : CommandName
   check : Parameters → Token → List TokenComment
+
+def commandCheck {α : Type} [ToCommandName α] (name : α)
+    (check : Parameters → Token → List TokenComment) : CommandCheck :=
+  { name := ToCommandName.toCommandName name, check := check }
 
 /-- Get command arguments (words after command name) -/
 def getCommandArguments (t : Token) : Option (List Token) := do
@@ -2159,9 +2175,8 @@ where
     | _ => []
 
 /-- SC3030: declare is not POSIX -/
-def checkDeclarePosix : CommandCheck := {
-  name := .anyExactly ["declare", "typeset"]
-  check := fun params t =>
+def checkDeclarePosix : CommandCheck :=
+  commandCheck (CommandName.anyExactly ["declare", "typeset"]) fun params t =>
     if params.shellType == .Sh then
       match getCommandName t with
       | some "declare" =>
@@ -2172,12 +2187,10 @@ def checkDeclarePosix : CommandCheck := {
           "'typeset' is not POSIX. Use direct assignment or export/readonly."]
       | _ => []
     else []
-}
 
 /-- SC3037: echo -n is not portable -/
-def checkEchoNPosix : CommandCheck := {
-  name := .basename "echo"
-  check := fun params t =>
+def checkEchoNPosix : CommandCheck :=
+  commandCheck "echo" fun params t =>
     if params.shellType == .Sh then
       match getCommandArguments t with
       | some args =>
@@ -2187,7 +2200,6 @@ def checkEchoNPosix : CommandCheck := {
         else []
       | Option.none => []
     else []
-}
 
 /-!
 ## Additional SC2xxx Checks
@@ -2220,9 +2232,8 @@ def checkUselessEcho : CommandCheck := {
 }
 
 /-- SC2028: echo may not expand escape sequences. Use printf -/
-def checkEchoEscapes : CommandCheck := {
-  name := .basename "echo"
-  check := fun _params t =>
+def checkEchoEscapes : CommandCheck :=
+  commandCheck "echo" fun _params t =>
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
@@ -2234,17 +2245,14 @@ def checkEchoEscapes : CommandCheck := {
           else Option.none
         | Option.none => Option.none
     | Option.none => []
-}
 
 /-- SC2040: #!/bin/sh was specified, so shopt is not supported -/
-def checkShoptInSh : CommandCheck := {
-  name := .exactly "shopt"
-  check := fun params t =>
+def checkShoptInSh : CommandCheck :=
+  commandCheck (CommandName.exactly "shopt") fun params t =>
     if params.shellType == .Sh then
       [errorCmd t 2040
         "#!/bin/sh was specified, so shopt is not supported. Use bash instead."]
     else []
-}
 
 /-- SC2041: This is a literal string. To run as a command, use $(...) -/
 def checkLiteralInBackticks : CommandCheck := {
