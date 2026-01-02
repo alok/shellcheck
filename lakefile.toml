@@ -27,6 +27,11 @@ subDir = "regex"
 # rev = "main"
 
 [[lean_lib]]
+name = "ShellCheckDocRoles"
+srcDir = "."
+roots = ["ShellCheck.DocRoles"]
+
+[[lean_lib]]
 name = "ShellCheck"
 srcDir = "."
 
