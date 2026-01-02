@@ -1061,10 +1061,10 @@ where
     skipHSpace
     let name ← takeWhile1 (fun c => variableChar c || c == '-' || c == '.')
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (attempt (pstring "()"))
+    let hasParens ← ShellCheck.Parser.Parsec.optional (attempt (pstring "()"))
     skipAllSpace
     let body ← readBraceGroupInPipe
-    mkToken (.T_Function ⟨true⟩ ⟨false⟩ name body)
+    mkToken (.T_Function ⟨true⟩ ⟨hasParens.isSome⟩ name body)
 
   readSelectInPipe : Parser Token := do
     let _ ← consumeKeyword "select"
@@ -1624,10 +1624,10 @@ partial def readFunction : Parser Token := do
     skipHSpace
     let name ← takeWhile1 (fun c => variableChar c || c == '-' || c == '.')
     skipHSpace
-    let _ ← ShellCheck.Parser.Parsec.optional (attempt (pstring "()"))
+    let hasParens ← ShellCheck.Parser.Parsec.optional (attempt (pstring "()"))
     skipAllSpace
     let body ← readBraceGroup
-    mkToken (.T_Function ⟨true⟩ ⟨false⟩ name body)
+    mkToken (.T_Function ⟨true⟩ ⟨hasParens.isSome⟩ name body)
   else failure
 
 /-- Read a POSIX function definition: name() { body } -/

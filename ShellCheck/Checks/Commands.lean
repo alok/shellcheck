@@ -114,7 +114,10 @@ def matchesCommandName (pattern : CommandName) (cmd : Token) : Bool :=
     match getCommandBasename cmd with
     | some cmdBase => names.contains cmdBase
     | Option.none => false
-  | .any => getCommandName cmd |>.isSome
+  | .any =>
+    match cmd.inner with
+    | .T_Function .. => true
+    | _ => getCommandName cmd |>.isSome
 
 /-- Get the parent token of a given token -/
 def getParent (params : Parameters) (t : Token) : Option Token :=

@@ -521,6 +521,18 @@ def test_sc2020_tr_duplicates : Except String Bool := do
   let cr := runCheck "tr aa bb"
   pure (hasCode cr 2020)
 
+def test_sc2023_time_external_warn : Except String Bool := do
+  let cr := runCheckWithShell .Bash "time -f %e ls"
+  pure (hasCode cr 2023)
+
+def test_sc2023_time_p_ok : Except String Bool := do
+  let cr := runCheckWithShell .Bash "time -p ls"
+  pure (!hasCode cr 2023)
+
+def test_sc2023_time_non_bash_ok : Except String Bool := do
+  let cr := runCheckWithShell .Dash "time -f %e ls"
+  pure (!hasCode cr 2023)
+
 def test_sc2021_tr_bracket_class : Except String Bool := do
   let cr := runCheck "tr '[a]' b"
   pure (hasCode cr 2021)
@@ -548,6 +560,22 @@ def test_sc2127_case_fallthrough_sh : Except String Bool := do
 def test_sc2127_case_fallthrough_bash_ok : Except String Bool := do
   let cr := runCheckWithShell .Bash "case foo in bar) echo hi ;& baz) echo ok ;; esac"
   pure (!hasCode cr 2127)
+
+def test_sc2111_ksh_function_keyword_parens : Except String Bool := do
+  let cr := runCheck "#!/bin/ksh\nfunction foo() { echo bar; }"
+  pure (hasCode cr 2111)
+
+def test_sc2112_sh_function_keyword_parens : Except String Bool := do
+  let cr := runCheck "#!/bin/dash\nfunction foo() { echo bar; }"
+  pure (hasCode cr 2112)
+
+def test_sc2113_sh_function_keyword_no_parens : Except String Bool := do
+  let cr := runCheck "#!/bin/dash\nfunction foo { echo bar; }"
+  pure (hasCode cr 2113)
+
+def test_sc2112_sh_function_parens_only_ok : Except String Bool := do
+  let cr := runCheck "foo() { echo bar; }"
+  pure (!hasCode cr 2112 && !hasCode cr 2113)
 
 def test_sc2046_unquoted_expansions_basic : Except String Bool := do
   let cr := runCheck "rm $(ls)"
