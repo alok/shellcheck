@@ -12,15 +12,19 @@ impl_sc3="$tmp_dir/sc3_impl.txt"
 cov_sc2="$tmp_dir/sc2_cov.txt"
 cov_sc3="$tmp_dir/sc3_cov.txt"
 
-# Extract SC codes from implementation (exclude tests).
-rg --no-filename -o "SC2[0-9]{3}" ShellCheck --glob '!ShellCheck/Tests/**' | sort -u > "$impl_sc2"
-rg --no-filename -o "SC3[0-9]{3}" ShellCheck --glob '!ShellCheck/Tests/**' | sort -u > "$impl_sc3"
+# Extract SC codes from implementation (exclude tests) by matching rule emitters.
+rg --no-filename -o "\\b(?:makeComment|makeCommentWithFix|warnCmd|errorCmd|styleCmd|infoCmd|warnArg|errorArg|styleArg|infoArg|pipelineRule|warn|error|info|style)\\b[^\\n]*\\b2[0-9]{3}\\b" \
+  ShellCheck --glob '!ShellCheck/Tests/**' \
+  | rg -o "2[0-9]{3}" | sort -u | sed 's/^/SC/' > "$impl_sc2"
+rg --no-filename -o "\\b(?:makeComment|makeCommentWithFix|warnCmd|errorCmd|styleCmd|infoCmd|warnArg|errorArg|styleArg|infoArg|pipelineRule|warn|error|info|style)\\b[^\\n]*\\b3[0-9]{3}\\b" \
+  ShellCheck --glob '!ShellCheck/Tests/**' \
+  | rg -o "3[0-9]{3}" | sort -u | sed 's/^/SC/' > "$impl_sc3"
 
 # Extract coverage codes from SCCoverage.
-rg --no-filename -o "code := 2[0-9]{3}" ShellCheck/Tests/SCCoverage.lean \
-  | rg -o "2[0-9]{3}" | sort -u > "$cov_sc2"
-rg --no-filename -o "code := 3[0-9]{3}" ShellCheck/Tests/SCCoverage.lean \
-  | rg -o "3[0-9]{3}" | sort -u > "$cov_sc3"
+rg --no-filename -o "code := 2[0-9]{3}|mk[A-Za-z]*Case 2[0-9]{3}" ShellCheck/Tests/SCCoverage.lean \
+  | rg -o "2[0-9]{3}" | sort -u | sed 's/^/SC/' > "$cov_sc2" || true
+rg --no-filename -o "code := 3[0-9]{3}|mk[A-Za-z]*Case 3[0-9]{3}" ShellCheck/Tests/SCCoverage.lean \
+  | rg -o "3[0-9]{3}" | sort -u | sed 's/^/SC/' > "$cov_sc3" || true
 
 # Ignore codes that are not user-facing checks (parser diagnostics, etc.).
 ignore_sc2=("SC2999")
@@ -29,10 +33,10 @@ for code in "${ignore_sc2[@]}"; do
   mv "$tmp_dir/sc2_filtered.txt" "$impl_sc2"
 done
 
-missing_sc2="$(comm -23 "$impl_sc2" "$cov_sc2" | sed 's/^/SC/' )"
-missing_sc3="$(comm -23 "$impl_sc3" "$cov_sc3" | sed 's/^/SC/' )"
-extra_sc2="$(comm -13 "$impl_sc2" "$cov_sc2" | sed 's/^/SC/' )"
-extra_sc3="$(comm -13 "$impl_sc3" "$cov_sc3" | sed 's/^/SC/' )"
+missing_sc2="$(comm -23 "$impl_sc2" "$cov_sc2")"
+missing_sc3="$(comm -23 "$impl_sc3" "$cov_sc3")"
+extra_sc2="$(comm -13 "$impl_sc2" "$cov_sc2")"
+extra_sc3="$(comm -13 "$impl_sc3" "$cov_sc3")"
 
 echo "SC2xxx coverage missing:"
 if [[ -z "$missing_sc2" ]]; then
