@@ -800,32 +800,39 @@ def checkEchoWc (_params : Parameters) (t : Token) : List TokenComment :=
 def checkPipedAssignment (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_Pipeline _ (first :: _ :: _) =>
-    match first.inner with
-    | .T_Redirecting _ cmd =>
-      match cmd.inner with
-      | .T_SimpleCommand (_::_) [] =>  -- Has assignments, no words
-        [makeComment .warningC t.id 2036
-          "If you wanted to assign the output of the pipeline, use a=$(b | c) ."]
-      | _ => []
+    let cmd :=
+      match first.inner with
+      | .T_Redirecting _ inner => inner
+      | _ => first
+    match cmd.inner with
+    | .T_SimpleCommand (_::_) [] =>  -- Has assignments, no words
+      [makeComment .warningC t.id 2036
+        "If you wanted to assign the output of the pipeline, use a=$(b | c) ."]
     | _ => []
   | _ => []
 
 /-- SC2037: To assign the output of a command, use var=$(cmd) -/
 def checkAssignAteCommand (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_SimpleCommand [assign] (firstWord :: _) =>
+  | .T_SimpleCommand [assign] words =>
     match assign.inner with
     | .T_Assignment _ _ _ value =>
       -- Check if first word looks like a flag or glob
-      if isFlag firstWord || isGlob firstWord then
+      let firstWordIsArg :=
+        match words with
+        | firstWord :: _ => isUnquotedFlag firstWord || isGlob firstWord
+        | [] => false
+      if firstWordIsArg then
         [makeComment .errorC t.id 2037 "To assign the output of a command, use var=$(cmd) ."]
       else
         -- Check if it's a known command name
-        let cmdStr := getLiteralString value |>.getD ""
-        if cmdStr ∈ commonCommands then
-          [makeComment .warningC t.id 2209
-            "Use var=$(command) to assign output (or quote to assign string)."]
-        else []
+        match getUnquotedLiteral value with
+        | some cmdStr =>
+          if cmdStr ∈ commonCommands then
+            [makeComment .warningC t.id 2209
+              "Use var=$(command) to assign output (or quote to assign string)."]
+          else []
+        | Option.none => []
     | _ => []
   | _ => []
 where
@@ -837,11 +844,13 @@ where
 def checkArithmeticOpCommand (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_SimpleCommand [_assign] (firstWord :: _) =>
-    let op := getLiteralString firstWord |>.getD ""
-    if op ∈ ["+", "-", "*", "/"] then
-      [makeComment .warningC firstWord.id 2099
-        s!"Use $((..)) for arithmetics, e.g. i=$((i {op} 2))"]
-    else []
+    match getGlobOrLiteralString firstWord with
+    | some op =>
+        if op ∈ ["+", "-", "*", "/"] then
+          [makeComment .warningC firstWord.id 2099
+            s!"Use $((..)) for arithmetics, e.g. i=$((i {op} 2))"]
+        else []
+    | Option.none => []
   | _ => []
 
 /-- SC2100: Use $((..)) for arithmetics (assignment looks like i=i+1) -/

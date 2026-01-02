@@ -212,6 +212,46 @@ def test_sc2012_ls_pipe_N_ok : Except String Bool := do
   let cr := runCheck "ls -N | foo"
   pure (!hasCode cr 2012)
 
+def test_sc2036_assign_pipeline_warn : Except String Bool := do
+  let cr := runCheck "A=ls | grep foo"
+  pure (hasCode cr 2036)
+
+def test_sc2036_assign_pipeline_ok : Except String Bool := do
+  let cr := runCheck "A=foo cmd | grep foo"
+  pure (!hasCode cr 2036)
+
+def test_sc2036_assign_only_ok : Except String Bool := do
+  let cr := runCheck "A=foo"
+  pure (!hasCode cr 2036)
+
+def test_sc2037_assign_command_flag : Except String Bool := do
+  let cr := runCheck "A=ls -l"
+  pure (hasCode cr 2037)
+
+def test_sc2037_assign_command_long_flag : Except String Bool := do
+  let cr := runCheck "A=ls --sort=$foo"
+  pure (hasCode cr 2037)
+
+def test_sc2209_assign_command_pipeline : Except String Bool := do
+  let cr := runCheck "A=cat foo | grep bar"
+  pure (hasCode cr 2209)
+
+def test_sc2209_assign_command_ok : Except String Bool := do
+  let cr := runCheck "A=foo ls -l"
+  pure (!hasCode cr 2037 && !hasCode cr 2209)
+
+def test_sc2209_pager_cat_warn : Except String Bool := do
+  let cr := runCheck "PAGER=cat grep bar"
+  pure (hasCode cr 2209)
+
+def test_sc2209_pager_quoted_ok : Except String Bool := do
+  let cr := runCheck "PAGER=\"cat\" grep bar"
+  pure (!hasCode cr 2209)
+
+def test_sc2209_assign_only_warn : Except String Bool := do
+  let cr := runCheck "here=pwd"
+  pure (hasCode cr 2209)
+
 def test_sc2038_find_xargs_missing_null : Except String Bool := do
   let cr := runCheck "find . | xargs foo"
   pure (hasCode cr 2038)
@@ -323,6 +363,26 @@ def test_sc2127_case_fallthrough_bash_ok : Except String Bool := do
 def test_sc2098_prefix_assignment_reference : Except String Bool := do
   let cr := runCheck "var=foo echo ${var}"
   pure (hasCode cr 2098)
+
+def test_sc2099_arith_op_warn_simple : Except String Bool := do
+  let cr := runCheck "i=i + 1"
+  pure (hasCode cr 2099)
+
+def test_sc2099_arith_op_warn_assign : Except String Bool := do
+  let cr := runCheck "foo=bar * 2"
+  pure (hasCode cr 2099)
+
+def test_sc2099_arith_op_ok : Except String Bool := do
+  let cr := runCheck "foo + opts"
+  pure (!hasCode cr 2099)
+
+def test_sc2100_wrong_arith : Except String Bool := do
+  let cr := runCheck "i=i+1"
+  pure (hasCode cr 2100)
+
+def test_sc2100_wrong_arith_reference : Except String Bool := do
+  let cr := runCheck "n=2; i=n*2"
+  pure (hasCode cr 2100)
 
 def test_sc2102_char_range_glob : Except String Bool := do
   let cr := runCheck "ls [10-15]"
