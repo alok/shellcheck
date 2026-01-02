@@ -263,16 +263,20 @@ theorem empty_has_no_nodes : (empty : Gr α β).nodes.size = 0 := rfl
 theorem empty_has_no_edges : (empty : Gr α β).edges.size = 0 := rfl
 
 theorem mkGraph_preserves_nodes (ns : List (LNode α)) (es : List (LEdge β)) :
-    (mkGraph ns es).nodes.size = ns.length := sorry
+    (mkGraph ns es).nodes.size = ns.length := by
+  simp [mkGraph]
 
 theorem mkGraph_preserves_edges (ns : List (LNode α)) (es : List (LEdge β)) :
-    (mkGraph ns es).edges.size = es.length := sorry
+    (mkGraph ns es).edges.size = es.length := by
+  simp [mkGraph]
 
 theorem labNodes_length_eq_order (g : Gr α β) :
-    (labNodes g).length = order g := sorry
+    (labNodes g).length = order g := by
+  simp [labNodes, order]
 
 theorem labEdges_length_eq_size (g : Gr α β) :
-    (labEdges g).length = size g := sorry
+    (labEdges g).length = size g := by
+  simp [labEdges, size]
 
 theorem suc_empty_for_isolated (g : Gr α β) (n : Node) :
     (¬ g.successors.contains n) → suc g n = [] := sorry
