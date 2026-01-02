@@ -24,7 +24,20 @@ def runCase (c : CoverageCase) : Bool :=
   hasCode cr c.code
 
 def sc2xxxCases : List CoverageCase := [
+  { code := 2000, script := "echo $foo | wc -c" },
+  { code := 2002, script := "cat file | grep foo" },
+  { code := 2004, script := "echo $(( ${foo} + 1 ))" },
+  { code := 2005, script := "echo $(date)" },
+  { code := 2006, script := "echo `date`" },
+  { code := 2007, script := "echo $[1+2]" },
+  { code := 2009, script := "ps aux | grep foo" },
+  { code := 2010, script := "ls | grep foo" },
+  { code := 2011, script := "ls | xargs rm" },
+  { code := 2013, script := "for i in $(cat file); do echo $i; done" },
+  { code := 2015, script := "true && false || echo hi" },
   { code := 2016, script := "echo 'foo $bar'" },
+  { code := 2017, script := "echo $((a / b * c))" },
+  { code := 2028, script := "echo 'foo\\nbar'" },
   { code := 2037, script := "var=ls -l" },
   { code := 2078, script := "[ foo ]" },
   { code := 2086, script := "echo $foo" },

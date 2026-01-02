@@ -323,7 +323,16 @@ partial def collectDollarRefsArith (t : Token) : List TokenComment :=
 def checkArithmeticDeref (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_DollarArithmetic inner =>
-    collectDollarRefsArith inner
+    let direct := collectDollarRefsArith inner
+    if direct.isEmpty then
+      match getLiteralString inner with
+      | some s =>
+          if s.any (· == '$') then
+            [makeComment .styleC t.id 2004 "$/${} is unnecessary on arithmetic variables."]
+          else []
+      | Option.none => []
+    else
+      direct
   | _ => []
 
 /-- SC2080: Numbers with leading 0 are considered octal. -/
@@ -376,14 +385,19 @@ def checkBackticks (_params : Parameters) (t : Token) : List TokenComment :=
 
 /-- SC2007: Use $((..)) instead of deprecated $[..] -/
 def checkDollarBrackets (_params : Parameters) (t : Token) : List TokenComment :=
-  match getLiteralString t with
-  | .some s =>
-      if Regex.containsSubstring s "$[" then
-        [makeComment .styleC t.id 2007
-          "Use $((..)) instead of deprecated $[..]"]
-      else
-        []
-  | .none => []
+  match t.inner with
+  | .T_DollarBracket _ =>
+      [makeComment .styleC t.id 2007
+        "Use $((..)) instead of deprecated $[..]"]
+  | _ =>
+      match getLiteralString t with
+      | .some s =>
+          if Regex.containsSubstring s "$[" then
+            [makeComment .styleC t.id 2007
+              "Use $((..)) instead of deprecated $[..]"]
+          else
+            []
+      | .none => []
 
 /-- SC2034: Variable appears to be unused -/
 def checkUnusedAssignments (params : Parameters) (_t : Token) : List TokenComment :=
