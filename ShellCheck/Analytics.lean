@@ -974,8 +974,8 @@ def checkUuoc (_params : Parameters) (t : Token) : List TokenComment :=
       if isCommand cmd "cat" then
         match getCommandArgs cmd with
         | [word] =>
-          let str := getLiteralString word |>.getD ""
-          if not (str.startsWith "-") && not (willBecomeMultipleArgs word) then
+          let isOption := (onlyLiteralString word).startsWith "-"
+          if not (mayBecomeMultipleArgs word || isOption) then
             [makeComment .styleC word.id 2002
               "Useless cat. Consider 'cmd < file | ..' or 'cmd file | ..' instead."]
           else []

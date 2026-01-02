@@ -148,6 +148,34 @@ def test_sc2002_uuoc_cat_pipe : Except String Bool := do
   let cr := runCheck "cat foo | grep bar"
   pure (hasCode cr 2002)
 
+def test_sc2002_uuoc_glob_ok : Except String Bool := do
+  let cr := runCheck "cat * | grep bar"
+  pure (!hasCode cr 2002)
+
+def test_sc2002_uuoc_quoted_var : Except String Bool := do
+  let cr := runCheck "cat \"$var\" | grep bar"
+  pure (hasCode cr 2002)
+
+def test_sc2002_uuoc_unquoted_var_ok : Except String Bool := do
+  let cr := runCheck "cat $var | grep bar"
+  pure (!hasCode cr 2002)
+
+def test_sc2002_uuoc_indirect_var_ok : Except String Bool := do
+  let cr := runCheck "cat \"${!var}\" | grep bar"
+  pure (!hasCode cr 2002)
+
+def test_sc2002_uuoc_unpiped_ok : Except String Bool := do
+  let cr := runCheck "cat $var"
+  pure (!hasCode cr 2002)
+
+def test_sc2002_uuoc_at_ok : Except String Bool := do
+  let cr := runCheck "cat \"$@\""
+  pure (!hasCode cr 2002)
+
+def test_sc2002_uuoc_flag_ok : Except String Bool := do
+  let cr := runCheck "cat -n | grep bar"
+  pure (!hasCode cr 2002)
+
 def test_sc2009_ps_grep : Except String Bool := do
   let cr := runCheck "ps aux | grep foo"
   pure (hasCode cr 2009)

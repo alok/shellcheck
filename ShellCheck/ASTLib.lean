@@ -312,6 +312,9 @@ partial def isArrayExpansion (t : Token) : Bool :=
 partial def mayBecomeMultipleArgs (t : Token) : Bool :=
   willBecomeMultipleArgs t || go false t
 where
+  globCharLike (c : Char) : Bool :=
+    c == '*' || c == '?' || c == '[' || c == ']'
+
   go (quoted : Bool) (tok : Token) : Bool :=
     if isArrayExpansion tok then
       true
@@ -321,10 +324,13 @@ where
           let s := String.join (oversimplify content)
           let hasBang := s.toList.any (· == '!')
           (!quoted) || hasBang || s.startsWith "!"
+      | .T_DollarExpansion .. => !quoted
+      | .T_Backticked .. => !quoted
       | .T_DoubleQuoted parts => parts.any (go true)
       | .T_DollarDoubleQuoted parts => parts.any (go true)
       | .T_NormalWord parts => parts.any (go quoted)
       | .T_Annotation _ inner => go quoted inner
+      | .T_Literal s => (!quoted) && s.any globCharLike
       | _ => false
 
 /-- Is this a command substitution? -/

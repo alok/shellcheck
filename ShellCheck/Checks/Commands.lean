@@ -380,10 +380,13 @@ def checkUselessCatPipeline : PipelineCheck := fun t =>
       match getCommandBasename first with
       | some "cat" =>
         match getCommandArguments first with
-        | some [_singleFile] =>
-          -- cat with single file piped to something
-          [makeComment .styleC first.id 2002
-            "Useless cat. Consider 'cmd < file' or 'cmd file' instead."]
+        | some [singleFile] =>
+          let isOption := (onlyLiteralString singleFile).startsWith "-"
+          if mayBecomeMultipleArgs singleFile || isOption then
+            []
+          else
+            [makeComment .styleC first.id 2002
+              "Useless cat. Consider 'cmd < file' or 'cmd file' instead."]
         | _ => []
       | _ => []
     | _ => []
