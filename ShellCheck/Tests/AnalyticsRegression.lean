@@ -144,6 +144,38 @@ def test_sc2005_useless_echo_redir_only_ok : Except String Bool := do
   let cr := runCheck "echo \"$(<file)\""
   pure (!hasCode cr 2005)
 
+def test_sc2002_uuoc_cat_pipe : Except String Bool := do
+  let cr := runCheck "cat foo | grep bar"
+  pure (hasCode cr 2002)
+
+def test_sc2009_ps_grep : Except String Bool := do
+  let cr := runCheck "ps aux | grep foo"
+  pure (hasCode cr 2009)
+
+def test_sc2010_ls_grep : Except String Bool := do
+  let cr := runCheck "ls | grep foo"
+  pure (hasCode cr 2010)
+
+def test_sc2011_ls_xargs : Except String Bool := do
+  let cr := runCheck "ls | xargs rm"
+  pure (hasCode cr 2011)
+
+def test_sc2038_find_xargs_missing_null : Except String Bool := do
+  let cr := runCheck "find . | xargs foo"
+  pure (hasCode cr 2038)
+
+def test_sc2038_find_xargs_null_ok : Except String Bool := do
+  let cr := runCheck "find . -print0 | xargs -0 foo"
+  pure (!hasCode cr 2038)
+
+def test_sc2126_grep_wc : Except String Bool := do
+  let cr := runCheck "grep foo file | wc -l"
+  pure (hasCode cr 2126)
+
+def test_sc2126_grep_wc_ok : Except String Bool := do
+  let cr := runCheck "grep -c foo file"
+  pure (!hasCode cr 2126)
+
 def test_sc2018_tr_lower_class : Except String Bool := do
   let cr := runCheck "tr a-z A-Z"
   pure (hasCode cr 2018)

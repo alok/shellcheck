@@ -1026,27 +1026,39 @@ def checkFindXargs (_params : Parameters) (t : Token) : List TokenComment :=
 def checkGrepWc (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_Pipeline _ cmds =>
-    let cmdNames := cmds.filterMap fun c => getCommandBasename c
-    if hasGrepWc cmdNames then
-      let allArgs := cmds.flatMap oversimplify
-      -- Skip if grep has -o, -l, -L, -r, -R, -A, -B, or wc has -c, -m, -w
-      if not (allArgs.any fun s => s ∈ ["-o", "--only-matching", "-l", "-L",
-              "-r", "-R", "--recursive", "-A", "-B", "--after-context", "--before-context",
-              "-c", "--count", "-m", "-w", "--words"]) then
-        cmds.filterMap fun c =>
-          if getCommandBasename c == some "grep" then
-            some (makeComment .styleC c.id 2126
-              "Consider using 'grep -c' instead of 'grep|wc -l'.")
-          else none
-      else []
-    else []
+    match findGrepWc cmds with
+    | some (grepTok, wcTok) =>
+      let grepFlags := (getAllFlags grepTok).map (·.2)
+      let wcFlags := (getAllFlags wcTok).map (·.2)
+      let grepSkip := grepFlags.any (fun f =>
+        f ∈ ["l", "files-with-matches", "L", "files-without-matches",
+             "o", "only-matching", "r", "R", "recursive",
+             "A", "after-context", "B", "before-context"])
+      let wcSkip := wcFlags.any (fun f =>
+        f ∈ ["m", "chars", "w", "words", "c", "bytes", "L", "max-line-length"])
+      if grepSkip || wcSkip || wcFlags.isEmpty then
+        []
+      else
+        [makeComment .styleC grepTok.id 2126
+          "Consider using 'grep -c' instead of 'grep|wc -l'."]
+    | Option.none => []
   | _ => []
 where
-  hasGrepWc (names : List String) : Bool :=
-    match names with
-    | "grep" :: rest => rest.any (· == "wc")
-    | _ :: rest => hasGrepWc rest
-    | [] => false
+  findGrepWc (cmds : List Token) : Option (Token × Token) :=
+    let rec go (seenGrep : Option Token) : List Token → Option (Token × Token)
+      | [] => Option.none
+      | c :: rest =>
+        match getCommandBasename c with
+        | some "grep" =>
+            match seenGrep with
+            | some g => go (some g) rest
+            | Option.none => go (some c) rest
+        | some "wc" =>
+            match seenGrep with
+            | some g => some (g, c)
+            | Option.none => go Option.none rest
+        | _ => go seenGrep rest
+    go Option.none cmds
 
 /-- Helper for SC2096 -/
 partial def checkShebangParametersImpl (t : Token) : List TokenComment :=
