@@ -47,6 +47,19 @@ def runCase (c : CoverageCase) : Bool :=
     | some sh, true => runCheckWithShellExtended sh c.script
   hasCode cr c.code
 
+def sc1xxxCases : List CoverageCase := [
+  mkCase 1005 "echo $((1+2)",
+  mkCase 1072 "echo 'foo",
+  mkCase 1082 "\u{FEFF}echo hi",
+  mkCase 1017 "echo hi\r\n",
+  mkCase 1018 "echo\u{00A0}hi",
+  mkCase 1100 "echo \u{2013}n hi",
+  mkCase 1110 "echo \u{201C}hi\u{201D}"
+]
+
+def sc1xxxFailures : List CoverageCase :=
+  sc1xxxCases.filter (fun c => !runCase c)
+
 def sc2xxxCases : List CoverageCase := [
   mkCase 2000 "echo $foo | wc -c",
   mkCase 2002 "cat file | grep foo",
@@ -178,11 +191,22 @@ def sc3xxxCases : List CoverageCase := [
 def sc3xxxFailures : List CoverageCase :=
   sc3xxxCases.filter (fun c => !runCase c)
 
+abbrev prop_sc1xxx_coverage : Prop :=
+  sc1xxxFailures.isEmpty = true
+
 abbrev prop_sc2xxx_coverage : Prop :=
   sc2xxxFailures.isEmpty = true
 
 abbrev prop_sc3xxx_coverage : Prop :=
   sc3xxxFailures.isEmpty = true
+
+def test_sc1xxx_coverage : Except String Bool := do
+  let failures := sc1xxxFailures
+  if failures.isEmpty then
+    pure true
+  else
+    let codes := failures.map (fun c => toString c.code)
+    .error s!"Missing SC1xxx coverage: {String.intercalate ", " codes}"
 
 def test_sc2xxx_coverage : Except String Bool := do
   let failures := sc2xxxFailures

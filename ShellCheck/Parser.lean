@@ -16,6 +16,7 @@ import ShellCheck.Parser.Word
 import ShellCheck.Parser.Arithmetic
 import ShellCheck.Parser.Condition
 import ShellCheck.Parser.Parsec
+import ShellCheck.Parser.Diagnostics
 import ShellCheck.Checks.ParserErrors
 
 namespace ShellCheck.Parser
@@ -2393,6 +2394,74 @@ def inferSCCode (msg : String) : Nat × Severity :=
   -- Default
   else (0, .errorC)
 
+private structure ScanIssue where
+  line : Nat
+  col : Nat
+  code : Nat
+  deriving Repr
+
+private def mkParserComment (filename : String) (issue : ScanIssue) : PositionedComment :=
+  let pos : Position := { posFile := filename, posLine := issue.line, posColumn := issue.col }
+  let comment :=
+    match ShellCheck.Checks.ParserErrors.lookup issue.code with
+    | some pe => { cSeverity := pe.severity, cCode := pe.code, cMessage := pe.message }
+    | none => { cSeverity := .errorC, cCode := issue.code, cMessage := s!"SC{issue.code}" }
+  { pcStartPos := pos, pcEndPos := pos, pcComment := comment, pcFix := none }
+
+private def scanScriptDiagnostics (script : String) (filename : String) : List PositionedComment :=
+  let chars := script.toList
+  let rec skipSpaces : List Char → (Nat × List Char)
+    | [] => (0, [])
+    | c :: rest =>
+        if c == ' ' || c == '\t' then
+          let (n, tail) := skipSpaces rest
+          (n + 1, tail)
+        else
+          (0, c :: rest)
+  let rec go (cs : List Char) (line col idx : Nat) (acc : List ScanIssue) : List ScanIssue :=
+    match cs with
+    | [] => acc.reverse
+    | c :: rest =>
+        let isBom := idx == 0 && (c.toNat == 0xFEFF || c.toNat == 0xFFFE)
+        let acc :=
+          if isBom then
+            { line := line, col := col, code := 1082 } :: acc
+          else acc
+        let acc :=
+          if c == '\r' then
+            { line := line, col := col, code := 1017 } :: acc
+          else acc
+        let acc :=
+          if !isBom && ShellCheck.Parser.Diagnostics.isNonBreakingSpace c then
+            { line := line, col := col, code := 1018 } :: acc
+          else acc
+        let acc :=
+          if ShellCheck.Parser.Diagnostics.isSmartQuote c then
+            { line := line, col := col, code := 1110 } :: acc
+          else acc
+        let acc :=
+          if ShellCheck.Parser.Diagnostics.isSmartDash c then
+            { line := line, col := col, code := 1100 } :: acc
+          else acc
+        let acc :=
+          if c == '\\' then
+            let (nSpaces, tail) := skipSpaces rest
+            match tail with
+            | '\n' :: _ =>
+                if nSpaces > 0 then
+                  { line := line, col := col, code := 1101 } :: acc
+                else acc
+            | _ => acc
+          else acc
+        let (line', col') :=
+          if c == '\n' then
+            (line + 1, 1)
+          else
+            (line, col + 1)
+        go rest line' col' (idx + 1) acc
+  let issues := go chars 1 1 0 []
+  issues.map (mkParserComment filename)
+
 /-- Enhanced parseScript using parser -/
 def parseScript [Monad m] (_sys : SystemInterface m) (spec : ParseSpec) : m ParseResult := do
   let (root, positions, errors) := runParser spec.psScript spec.psFilename
@@ -2415,8 +2484,14 @@ def parseScript [Monad m] (_sys : SystemInterface m) (spec : ParseSpec) : m Pars
               mkAt spec.psFilename 1 1 msg
       | _ =>
           mkAt spec.psFilename 1 1 msg
+  let scanErrors := scanScriptDiagnostics spec.psScript spec.psFilename
+  let scanFiltered :=
+    scanErrors.filter fun sc =>
+      !parseErrors.any (fun pe =>
+        pe.pcComment.cCode == sc.pcComment.cCode &&
+          pe.pcStartPos == sc.pcStartPos)
   pure {
-    prComments := parseErrors
+    prComments := parseErrors ++ scanFiltered
     prTokenPositions := positions
     prRoot := root
   }

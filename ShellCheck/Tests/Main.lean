@@ -90,6 +90,7 @@ def propCases : List PropCase := [
   { name := "double-quoted $ expands", prop := prop_double_quoted_dollar_expands },
   { name := "single-quoted $ is literal", prop := prop_single_quoted_dollar_literal },
   { name := "escaped $ is literal", prop := prop_escaped_dollar_literal },
+  { name := "SC1xxx coverage cases", prop := prop_sc1xxx_coverage },
   { name := "SC2xxx coverage cases", prop := prop_sc2xxx_coverage },
   { name := "SC3xxx coverage cases", prop := prop_sc3xxx_coverage }
 ]
@@ -180,6 +181,7 @@ def regressionCases : List RegressionCase := [
   { name := "SC3059: case modification (busybox)", test := test_sc3059_case_modification_busybox },
   { name := "SC3060: string replacement (dash)", test := test_sc3060_string_replacement_dash },
   { name := "SC3060: string replacement (busybox ok)", test := test_sc3060_string_replacement_busybox_ok },
+  { name := "SC1xxx coverage cases", test := test_sc1xxx_coverage },
   { name := "SC2xxx coverage cases", test := test_sc2xxx_coverage },
   { name := "SC3xxx coverage cases", test := test_sc3xxx_coverage }
 ]
