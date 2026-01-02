@@ -1519,7 +1519,8 @@ theorem isCountingReference_hash_prefix :
     True := trivial
 
 theorem getVariablesFromLiteral_simple :
-    getVariablesFromLiteral "$foo" = ["foo"] := sorry
+    getVariablesFromLiteral "$foo" = ["foo"] := by
+  decide
 
 theorem findFirst_stops_on_true :
     True := trivial

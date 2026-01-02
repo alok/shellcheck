@@ -11,6 +11,7 @@
 -/
 
 import Std.Data.HashMap
+import Std.Data.HashMap.Lemmas
 
 namespace ShellCheck.Graph
 
@@ -279,10 +280,24 @@ theorem labEdges_length_eq_size (g : Gr α β) :
   simp [labEdges, size]
 
 theorem suc_empty_for_isolated (g : Gr α β) (n : Node) :
-    (¬ g.successors.contains n) → suc g n = [] := sorry
+    (¬ g.successors.contains n) → suc g n = [] := by
+  intro h
+  have hfalse : g.successors.contains n = false :=
+    (Bool.eq_false_iff).2 h
+  have hget : g.successors[n]? = none := by
+    simpa using
+      (Std.HashMap.getElem?_eq_none_of_contains_eq_false (m := g.successors) (a := n) hfalse)
+  simp [suc, hget]
 
 theorem pre_empty_for_source (g : Gr α β) (n : Node) :
-    (¬ g.predecessors.contains n) → pre g n = [] := sorry
+    (¬ g.predecessors.contains n) → pre g n = [] := by
+  intro h
+  have hfalse : g.predecessors.contains n = false :=
+    (Bool.eq_false_iff).2 h
+  have hget : g.predecessors[n]? = none := by
+    simpa using
+      (Std.HashMap.getElem?_eq_none_of_contains_eq_false (m := g.predecessors) (a := n) hfalse)
+  simp [pre, hget]
 
 theorem dfs_includes_start (g : Gr α β) (start : Node) :
     hasNode g start → start ∈ dfs g start := sorry
