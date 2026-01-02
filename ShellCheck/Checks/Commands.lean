@@ -3811,7 +3811,6 @@ def commandChecks : List CommandCheck := [
   checkFindXargs,       -- SC2038
   checkPosixFeatures,   -- SC2039
   checkCoproc,          -- SC3032
-  checkLsIteration,     -- SC2045
   checkArrayExpansion,  -- SC2068
   checkDeclareAssignWithSub, -- SC2155 (local, export, declare, readonly, typeset)
   checkSingleQuoteExpression, -- SC2016

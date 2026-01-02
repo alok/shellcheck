@@ -76,6 +76,9 @@ def runCheckWithShellExtended (shell : Shell) (script : String) : CheckResult :=
 def hasCode (cr : CheckResult) (code : Int) : Bool :=
   cr.crComments.any (fun c => c.pcComment.cCode == code)
 
+def lacksCodes (cr : CheckResult) (codes : List Int) : Bool :=
+  codes.all (fun code => !hasCode cr code)
+
 def findComment (cr : CheckResult) (code : Int) : Option PositionedComment :=
   cr.crComments.find? (fun c => c.pcComment.cCode == code)
 
@@ -212,6 +215,26 @@ def test_sc2012_ls_pipe_N_ok : Except String Bool := do
   let cr := runCheck "ls -N | foo"
   pure (!hasCode cr 2012)
 
+def test_sc2013_for_in_cat_subst : Except String Bool := do
+  let cr := runCheck "for f in $(cat foo); do stuff; done"
+  pure (hasCode cr 2013)
+
+def test_sc2013_for_in_cat_backticks : Except String Bool := do
+  let cr := runCheck "for f in `cat foo`; do stuff; done"
+  pure (hasCode cr 2013)
+
+def test_sc2013_for_in_cat_pipe_warn : Except String Bool := do
+  let cr := runCheck "for f in $(cat foo | grep lol); do stuff; done"
+  pure (hasCode cr 2013)
+
+def test_sc2013_for_in_cat_pipe_backticks_warn : Except String Bool := do
+  let cr := runCheck "for f in `cat foo | grep lol`; do stuff; done"
+  pure (hasCode cr 2013)
+
+def test_sc2013_for_in_cat_pipe_wc_ok : Except String Bool := do
+  let cr := runCheck "for f in $(cat foo | grep bar | wc -l); do stuff; done"
+  pure (!hasCode cr 2013)
+
 def test_sc2036_assign_pipeline_warn : Except String Bool := do
   let cr := runCheck "A=ls | grep foo"
   pure (hasCode cr 2036)
@@ -263,6 +286,66 @@ def test_sc2038_find_xargs_null_ok : Except String Bool := do
 def test_sc2038_find_xargs_printf_ok : Except String Bool := do
   let cr := runCheck "find . -printf '%s\\n' | xargs foo"
   pure (!hasCode cr 2038)
+
+def test_sc2066_for_in_quoted_subst : Except String Bool := do
+  let cr := runCheck "for f in \"$(ls)\"; do echo foo; done"
+  pure (hasCode cr 2066)
+
+def test_sc2066_for_in_dollar_at_ok : Except String Bool := do
+  let cr := runCheck "for f in \"$@\"; do echo foo; done"
+  pure (lacksCodes cr [2041, 2042, 2043, 2066, 2258])
+
+def test_sc2043_for_in_glob_ok : Except String Bool := do
+  let cr := runCheck "for f in *.mp3; do echo foo; done"
+  pure (lacksCodes cr [2041, 2042, 2043, 2066, 2258])
+
+def test_sc2066_for_in_quoted_glob : Except String Bool := do
+  let cr := runCheck "for f in \"*.mp3\"; do echo foo; done"
+  pure (hasCode cr 2066)
+
+def test_sc2041_for_in_single_quoted_literal : Except String Bool := do
+  let cr := runCheck "for f in 'find /'; do true; done"
+  pure (hasCode cr 2041)
+
+def test_sc2042_for_in_commas : Except String Bool := do
+  let cr := runCheck "for f in 1,2,3; do true; done"
+  pure (hasCode cr 2042)
+
+def test_sc2043_for_in_brace_ok : Except String Bool := do
+  let cr := runCheck "for f in foo{1,2,3}; do true; done"
+  pure (lacksCodes cr [2041, 2042, 2043, 2066, 2258])
+
+def test_sc2043_for_in_single_word_once : Except String Bool := do
+  let cr := runCheck "for f in ls; do true; done"
+  pure (hasCode cr 2043)
+
+def test_sc2043_for_in_indirect_ok : Except String Bool := do
+  let cr := runCheck "for f in \"${!arr}\"; do true; done"
+  pure (lacksCodes cr [2041, 2042, 2043, 2066, 2258])
+
+def test_sc2258_for_in_trailing_comma : Except String Bool := do
+  let cr := runCheck "for f in ls, grep, mv; do true; done"
+  pure (hasCode cr 2258)
+
+def test_sc2258_for_in_trailing_comma_quoted : Except String Bool := do
+  let cr := runCheck "for f in 'ls', 'grep', 'mv'; do true; done"
+  pure (hasCode cr 2258)
+
+def test_sc2258_for_in_comma_inside_quotes_ok : Except String Bool := do
+  let cr := runCheck "for f in 'ls,' 'grep,' 'mv'; do true; done"
+  pure (lacksCodes cr [2041, 2042, 2043, 2066, 2258])
+
+def test_sc2045_for_in_ls_subst : Except String Bool := do
+  let cr := runCheck "for f in $(ls *.mp3); do mplayer \"$f\"; done"
+  pure (hasCode cr 2045)
+
+def test_sc2045_for_in_ls_backticks : Except String Bool := do
+  let cr := runCheck "for f in `ls *.mp3`; do mplayer \"$f\"; done"
+  pure (hasCode cr 2045)
+
+def test_sc2044_for_in_find_backticks : Except String Bool := do
+  let cr := runCheck "for f in `find / -name '*.mp3'`; do mplayer \"$f\"; done"
+  pure (hasCode cr 2044)
 
 def test_sc2126_grep_wc : Except String Bool := do
   let cr := runCheck "grep foo file | wc -l"

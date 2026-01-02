@@ -245,16 +245,29 @@ where
             "This loop will only ever run once. Bad quoting or missing glob/expansion?"]
         else []
 
-/-- SC2012: Use find instead of ls to better handle non-alphanumeric filenames -/
+/-- SC2044/SC2045: For loops over find/ls output are fragile. -/
 def checkForInLs (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_ForIn _ words _ =>
-    words.filterMap fun word =>
-      if getLiteralString word == some "ls" then
-        some (makeComment .warningC word.id 2012
-          "Use find instead of ls to better handle non-alphanumeric filenames.")
-      else none
+  | .T_ForIn _ [word] _ =>
+      match word.inner with
+      | .T_NormalWord [part] =>
+          match part.inner with
+          | .T_DollarExpansion [cmd] => check part.id cmd
+          | .T_Backticked [cmd] => check part.id cmd
+          | _ => []
+      | _ => []
   | _ => []
+where
+  check (id : Id) (cmd : Token) : List TokenComment :=
+    match oversimplify cmd with
+    | "ls" :: rest =>
+        let hasFlag := rest.any (fun arg => arg.startsWith "-")
+        let severity := if hasFlag then .warningC else .errorC
+        [makeComment severity id 2045 "Iterating over ls output is fragile. Use globs."]
+    | "find" :: _ =>
+        [makeComment .warningC id 2044
+          "For loops over find output are fragile. Use find -exec or a while read loop."]
+    | _ => []
 
 /-- SC2231: Quote expansions in for-loop globs (e.g. `"$dir"/*.txt`). -/
 def checkForLoopGlobVariables (_params : Parameters) (t : Token) : List TokenComment :=
@@ -1680,27 +1693,36 @@ where
 /-- SC2013: To read lines rather than words, pipe/redirect to a 'while read' loop -/
 def checkForInCat (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_ForIn _ words _ =>
-    words.flatMap fun word =>
+  | .T_ForIn _ [word] _ =>
       match word.inner with
       | .T_NormalWord parts =>
-        parts.flatMap fun part =>
-          match part.inner with
-          | .T_DollarExpansion cmds =>
-            cmds.flatMap fun cmd =>
-              if getCommandBasename cmd == some "cat" then
-                [makeComment .warningC part.id 2013
-                  "To read lines rather than words, pipe/redirect to a 'while read' loop."]
-              else []
-          | .T_Backticked cmds =>
-            cmds.flatMap fun cmd =>
-              if getCommandBasename cmd == some "cat" then
-                [makeComment .warningC part.id 2013
-                  "To read lines rather than words, pipe/redirect to a 'while read' loop."]
-              else []
-          | _ => []
+          parts.flatMap fun part =>
+            match part.inner with
+            | .T_DollarExpansion cmds => checkExpansion part.id cmds
+            | .T_Backticked cmds => checkExpansion part.id cmds
+            | _ => []
       | _ => []
   | _ => []
+where
+  isLineBased (cmd : Token) : Bool :=
+    ["grep", "fgrep", "egrep", "sed", "cat", "awk", "cut", "sort"].any fun name =>
+      isCommand cmd name
+
+  checkExpansion (id : Id) (cmds : List Token) : List TokenComment :=
+    match cmds with
+    | [cmd] =>
+        match cmd.inner with
+        | .T_Pipeline _ pipelineCmds =>
+            if pipelineCmds.all isLineBased then
+              [makeComment .infoC id 2013
+                "To read lines rather than words, pipe/redirect to a 'while read' loop."]
+            else []
+        | _ =>
+            if isLineBased cmd then
+              [makeComment .infoC id 2013
+                "To read lines rather than words, pipe/redirect to a 'while read' loop."]
+            else []
+    | _ => []
 
 /-- SC2048: Use "$@" (with quotes) to prevent whitespace problems -/
 def checkDollarStar (params : Parameters) (t : Token) : List TokenComment :=
@@ -4720,29 +4742,6 @@ where
     Regex.containsSubstring s "$" ||
     Regex.containsSubstring s "`"
 
-/-- SC2044: For loops over find output are fragile -/
-def checkForInFind (_params : Parameters) (t : Token) : List TokenComment :=
-  match t.inner with
-  | .T_ForIn _ words _ =>
-    words.head?.bind (fun w =>
-      match w.inner with
-      | .T_NormalWord [sub] =>
-        match sub.inner with
-        | .T_DollarExpansion cmds =>
-          if cmds.any (fun c => getCommandBasename c == some "find") then
-            some [makeComment .warningC t.id 2044
-              "For loops over find output are fragile. Use find -exec or while read."]
-          else Option.none
-        | .T_Backticked cmds =>
-          if cmds.any (fun c => getCommandBasename c == some "find") then
-            some [makeComment .warningC t.id 2044
-              "For loops over find output are fragile. Use find -exec or while read."]
-          else Option.none
-        | _ => Option.none
-      | _ => Option.none
-    ) |>.getD []
-  | _ => []
-
 /-- SC2064: Use single quotes for trap to avoid immediate expansion -/
 def checkTrapExpansion (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
@@ -5958,7 +5957,6 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkPrintfFormat,
   checkLsFind,
   checkSingleQuotedVariable,
-  checkForInFind,
   checkTrapExpansion,
   checkArithmeticDecimals,
   checkDoubleBracketOrOperator,
