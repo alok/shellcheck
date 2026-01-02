@@ -391,8 +391,6 @@ def checkUselessCatPipeline : PipelineCheck := fun t =>
 
 /-- All pipeline-level checks -/
 def pipelineChecks : List PipelineCheck := [
-  checkLsGrepPipeline,
-  checkPsGrepPipeline,
   checkUselessCatPipeline
 ]
 
@@ -1548,16 +1546,16 @@ def checkFindXargs : CommandCheck := {
             | some "xargs" => true
             | _ => false
           if hasXargs then
-            match getCommandArguments t with
-            | some args =>
-              let argStrs := args.map (getLiteralString · |>.getD "")
-              let hasPrint0 := argStrs.any (· == "-print0")
-              let hasExecPlus := argStrs.any (· == "+")
-              if !hasPrint0 && !hasExecPlus then
-                [makeComment .warningC t.id 2038
-                  "Use -print0 with -0, or -exec + to handle filenames with spaces."]
-              else []
-            | Option.none => []
+            let allArgs := cmds.flatMap oversimplify
+            let hasNull := allArgs.any (· == "-print0") ||
+              allArgs.any (· == "-0") ||
+              allArgs.any (· == "--null") ||
+              allArgs.any fun s => s.endsWith "printf"
+            if hasNull then
+              []
+            else
+              [makeComment .warningC t.id 2038
+                "Use -print0 with -0, or -exec + to handle filenames with spaces."]
           else []
         else []
       | _ => []
@@ -3751,8 +3749,6 @@ set_option maxRecDepth 2048
 
 /-- All command checks -/
 def commandChecks : List CommandCheck := [
-  checkLsGrep,
-  checkLsFind,
   checkForInCat,
   checkTr,
   checkFindNameGlob,

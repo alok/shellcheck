@@ -30,6 +30,7 @@ open ShellCheck.Checks.RuleDSL
 open ShellCheck.Data
 open ShellCheck.Interface
 open ShellCheck.Parser
+open ShellCheck.Prelude
 open ShellCheck.Regex
 
 /-!
@@ -3401,25 +3402,124 @@ where
       | .T_Backticked .. => true
       | _ => false
 
-/-- SC2038: Use -print0 with find | xargs to handle special filenames -/
+/-- SC2009/SC2010/SC2011/SC2012/SC2038/SC2126: Pipeline pitfalls. -/
 def checkPipePitfalls (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_Pipeline _ cmds =>
-    match cmds with
-    | [findCmd, xargsCmd] =>
-      let findName := getCommandBasename findCmd
-      let xargsName := getCommandBasename xargsCmd
-      if findName == some "find" && xargsName == some "xargs" then
-        let hasNull := hasParameter findCmd "-print0" ||
-                       hasParameter findCmd "printf" ||
-                       hasParameter xargsCmd "-0" ||
-                       hasParameter xargsCmd "null"
-        if hasNull then [] else
-          [makeComment .warningC t.id 2038
-            "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."]
-      else []
-    | _ => []
+  | .T_Pipeline _ commands =>
+    let names := commands.map (fun c => headOrDefault "" (oversimplify c))
+    let forPattern (pattern : List String) (f : List Token → List TokenComment) :
+        (List TokenComment × Bool) :=
+      let indices := indexOfSublists pattern names
+      let comments := indices.foldl (fun acc n =>
+        acc ++ f ((commands.drop n).take pattern.length)
+      ) []
+      (comments, !indices.isEmpty)
+    let forFirst (pattern : List String) (f : Token → List TokenComment) :
+        (List TokenComment × Bool) :=
+      forPattern pattern fun slice =>
+        match slice with
+        | cmd :: _ => f (getCommandTokenOrThis cmd)
+        | _ => []
+
+    let (findComments, _didFind) :=
+      forPattern ["find", "xargs"] fun slice =>
+        match slice with
+        | findCmd :: xargsCmd :: _ =>
+          let args := oversimplify xargsCmd ++ oversimplify findCmd
+          if hasShortParameter '0' args ||
+             hasParameter "null" args ||
+             hasParameter "print0" args ||
+             hasParameter "printf" args then
+            []
+          else
+            let target := getCommandTokenOrThis findCmd
+            [makeComment .warningC target.id 2038
+              "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."]
+        | _ => []
+
+    let (psComments, _didPs) :=
+      forPattern ["ps", "grep"] fun slice =>
+        match slice with
+        | psCmd :: _ :: _ =>
+          let psFlags := (getAllFlags psCmd).map (·.2)
+          if psFlags.any (fun f => f ∈ ["p", "pid", "q", "quick-pid"]) then
+            []
+          else
+            let target := getCommandTokenOrThis psCmd
+            [makeComment .infoC target.id 2009
+              "Consider using pgrep instead of grepping ps output."]
+        | _ => []
+
+    let (grepWcComments, _didGrepWc) :=
+      forPattern ["grep", "wc"] fun slice =>
+        match slice with
+        | grepCmd :: wcCmd :: _ =>
+          let flagsGrep := (getAllFlags grepCmd).map (·.2)
+          let flagsWc := (getAllFlags wcCmd).map (·.2)
+          let grepSkip := flagsGrep.any (fun f =>
+            f ∈ ["l", "files-with-matches", "L", "files-without-matches",
+                 "o", "only-matching", "r", "R", "recursive",
+                 "A", "after-context", "B", "before-context"])
+          let wcSkip := flagsWc.any (fun f =>
+            f ∈ ["m", "chars", "w", "words", "c", "bytes", "L", "max-line-length"])
+          if grepSkip || wcSkip || flagsWc.isEmpty then
+            []
+          else
+            let target := getCommandTokenOrThis grepCmd
+            [makeComment .styleC target.id 2126
+              "Consider using 'grep -c' instead of 'grep|wc -l'."]
+        | _ => []
+
+    let (lsGrepComments, didLsGrep) :=
+      forFirst ["ls", "grep"] fun cmd =>
+        [makeComment .warningC cmd.id 2010
+          "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames."]
+
+    let (lsXargsComments, didLsXargs) :=
+      forFirst ["ls", "xargs"] fun cmd =>
+        [makeComment .warningC cmd.id 2011
+          "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."]
+
+    let didLs := didLsGrep || didLsXargs
+    let (lsPipeComments, _didLsPipe) :=
+      if didLs then ([], false) else
+      forPattern ["ls", "?"] fun slice =>
+        match slice with
+        | lsCmd :: _ =>
+          let args := oversimplify lsCmd
+          if hasShortParameter 'N' args then
+            []
+          else
+            let target := getCommandTokenOrThis lsCmd
+            [makeComment .infoC target.id 2012
+              "Use find instead of ls to better handle non-alphanumeric filenames."]
+        | _ => []
+
+    findComments ++ psComments ++ grepWcComments ++ lsGrepComments ++ lsXargsComments ++ lsPipeComments
   | _ => []
+where
+  matchPattern : List String → List String → Bool
+    | [], _ => true
+    | "?" :: ps, _ :: ns => matchPattern ps ns
+    | p :: ps, n :: ns =>
+        if p == n then matchPattern ps ns else false
+    | _, _ => false
+
+  indexOfSublists (sub : List String) (names : List String) : List Nat :=
+    let rec go (n : Nat) : List String → List Nat
+      | [] => []
+      | rest@(_ :: tail) =>
+          let others := go (n + 1) tail
+          if matchPattern sub rest then n :: others else others
+    go 0 names
+
+  hasShortParameter (c : Char) (args : List String) : Bool :=
+    args.any fun s =>
+      s.startsWith "-" && s.toList.any (· == c)
+
+  hasParameter (param : String) (args : List String) : Bool :=
+    args.any fun s =>
+      (s.dropWhile (· == '-')).startsWith param
 
 /-- SC2259/SC2260/SC2261: Redirections overriding pipeline input/output. -/
 def checkPipelineRedirections (_params : Parameters) (t : Token) : List TokenComment :=
@@ -5737,15 +5837,10 @@ def nodeChecks : List (Parameters → Token → List TokenComment) := [
   checkArithmeticOpCommand,
   checkWrongArithmeticAssignment,
   checkUuoc,
-  -- checkPsGrep, -- SC2009 - handled by Commands.checkPsGrepPipeline
-  -- checkLsGrep, -- SC2010 - handled by Commands.checkLsGrepPipeline
-  checkLsXargs,
-  checkFindXargs,
   checkFindExec,
   checkPipePitfalls,
   checkPipelineRedirections,
   checkRedirectedNowhere,
-  checkGrepWc,
   -- checkReadWithoutR, -- SC2162 - handled by Commands.checkReadWithoutR
   checkMultipleRedirectsImpl,
   checkGlobAsCommand,

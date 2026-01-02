@@ -152,6 +152,10 @@ def test_sc2009_ps_grep : Except String Bool := do
   let cr := runCheck "ps aux | grep foo"
   pure (hasCode cr 2009)
 
+def test_sc2009_ps_grep_pid_ok : Except String Bool := do
+  let cr := runCheck "ps -p 123 | grep foo"
+  pure (!hasCode cr 2009)
+
 def test_sc2010_ls_grep : Except String Bool := do
   let cr := runCheck "ls | grep foo"
   pure (hasCode cr 2010)
@@ -159,6 +163,14 @@ def test_sc2010_ls_grep : Except String Bool := do
 def test_sc2011_ls_xargs : Except String Bool := do
   let cr := runCheck "ls | xargs rm"
   pure (hasCode cr 2011)
+
+def test_sc2011_find_xargs_ok : Except String Bool := do
+  let cr := runCheck "find . -print0 | xargs -0 rm"
+  pure (!hasCode cr 2011)
+
+def test_sc2012_ls_pipe_other : Except String Bool := do
+  let cr := runCheck "ls | cat"
+  pure (hasCode cr 2012)
 
 def test_sc2038_find_xargs_missing_null : Except String Bool := do
   let cr := runCheck "find . | xargs foo"
@@ -168,9 +180,21 @@ def test_sc2038_find_xargs_null_ok : Except String Bool := do
   let cr := runCheck "find . -print0 | xargs -0 foo"
   pure (!hasCode cr 2038)
 
+def test_sc2038_find_xargs_printf_ok : Except String Bool := do
+  let cr := runCheck "find . -printf '%s\\n' | xargs foo"
+  pure (!hasCode cr 2038)
+
 def test_sc2126_grep_wc : Except String Bool := do
   let cr := runCheck "grep foo file | wc -l"
   pure (hasCode cr 2126)
+
+def test_sc2126_grep_wc_non_adjacent_ok : Except String Bool := do
+  let cr := runCheck "grep foo file | sort | wc -l"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_grep_o_ok : Except String Bool := do
+  let cr := runCheck "grep -o foo file | wc -l"
+  pure (!hasCode cr 2126)
 
 def test_sc2126_grep_wc_ok : Except String Bool := do
   let cr := runCheck "grep -c foo file"
