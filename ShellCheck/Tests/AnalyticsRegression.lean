@@ -87,6 +87,8 @@ def hasFix (cr : CheckResult) (code : Int) : Bool :=
   | some c => c.pcFix.isSome
   | none => false
 
+def shebangCodes : List Int := [2148, 2187, 2239, 2246]
+
 def test_sc2145_double_quoted_concat : Except String Bool := do
   let cr := runCheck "echo \"foo$@\""
   pure (hasCode cr 2145)
@@ -214,6 +216,86 @@ def test_sc2012_ls_pipe_other : Except String Bool := do
 def test_sc2012_ls_pipe_N_ok : Except String Bool := do
   let cr := runCheck "ls -N | foo"
   pure (!hasCode cr 2012)
+
+def test_sc2096_shebang_params_warn : Except String Bool := do
+  let cr := runCheck "#!/usr/bin/env bash -x\necho cow"
+  pure (hasCode cr 2096)
+
+def test_sc2096_shebang_params_ok : Except String Bool := do
+  let cr := runCheck "#! /bin/sh  -l "
+  pure (!hasCode cr 2096)
+
+def test_sc2096_shebang_params_env_split_ok : Except String Bool := do
+  let cr := runCheck "#!/usr/bin/env -S bash -x\necho cow"
+  pure (!hasCode cr 2096)
+
+def test_sc2096_shebang_params_env_split_string_ok : Except String Bool := do
+  let cr := runCheck "#!/usr/bin/env --split-string bash -x\necho cow"
+  pure (!hasCode cr 2096)
+
+def test_sc2148_shebang_missing_warn : Except String Bool := do
+  let cr := runCheck "ls -l"
+  pure (hasCode cr 2148)
+
+def test_sc2148_shebang_override_ok : Except String Bool := do
+  let cr := runCheck "#shellcheck shell=sh\nfoo"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2187_shebang_ash_warn : Except String Bool := do
+  let cr := runCheck "#!/usr/bin/env ash"
+  pure (hasCode cr 2187)
+
+def test_sc2187_shebang_ash_override_dash_ok : Except String Bool := do
+  let cr := runCheck "#!/usr/bin/env ash\n# shellcheck shell=dash\n"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2187_shebang_ash_override_sh_ok : Except String Bool := do
+  let cr := runCheck "#!/usr/bin/env ash\n# shellcheck shell=sh\n"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2239_shebang_relative_warn : Except String Bool := do
+  let cr := runCheck "#!bin/sh\ntrue"
+  pure (hasCode cr 2239)
+
+def test_sc2239_shebang_shell_override_ok : Except String Bool := do
+  let cr := runCheck "# shellcheck shell=sh\ntrue"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2239_shebang_ignore_ok : Except String Bool := do
+  let cr := runCheck "#!foo\n# shellcheck shell=sh ignore=SC2239\ntrue"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2246_shebang_directory_warn : Except String Bool := do
+  let cr := runCheck "#!/bin/sh/\ntrue"
+  pure (hasCode cr 2246)
+
+def test_sc2246_shebang_directory_args_warn : Except String Bool := do
+  let cr := runCheck "#!/bin/sh/ -xe\ntrue"
+  pure (hasCode cr 2246)
+
+def test_sc2239_shebang_busybox_ok : Except String Bool := do
+  let cr := runCheck "#!/bin/busybox sh"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2239_shebang_busybox_shell_override_sh_ok : Except String Bool := do
+  let cr := runCheck "#!/bin/busybox sh\n# shellcheck shell=sh\n"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2239_shebang_busybox_shell_override_dash_ok : Except String Bool := do
+  let cr := runCheck "#!/bin/busybox sh\n# shellcheck shell=dash\n"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2239_shebang_busybox_ash_ok : Except String Bool := do
+  let cr := runCheck "#!/bin/busybox ash"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2239_shebang_busybox_ash_override_dash_ok : Except String Bool := do
+  let cr := runCheck "#!/bin/busybox ash\n# shellcheck shell=dash\n"
+  pure (lacksCodes cr shebangCodes)
+
+def test_sc2239_shebang_busybox_ash_override_sh_ok : Except String Bool := do
+  let cr := runCheck "#!/bin/busybox ash\n# shellcheck shell=sh\n"
+  pure (lacksCodes cr shebangCodes)
 
 def test_sc2013_for_in_cat_subst : Except String Bool := do
   let cr := runCheck "for f in $(cat foo); do stuff; done"
@@ -347,6 +429,30 @@ def test_sc2044_for_in_find_backticks : Except String Bool := do
   let cr := runCheck "for f in `find / -name '*.mp3'`; do mplayer \"$f\"; done"
   pure (hasCode cr 2044)
 
+def test_sc2067_find_exec_missing_semicolon : Except String Bool := do
+  let cr := runCheck "find / -name '*.php' -exec rm {};"
+  pure (hasCode cr 2067)
+
+def test_sc2067_find_exec_invalid_and : Except String Bool := do
+  let cr := runCheck "find / -exec touch {} && ls {} \\;"
+  pure (hasCode cr 2067)
+
+def test_sc2067_find_exec_pipe : Except String Bool := do
+  let cr := runCheck "find / -execdir cat {} | grep lol +"
+  pure (hasCode cr 2067)
+
+def test_sc2067_find_exec_ok : Except String Bool := do
+  let cr := runCheck "find / -name '*.php' -exec foo {} +"
+  pure (!hasCode cr 2067)
+
+def test_sc2067_find_exec_ok_with_shell : Except String Bool := do
+  let cr := runCheck "find / -execdir bash -c 'a && b' \\;"
+  pure (!hasCode cr 2067 && !hasCode cr 2014)
+
+def test_sc2014_find_exec_glob_warn : Except String Bool := do
+  let cr := runCheck "find / -type d -execdir rm *.jpg \\;"
+  pure (hasCode cr 2014)
+
 def test_sc2126_grep_wc : Except String Bool := do
   let cr := runCheck "grep foo file | wc -l"
   pure (hasCode cr 2126)
@@ -442,6 +548,58 @@ def test_sc2127_case_fallthrough_sh : Except String Bool := do
 def test_sc2127_case_fallthrough_bash_ok : Except String Bool := do
   let cr := runCheckWithShell .Bash "case foo in bar) echo hi ;& baz) echo ok ;; esac"
   pure (!hasCode cr 2127)
+
+def test_sc2046_unquoted_expansions_basic : Except String Bool := do
+  let cr := runCheck "rm $(ls)"
+  pure (hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_backticks : Except String Bool := do
+  let cr := runCheck "rm `ls`"
+  pure (hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_concat : Except String Bool := do
+  let cr := runCheck "rm foo$(date)"
+  pure (hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_test : Except String Bool := do
+  let cr := runCheck "[ $(foo) == cow ]"
+  pure (hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_test_negated : Except String Bool := do
+  let cr := runCheck "[ ! $(foo) ]"
+  pure (hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_double_bracket_ok : Except String Bool := do
+  let cr := runCheck "[[ $(foo) == cow ]]"
+  pure (!hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_for_in_ok : Except String Bool := do
+  let cr := runCheck "for f in $(cmd); do echo $f; done"
+  pure (!hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_as_command_ok : Except String Bool := do
+  let cr := runCheck "$(cmd)"
+  pure (!hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_heredoc_ok : Except String Bool := do
+  let cr := runCheck "cat << foo\n$(ls)\nfoo"
+  pure (!hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_set_ok : Except String Bool := do
+  let cr := runCheck "set -- $(seq 1 4)"
+  pure (!hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_comment_ok : Except String Bool := do
+  let cr := runCheck "echo foo `# inline comment`"
+  pure (!hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_export_warn : Except String Bool := do
+  let cr := runCheck "#!/bin/sh\nexport var=$(val)"
+  pure (hasCode cr 2046)
+
+def test_sc2046_unquoted_expansions_ps_pgrep_ok : Except String Bool := do
+  let cr := runCheck "ps -p $(pgrep foo)"
+  pure (!hasCode cr 2046)
 
 def test_sc2098_prefix_assignment_reference : Except String Bool := do
   let cr := runCheck "var=foo echo ${var}"

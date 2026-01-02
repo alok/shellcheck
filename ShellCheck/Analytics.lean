@@ -1090,10 +1090,17 @@ partial def checkShebangParametersImpl (t : Token) : List TokenComment :=
   | .T_Script shebang _ =>
     match shebang.inner with
     | .T_Literal sb =>
-      let words := sb.splitOn " " |>.filter (· != "")
+      let sbLine := if sb.startsWith "#!" then (sb.drop 2).toString else sb
+      let sbTrim := sbLine.trimAscii.toString
+      let words := sbTrim.splitOn " " |>.filter (· != "")
+      let isEnvSplit :=
+        match words with
+        | w1 :: w2 :: _ =>
+            let base := w1.splitOn "/" |>.getLast!
+            base == "env" && (w2 == "-S" || w2 == "--split-string")
+        | _ => false
       -- More than 2 words (#!/path/to/env bash -x) and not using -S or --split-string
-      if words.length > 2 &&
-         not (Regex.containsSubstring sb "-S" || Regex.containsSubstring sb "--split-string") then
+      if words.length > 2 && !isEnvSplit then
         [makeComment .errorC t.id 2096 "On most OS, shebangs can only specify a single parameter."]
       else []
     | _ => []
@@ -1106,37 +1113,56 @@ def checkShebangParameters (_params : Parameters) (t : Token) : List TokenCommen
 /-- Helper for SC2148 -/
 partial def checkShebangImpl (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_Annotation _ inner => checkShebangImpl params inner
+  | .T_Annotation annots inner =>
+    if annots.any (fun a => match a with | .shellOverride _ => true | _ => false) then
+      []
+    else
+      checkShebangImpl params inner
   | .T_Script shebang _ =>
-    match shebang.inner with
+    let (shebangTok, shebangOverride) :=
+      match shebang.inner with
+      | .T_Annotation annots inner =>
+          let override := annots.any (fun a => match a with | .shellOverride _ => true | _ => false)
+          (inner, override)
+      | _ => (shebang, false)
+    if shebangOverride || hasShellOverride t then
+      []
+    else
+    match shebangTok.inner with
     | .T_Literal sb =>
       let sbLine := if sb.startsWith "#!" then sb.drop 2 else sb
       let sbTrim := (sbLine.dropWhile (· == ' ')).toString
       -- Use shebang token's id for proper line 1 position
       let comments1 :=
         if sbTrim.isEmpty && not params.shellTypeSpecified then
-          [makeComment .errorC shebang.id 2148
+          [makeComment .errorC shebangTok.id 2148
             "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive."]
         else []
       let comments2 :=
-        if Regex.containsSubstring sbTrim "ash" && not (Regex.containsSubstring sbTrim "bash") then
-          [makeComment .warningC t.id 2187
+        if not params.shellTypeSpecified && executableFromShebang sb == "ash" then
+          [makeComment .warningC shebangTok.id 2187
             "Ash scripts will be checked as Dash. Add '# shellcheck shell=dash' to silence."]
         else []
       let comments3 :=
-        if not sbTrim.isEmpty && not (sbTrim.startsWith "/") && not ("env ".isPrefixOf sbTrim) then
-          [makeComment .errorC t.id 2239
+        if not sbTrim.isEmpty && not (sbTrim.startsWith "/") then
+          [makeComment .errorC shebangTok.id 2239
             "Ensure the shebang uses an absolute path to the interpreter."]
         else []
       let firstWord := sbTrim.splitOn " " |>.head? |>.getD ""
       let comments4 :=
         if firstWord.endsWith "/" then
-          [makeComment .errorC t.id 2246
+          [makeComment .errorC shebangTok.id 2246
             "This shebang specifies a directory. Ensure the interpreter is a file."]
         else []
       comments1 ++ comments2 ++ comments3 ++ comments4
     | _ => []
   | _ => []
+where
+  hasShellOverride : Token → Bool
+    | ⟨_, .T_Annotation annots inner⟩ =>
+        annots.any (fun a => match a with | .shellOverride _ => true | _ => false) ||
+        hasShellOverride inner
+    | tok => (getTokenChildren tok).any hasShellOverride
 
 /-- SC2148: Tips depend on target shell and yours is unknown -/
 def checkShebang (params : Parameters) (t : Token) : List TokenComment :=
@@ -2137,18 +2163,18 @@ where
 /-- SC2046: Quote this to prevent word splitting -/
 def checkUnquotedExpansions (params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
-  | .T_DollarExpansion cmds =>
-    if cmds.isEmpty then []
-    else if shouldBeSplit t then []
-    else if isQuoteFreeForExpansion params.parentMap t then []
-    else [makeComment .warningC t.id 2046 "Quote this to prevent word splitting."]
-  | .T_Backticked cmds =>
-    if cmds.isEmpty then []
-    else if shouldBeSplit t then []
-    else if isQuoteFreeForExpansion params.parentMap t then []
-    else [makeComment .warningC t.id 2046 "Quote this to prevent word splitting."]
+  | .T_DollarExpansion cmds => examine t cmds
+  | .T_Backticked cmds => examine t cmds
+  | .T_DollarBraceCommandExpansion _ cmds => examine t cmds
   | _ => []
 where
+  examine (tok : Token) (cmds : List Token) : List TokenComment :=
+    if cmds.isEmpty || isCommentOnly cmds then []
+    else if shouldBeSplit tok then []
+    else if isQuoteFreeForExpansion tok then []
+    else if usedAsCommandName params.parentMap tok then []
+    else [makeComment .warningC tok.id 2046 "Quote this to prevent word splitting."]
+
   shouldBeSplit (t : Token) : Bool :=
     -- Some commands like seq and pgrep are typically used for word splitting
     match t.inner with
@@ -2156,7 +2182,57 @@ where
       cmds.any fun c => getCommandBasename c ∈ [some "seq", some "pgrep"]
     | .T_Backticked cmds =>
       cmds.any fun c => getCommandBasename c ∈ [some "seq", some "pgrep"]
+    | .T_DollarBraceCommandExpansion _ cmds =>
+      cmds.any fun c => getCommandBasename c ∈ [some "seq", some "pgrep"]
     | _ => false
+
+  isCommentOnly (cmds : List Token) : Bool :=
+    match cmds with
+    | [cmd] =>
+      match cmd.inner with
+      | .T_Literal s => (s.trimAscii.toString).startsWith "#"
+      | _ => false
+    | _ => false
+
+  isQuoteFreeForExpansion (tok : Token) : Bool :=
+    let quoteFree := isQuoteFree params.shellType params.parentMap tok
+    if isInForInWords tok then
+      true
+    else if params.shellType == .Sh && inAssignmentParamToCommand tok then
+      false
+    else
+      quoteFree
+
+  inAssignmentParamToCommand (tok : Token) : Bool :=
+    match getAssignmentAncestor tok with
+    | some assignTok => isAssignmentParamToDeclarationCommand assignTok
+    | Option.none => false
+
+  getAssignmentAncestor (tok : Token) : Option Token :=
+    let parents := getPath params.parentMap tok |>.drop 1
+    parents.find? fun parent =>
+      match parent.inner with
+      | .T_Assignment .. => true
+      | _ => false
+
+  isAssignmentParamToDeclarationCommand (assignTok : Token) : Bool :=
+    match params.parentMap.get? assignTok.id with
+    | some parent =>
+      match parent.inner with
+      | .T_SimpleCommand _ _ =>
+        match getCommandName parent with
+        | some name => name ∈ ["declare", "local", "export", "typeset", "readonly"]
+        | Option.none => false
+      | _ => false
+    | Option.none => false
+
+  isInForInWords (tok : Token) : Bool :=
+    params.idMap.toList.any fun (_, node) =>
+      match node.inner with
+      | .T_ForIn _ words _ =>
+        words.any fun w =>
+          (collectTokens w).any (fun t => t.id == tok.id)
+      | _ => false
 
 /-- SC2124: Assigning an array to a string -/
 def checkArrayAsString (_params : Parameters) (t : Token) : List TokenComment :=

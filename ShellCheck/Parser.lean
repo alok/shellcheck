@@ -82,6 +82,9 @@ where
           -- Parse comma-separated SC codes
           let codes := (part.drop 8).toString.splitOn ","  -- drop "disable="
           codes.filterMap parseCode
+        else if part.startsWith "ignore=" then
+          let codes := (part.drop 7).toString.splitOn ","  -- drop "ignore="
+          codes.filterMap parseCode
         else if part.startsWith "enable=" then
           -- For now just track that something is enabled
           let names := (part.drop 7).toString.splitOn ","
@@ -1287,9 +1290,7 @@ partial def readAndOrWithAnnotations : Parser Token := do
     mkToken (.T_Annotation annotations cmd)
 
 /-- Read a term: and-or ((;|&|newline) and-or)* -/
-partial def readTerm : Parser (List Token) := do
-  -- The caller should have already skipped initial space
-  let first ← readAndOr
+partial def readTermFromFirst (first : Token) : Parser (List Token) := do
   readTermContinuation [first]
 where
   /-- After a command separator (`;`, `&`, or newline), attempt to parse the next
@@ -1345,6 +1346,11 @@ where
         | some next => readTermContinuation (next :: acc)
         | none => pure acc.reverse
     | _ => pure acc.reverse
+
+/-- Read a term: and-or ((;|&|newline) and-or)* -/
+partial def readTerm : Parser (List Token) := do
+  let first ← readAndOrWithAnnotations
+  readTermFromFirst first
 
 /-!
 ### Control Flow (if/while/for/case/select)
@@ -1683,29 +1689,33 @@ partial def readFunction : Parser Token := do
 /-- Read a complete script -/
 def readScript : Parser Token := do
   -- Don't skip whitespace first - shebang must be at very start
-  -- Check for shebang
-  let firstChar ← peek?
-  let shebang ← match firstChar with
-    | some '#' =>
-        let secondChar ← do
-          let _ ← anyChar  -- consume #
-          peek?
-        match secondChar with
-        | some '!' =>
-            let _ ← anyChar  -- consume !
-            let line ← takeWhile (· != '\n')
-            let _ ← ShellCheck.Parser.Parsec.optional (pchar '\n')
-            mkToken (.T_Literal ("#!" ++ line))
-        | _ =>
-            -- Just a comment, not a shebang - but we already consumed #
-            let _ ← takeWhile (· != '\n')
-            let _ ← ShellCheck.Parser.Parsec.optional (pchar '\n')
-            mkToken (.T_Literal "")
-    | _ =>
+  let shebang ←
+    match ← ShellCheck.Parser.Parsec.optional (attempt (pstring "#!")) with
+    | some _ =>
+        let line ← takeWhile (· != '\n')
+        let _ ← ShellCheck.Parser.Parsec.optional (pchar '\n')
+        mkToken (.T_Literal ("#!" ++ line))
+    | none =>
         mkToken (.T_Literal "")
 
-  skipAllSpace
-  let commands ← readTerm
+  let annotations ← skipAllSpaceCollectAnnotations
+  let (shebang, commands) ←
+    match ← peek? with
+    | none =>
+        if annotations.isEmpty then
+          pure (shebang, [])
+        else
+          let shebangAnnotated ← mkToken (.T_Annotation annotations shebang)
+          pure (shebangAnnotated, [])
+    | some _ =>
+        let cmd ← readAndOr
+        let first ←
+          if annotations.isEmpty then
+            pure cmd
+          else
+            mkToken (.T_Annotation annotations cmd)
+        let commands ← readTermFromFirst first
+        pure (shebang, commands)
   skipAllSpace
   mkToken (.T_Script shebang commands)
 
