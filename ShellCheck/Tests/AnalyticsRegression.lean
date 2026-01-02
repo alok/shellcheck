@@ -156,8 +156,16 @@ def test_sc2009_ps_grep_pid_ok : Except String Bool := do
   let cr := runCheck "ps -p 123 | grep foo"
   pure (!hasCode cr 2009)
 
+def test_sc2009_ps_grep_pgrep_ok : Except String Bool := do
+  let cr := runCheck "ps -o pid,args -p $(pgrep java) | grep -F net.shellcheck.Test"
+  pure (!hasCode cr 2009)
+
 def test_sc2010_ls_grep : Except String Bool := do
   let cr := runCheck "ls | grep foo"
+  pure (hasCode cr 2010)
+
+def test_sc2010_ls_grep_inverted : Except String Bool := do
+  let cr := runCheck "ls | grep -v mp3"
   pure (hasCode cr 2010)
 
 def test_sc2011_ls_xargs : Except String Bool := do
@@ -171,6 +179,10 @@ def test_sc2011_find_xargs_ok : Except String Bool := do
 def test_sc2012_ls_pipe_other : Except String Bool := do
   let cr := runCheck "ls | cat"
   pure (hasCode cr 2012)
+
+def test_sc2012_ls_pipe_N_ok : Except String Bool := do
+  let cr := runCheck "ls -N | foo"
+  pure (!hasCode cr 2012)
 
 def test_sc2038_find_xargs_missing_null : Except String Bool := do
   let cr := runCheck "find . | xargs foo"
@@ -194,6 +206,46 @@ def test_sc2126_grep_wc_non_adjacent_ok : Except String Bool := do
 
 def test_sc2126_grep_wc_grep_o_ok : Except String Bool := do
   let cr := runCheck "grep -o foo file | wc -l"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_no_flag_ok : Except String Bool := do
+  let cr := runCheck "foo | grep bar | wc"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_chars_ok : Except String Bool := do
+  let cr := runCheck "foo | grep bar | wc -c"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_multi_flags_ok : Except String Bool := do
+  let cr := runCheck "foo | grep bar | wc -cmwL"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_grep_recursive_ok : Except String Bool := do
+  let cr := runCheck "foo | grep -r bar | wc -l"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_grep_list_ok : Except String Bool := do
+  let cr := runCheck "foo | grep -l bar | wc -l"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_grep_list_neg_ok : Except String Bool := do
+  let cr := runCheck "foo | grep -L bar | wc -l"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_grep_context_ok : Except String Bool := do
+  let cr := runCheck "foo | grep -A2 bar | wc -l"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_grep_before_context_ok : Except String Bool := do
+  let cr := runCheck "foo | grep -B999 bar | wc -l"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_grep_after_context_long_ok : Except String Bool := do
+  let cr := runCheck "foo | grep --after-context 999 bar | wc -l"
+  pure (!hasCode cr 2126)
+
+def test_sc2126_grep_wc_grep_combined_context_ok : Except String Bool := do
+  let cr := runCheck "foo | grep -B 1 --after-context 999 bar | wc -l"
   pure (!hasCode cr 2126)
 
 def test_sc2126_grep_wc_ok : Except String Bool := do

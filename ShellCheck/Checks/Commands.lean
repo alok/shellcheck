@@ -1260,8 +1260,14 @@ def checkLsInScript : CommandCheck := {
   check := fun params t =>
     -- Only warn if output is being used (piped or captured)
     if isInPipeline params t then
-      [makeComment .infoC t.id 2012
-        "Use find instead of ls to better handle non-alphanumeric filenames."]
+      let args := oversimplify t
+      let hasShortParameter (c : Char) (vals : List String) : Bool :=
+        vals.any fun s => s.startsWith "-" && s.toList.any (· == c)
+      if hasShortParameter 'N' args then
+        []
+      else
+        [makeComment .infoC t.id 2012
+          "Use find instead of ls to better handle non-alphanumeric filenames."]
     else []
 }
 
