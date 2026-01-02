@@ -14,6 +14,30 @@ structure CoverageCase where
   shell : Option Shell := none
   extended : Bool := false
 
+def mkCase (code : Int) (script : String) : CoverageCase :=
+  { code := code, script := script }
+
+def mkShCase (code : Int) (script : String) : CoverageCase :=
+  { code := code, script := script, shell := some .Sh }
+
+def mkBashCase (code : Int) (script : String) : CoverageCase :=
+  { code := code, script := script, shell := some .Bash }
+
+def mkKshCase (code : Int) (script : String) : CoverageCase :=
+  { code := code, script := script, shell := some .Ksh }
+
+def mkDashCase (code : Int) (script : String) : CoverageCase :=
+  { code := code, script := script, shell := some .Dash }
+
+def mkExtCase (code : Int) (script : String) : CoverageCase :=
+  { code := code, script := script, extended := true }
+
+def mkShExtCase (code : Int) (script : String) : CoverageCase :=
+  { code := code, script := script, shell := some .Sh, extended := true }
+
+def mkBashExtCase (code : Int) (script : String) : CoverageCase :=
+  { code := code, script := script, shell := some .Bash, extended := true }
+
 def runCase (c : CoverageCase) : Bool :=
   let cr :=
     match c.shell, c.extended with
@@ -24,58 +48,58 @@ def runCase (c : CoverageCase) : Bool :=
   hasCode cr c.code
 
 def sc2xxxCases : List CoverageCase := [
-  { code := 2000, script := "echo $foo | wc -c" },
-  { code := 2002, script := "cat file | grep foo" },
-  { code := 2004, script := "echo $(( ${foo} + 1 ))" },
-  { code := 2005, script := "echo $(date)" },
-  { code := 2006, script := "echo `date`" },
-  { code := 2007, script := "echo $[1+2]" },
-  { code := 2009, script := "ps aux | grep foo" },
-  { code := 2010, script := "ls | grep foo" },
-  { code := 2011, script := "ls | xargs rm" },
-  { code := 2013, script := "for i in $(cat file); do echo $i; done" },
-  { code := 2015, script := "true && false || echo hi" },
-  { code := 2016, script := "echo 'foo $bar'" },
-  { code := 2017, script := "echo $((a / b * c))" },
-  { code := 2028, script := "echo 'foo\\nbar'" },
-  { code := 2037, script := "var=ls -l" },
-  { code := 2078, script := "[ foo ]" },
-  { code := 2086, script := "echo $foo" },
-  { code := 2098, script := "var=foo echo ${var}" },
-  { code := 2102, script := "ls [10-15]" },
-  { code := 2103, script := "for f in *; do cd $f; git pull; cd ..; done" },
-  { code := 2120, script := "f() { echo \"$1\"; }\nf" },
-  { code := 2125, script := "a=*.png" },
-  { code := 2127, script := "case foo in bar) echo hi ;& baz) echo ok ;; esac", shell := some .Sh },
-  { code := 2145, script := "echo \"foo$@\"" },
-  { code := 2155, script := "f() { local \"$(false)\"; }\nf", shell := some .Bash },
-  { code := 2157, script := "test -z \"foo\"" },
-  { code := 2198, script := "arr=(a b); [[ ${arr[@]} ]]", shell := some .Bash },
-  { code := 2215, script := "-e file" },
-  { code := 2223, script := ": ${var:=*}", extended := true },
-  { code := 2234, script := "( [ -f foo ] )" },
-  { code := 2239, script := "#!bash\necho hi" },
-  { code := 2245, script := "[ -d foo* ]", shell := some .Ksh },
-  { code := 2257, script := "echo hi > $((i++))" },
-  { code := 2259, script := "echo foo | cat < input" },
-  { code := 2260, script := "echo foo > out | cat" },
-  { code := 2261, script := "echo foo > a > b | cat" },
-  { code := 2262, script := "alias x=y; x" },
-  { code := 2265, script := "[ x ] & [ y ]" },
-  { code := 2266, script := "[ x ] | [ y ]" },
-  { code := 2268, script := "[ x$foo = xlol ]" },
-  { code := 2281, script := "$var=foo" },
-  { code := 2286, script := "\"\"" },
-  { code := 2287, script := "/foo/ bar" },
-  { code := 2288, script := "foo, bar" },
-  { code := 2289, script := "$'foo\\tbar' baz" },
-  { code := 2318, script := "declare x=1 y=$x", shell := some .Bash },
-  { code := 2321, script := "a[$((1+1))]=n" },
-  { code := 2325, script := "! ! true", shell := some .Sh },
-  { code := 2326, script := "true | ! true", shell := some .Sh },
-  { code := 2329, script := "f() { echo hi; }; exit", extended := true },
-  { code := 2332, script := "[ ! -o braceexpand ]", shell := some .Bash },
-  { code := 2336, script := "cp -r foo bar" }
+  mkCase 2000 "echo $foo | wc -c",
+  mkCase 2002 "cat file | grep foo",
+  mkCase 2004 "echo $(( ${foo} + 1 ))",
+  mkCase 2005 "echo $(date)",
+  mkCase 2006 "echo `date`",
+  mkCase 2007 "echo $[1+2]",
+  mkCase 2009 "ps aux | grep foo",
+  mkCase 2010 "ls | grep foo",
+  mkCase 2011 "ls | xargs rm",
+  mkCase 2013 "for i in $(cat file); do echo $i; done",
+  mkCase 2015 "true && false || echo hi",
+  mkCase 2016 "echo 'foo $bar'",
+  mkCase 2017 "echo $((a / b * c))",
+  mkCase 2028 "echo 'foo\\nbar'",
+  mkCase 2037 "var=ls -l",
+  mkCase 2078 "[ foo ]",
+  mkCase 2086 "echo $foo",
+  mkCase 2098 "var=foo echo ${var}",
+  mkCase 2102 "ls [10-15]",
+  mkCase 2103 "for f in *; do cd $f; git pull; cd ..; done",
+  mkCase 2120 "f() { echo \"$1\"; }\nf",
+  mkCase 2125 "a=*.png",
+  mkShCase 2127 "case foo in bar) echo hi ;& baz) echo ok ;; esac",
+  mkCase 2145 "echo \"foo$@\"",
+  mkBashCase 2155 "f() { local \"$(false)\"; }\nf",
+  mkCase 2157 "test -z \"foo\"",
+  mkBashCase 2198 "arr=(a b); [[ ${arr[@]} ]]",
+  mkCase 2215 "-e file",
+  mkExtCase 2223 ": ${var:=*}",
+  mkCase 2234 "( [ -f foo ] )",
+  mkCase 2239 "#!bash\necho hi",
+  mkKshCase 2245 "[ -d foo* ]",
+  mkCase 2257 "echo hi > $((i++))",
+  mkCase 2259 "echo foo | cat < input",
+  mkCase 2260 "echo foo > out | cat",
+  mkCase 2261 "echo foo > a > b | cat",
+  mkCase 2262 "alias x=y; x",
+  mkCase 2265 "[ x ] & [ y ]",
+  mkCase 2266 "[ x ] | [ y ]",
+  mkCase 2268 "[ x$foo = xlol ]",
+  mkCase 2281 "$var=foo",
+  mkCase 2286 "\"\"",
+  mkCase 2287 "/foo/ bar",
+  mkCase 2288 "foo, bar",
+  mkCase 2289 "$'foo\\tbar' baz",
+  mkBashCase 2318 "declare x=1 y=$x",
+  mkCase 2321 "a[$((1+1))]=n",
+  mkShCase 2325 "! ! true",
+  mkShCase 2326 "true | ! true",
+  mkExtCase 2329 "f() { echo hi; }; exit",
+  mkBashCase 2332 "[ ! -o braceexpand ]",
+  mkCase 2336 "cp -r foo bar"
 ]
 
 def sc2xxxFailures : List CoverageCase :=
