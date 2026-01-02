@@ -50,6 +50,9 @@ instance : ToCommandName String where
 instance : ToCommandName (List String) where
   toCommandName names := .anyBasename names
 
+instance : ToCommandName (Array String) where
+  toCommandName names := .anyBasename names.toList
+
 instance : BEq CommandName where
   beq a b := match a, b with
     | .exactly s1, .exactly s2 => s1 == s2
@@ -67,6 +70,26 @@ structure CommandCheck where
 def commandCheck {α : Type} [ToCommandName α] (name : α)
     (check : Parameters → Token → List TokenComment) : CommandCheck :=
   { name := ToCommandName.toCommandName name, check := check }
+
+def commandCheck0 {α : Type} [ToCommandName α] (name : α)
+    (check : Token → List TokenComment) : CommandCheck :=
+  commandCheck name fun _params t => check t
+
+def commandCheckExact (name : String)
+    (check : Parameters → Token → List TokenComment) : CommandCheck :=
+  commandCheck (CommandName.exactly name) check
+
+def commandCheckExact0 (name : String)
+    (check : Token → List TokenComment) : CommandCheck :=
+  commandCheckExact name fun _params t => check t
+
+def commandCheckAnyExact (names : List String)
+    (check : Parameters → Token → List TokenComment) : CommandCheck :=
+  commandCheck (CommandName.anyExactly names) check
+
+def commandCheckAnyExact0 (names : List String)
+    (check : Token → List TokenComment) : CommandCheck :=
+  commandCheckAnyExact names fun _params t => check t
 
 /-- Get command arguments (words after command name) -/
 def getCommandArguments (t : Token) : Option (List Token) := do
@@ -270,9 +293,8 @@ These functions implement common check patterns that can be reused.
 -/
 
 /-- Create a check that warns about glob patterns that might match dash-prefixed files -/
-def mkGlobDashCheck (commands : List String) (code : Nat) (msg : String) : CommandCheck := {
-  name := .anyBasename commands
-  check := fun _params t =>
+def mkGlobDashCheck (commands : List String) (code : Nat) (msg : String) : CommandCheck :=
+  commandCheck0 commands fun t =>
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
@@ -283,37 +305,30 @@ def mkGlobDashCheck (commands : List String) (code : Nat) (msg : String) : Comma
           else Option.none
         | Option.none => Option.none
     | Option.none => []
-}
 
 /-- Create a check that warns when a command is used in a specific context -/
 def mkContextCheck (commands : List String) (contextCheck : Parameters → Token → Bool)
-    (code : Nat) (msg : String) : CommandCheck := {
-  name := .anyBasename commands
-  check := fun params t =>
+    (code : Nat) (msg : String) : CommandCheck :=
+  commandCheck commands fun params t =>
     if contextCheck params t then
       [warnCmd t code msg]
     else []
-}
 
 /-- Create a check that warns about specific argument patterns -/
 def mkArgPatternCheck (commands : List String) (argPred : String → Bool)
-    (code : Nat) (msg : String) : CommandCheck := {
-  name := .anyBasename commands
-  check := fun _params t =>
+    (code : Nat) (msg : String) : CommandCheck :=
+  commandCheck0 commands fun t =>
     match getCommandArguments t with
     | some args =>
       (filterArgsMatching args argPred).map fun (arg, _) =>
         warnArg arg code msg
     | Option.none => []
-}
 
 /-- Create a check that always warns when a command is used -/
 def mkAlwaysWarnCheck (command : String) (code : Nat) (msg : String)
-    (severity : Severity := .warningC) : CommandCheck := {
-  name := .exactly command
-  check := fun _params t =>
+    (severity : Severity := .warningC) : CommandCheck :=
+  commandCheckExact0 command fun t =>
     [makeComment severity t.id code msg]
-}
 
 /-- Pipeline-level check type -/
 abbrev PipelineCheck := Token → List TokenComment
@@ -406,15 +421,12 @@ def optionalChecks : List CheckDescription := [
 -/
 
 /-- SC2010: Don't use ls | grep (handled by pipeline check) -/
-def checkLsGrep : CommandCheck := {
-  name := .basename "grep"
-  check := fun _params _t => []  -- Pipeline check handles this
-}
+def checkLsGrep : CommandCheck :=
+  commandCheck0 "grep" fun _t => []  -- Pipeline check handles this
 
 /-- SC2012: Use find instead of ls to better handle non-alphanumeric filenames -/
-def checkLsFind : CommandCheck := {
-  name := .exactly "ls"
-  check := fun _params t =>
+def checkLsFind : CommandCheck :=
+  commandCheckExact0 "ls" fun t =>
     match getCommandArguments t with
     | some args =>
       -- Warn if ls is used with glob patterns that might have spaces
@@ -425,12 +437,10 @@ def checkLsFind : CommandCheck := {
           "Use find instead of ls to better handle non-alphanumeric filenames."]
       else []
     | Option.none => []
-}
 
 /-- SC2013: To read lines, use a while read loop -/
-def checkForInCat : CommandCheck := {
-  name := .exactly "cat"
-  check := fun params t =>
+def checkForInCat : CommandCheck :=
+  commandCheckExact "cat" fun params t =>
     -- Check if cat is inside a command substitution that's part of a for loop
     let ancestors := getPath params t
     let inForLoop := ancestors.any fun ancestor =>
@@ -446,12 +456,10 @@ def checkForInCat : CommandCheck := {
       [makeComment .warningC t.id 2013
         "To read lines, use 'while IFS= read -r line; do ...; done < file'."]
     else []
-}
 
 /-- SC2018/SC2019/SC2020/SC2021/SC2060: Common `tr` pitfalls. -/
-def checkTr : CommandCheck := {
-  name := .exactly "tr"
-  check := fun _params t =>
+def checkTr : CommandCheck :=
+  commandCheckExact0 "tr" fun t =>
     match getCommandArguments t with
     | some args =>
       args.flatMap fun arg =>
@@ -486,7 +494,6 @@ def checkTr : CommandCheck := {
           | Option.none => []
         globWarn ++ litWarn
     | Option.none => []
-}
 where
   /-- Best-effort: detect unquoted glob metacharacters even when the parser emits `.T_Literal`. -/
   hasClosedBracketExpr (s : String) : Bool :=
@@ -522,9 +529,8 @@ where
     relevant != relevant.eraseDups
 
 /-- SC2035: Use ./*glob* or -- *glob* to avoid matching dashes -/
-def checkFindNameGlob : CommandCheck := {
-  name := .exactly "find"
-  check := fun _params t =>
+def checkFindNameGlob : CommandCheck :=
+  commandCheckExact0 "find" fun t =>
     match getCommandArguments t with
     | some args => args.filterMap fun arg =>
         let s := getLiteralString arg |>.getD ""
@@ -533,12 +539,10 @@ def checkFindNameGlob : CommandCheck := {
             "Quote the -name pattern to prevent shell expansion.")
         else Option.none
     | Option.none => []
-}
 
 /-- SC2003/SC2304-SC2307: `expr` is antiquated and fragile -/
-def checkExpr : CommandCheck := {
-  name := .basename "expr"
-  check := fun _params t =>
+def checkExpr : CommandCheck :=
+  commandCheck0 "expr" fun t =>
     let base : List TokenComment :=
       [makeComment .styleC t.id 2003
         "expr is antiquated. Consider rewriting this using $((..)), ${} or [[ ]]."]
@@ -581,7 +585,6 @@ def checkExpr : CommandCheck := {
         base ++ checkOp first ++ c2306
       | [] => base
     | Option.none => base
-}
 where
   checkOp (side : Token) : List TokenComment :=
     match getLiteralString side with
@@ -600,9 +603,8 @@ where
     | _ => []
 
 /-- SC2062/SC2063/SC2022: Grep patterns that look like globs or suspicious regexes. -/
-def checkGrepRe : CommandCheck := {
-  name := .anyBasename ["grep", "egrep", "fgrep"]
-  check := fun _params t =>
+def checkGrepRe : CommandCheck :=
+  commandCheck0 ["grep", "egrep", "fgrep"] fun t =>
     match getCommandArguments t with
     | some args =>
       match findPatternArg args with
@@ -637,7 +639,6 @@ def checkGrepRe : CommandCheck := {
         c2062 ++ c2063
       | Option.none => []
     | Option.none => []
-}
 where
   globCharLike (c : Char) : Bool :=
     c == '*' || c == '?' || c == '[' || c == ']'
@@ -720,9 +721,8 @@ where
         some x
 
 /-- SC2064: Trap quotes to preserve values at trap time, not execution time -/
-def checkTrapQuotes : CommandCheck := {
-  name := .exactly "trap"
-  check := fun _params t =>
+def checkTrapQuotes : CommandCheck :=
+  commandCheckExact0 "trap" fun t =>
     match getCommandArguments t with
     | some (handler :: _signals) =>
       match handler.inner with
@@ -740,12 +740,10 @@ def checkTrapQuotes : CommandCheck := {
         else []
       | _ => []
     | _ => []
-}
 
 /-- SC2104: In functions, return instead of break -/
-def checkReturn : CommandCheck := {
-  name := .exactly "return"
-  check := fun _params t =>
+def checkReturn : CommandCheck :=
+  commandCheckExact0 "return" fun t =>
     match getCommandArguments t with
     | some [arg] =>
       match getLiteralString arg with
@@ -757,12 +755,10 @@ def checkReturn : CommandCheck := {
         else []
       | Option.none => []
     | _ => []
-}
 
 /-- SC2105: Check exit in subshell -/
-def checkExit : CommandCheck := {
-  name := .exactly "exit"
-  check := fun _params t =>
+def checkExit : CommandCheck :=
+  commandCheckExact0 "exit" fun t =>
     match getCommandArguments t with
     | some [arg] =>
       match getLiteralString arg with
@@ -773,12 +769,10 @@ def checkExit : CommandCheck := {
         else []
       | Option.none => []
     | _ => []
-}
 
 /-- SC2156: Check find -exec has proper terminator -/
-def checkFindExecWithSingleArgument : CommandCheck := {
-  name := .exactly "find"
-  check := fun _params t =>
+def checkFindExecWithSingleArgument : CommandCheck :=
+  commandCheckExact0 "find" fun t =>
     match getCommandArguments t with
     | some args =>
       -- Find all -exec/-execdir tokens
@@ -796,12 +790,10 @@ def checkFindExecWithSingleArgument : CommandCheck := {
             "Use ';' or '+' to terminate -exec."
       else []
     | Option.none => []
-}
 
 /-- SC2116: Useless echo -/
-def checkUnusedEchoEscapes : CommandCheck := {
-  name := .basename "echo"
-  check := fun _params t =>
+def checkUnusedEchoEscapes : CommandCheck :=
+  commandCheck0 "echo" fun t =>
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
@@ -809,16 +801,14 @@ def checkUnusedEchoEscapes : CommandCheck := {
         if s.any (· == '\\') then Option.none  -- May need -e flag
         else Option.none
     | Option.none => []
-}
 
 /-- Helper: check if string contains substring -/
 def stringContains (s sub : String) : Bool :=
   (s.splitOn sub).length > 1
 
 /-- SC2156: Injecting filenames in find -exec sh -c -/
-def checkInjectableFindSh : CommandCheck := {
-  name := .exactly "find"
-  check := fun _params t =>
+def checkInjectableFindSh : CommandCheck :=
+  commandCheckExact0 "find" fun t =>
     match getCommandArguments t with
     | some args =>
       -- Simple check: look for patterns like -exec sh -c '..{}...'
@@ -833,12 +823,10 @@ def checkInjectableFindSh : CommandCheck := {
             "Expanding {} in the shell is unsafe. Use a placeholder.")
         else Option.none
     | Option.none => []
-}
 
 /-- SC2146: Check find action precedence (-print before -o) -/
-def checkFindActionPrecedence : CommandCheck := {
-  name := .exactly "find"
-  check := fun _params t =>
+def checkFindActionPrecedence : CommandCheck :=
+  commandCheckExact0 "find" fun t =>
     match getCommandArguments t with
     | some args =>
       let argStrs := args.map (getLiteralString · |>.getD "")
@@ -858,12 +846,10 @@ def checkFindActionPrecedence : CommandCheck := {
           "This action ignores everything before -o. Use \\( \\) to group."]
       else []
     | Option.none => []
-}
 
 /-- SC2227: Redirection applies to `find` itself, not per action. -/
-def checkFindRedirections : CommandCheck := {
-  name := .basename "find"
-  check := fun params t =>
+def checkFindRedirections : CommandCheck :=
+  commandCheck "find" fun params t =>
     let redirTok? : Option Token :=
       match t.inner with
       | .T_Redirecting .. => some t
@@ -890,7 +876,6 @@ def checkFindRedirections : CommandCheck := {
           | _ => []
       | _ => []
     | Option.none => []
-}
 where
   minById? (ts : List Token) : Option Token :=
     ts.foldl (fun acc t =>
@@ -907,9 +892,8 @@ where
     ) Option.none
 
 /-- SC2174: mkdir with -p and -m mode -/
-def checkMkdirDashPM : CommandCheck := {
-  name := .exactly "mkdir"
-  check := fun _params t =>
+def checkMkdirDashPM : CommandCheck :=
+  commandCheckExact0 "mkdir" fun t =>
     match getCommandArguments t with
     | some args =>
       let hasP := args.any fun a => getLiteralString a == some "-p"
@@ -919,12 +903,10 @@ def checkMkdirDashPM : CommandCheck := {
           "With -p, -m only applies to the last directory. Use (umask) for others."]
       else []
     | Option.none => []
-}
 
 /-- SC2250: Portable signals -/
-def checkNonportableSignals : CommandCheck := {
-  name := .exactly "trap"
-  check := fun _params t =>
+def checkNonportableSignals : CommandCheck :=
+  commandCheckExact0 "trap" fun t =>
     match getCommandArguments t with
     | some (_ :: signals) =>
       signals.filterMap fun sig =>
@@ -934,12 +916,10 @@ def checkNonportableSignals : CommandCheck := {
             "Use signal names without SIG prefix for better portability.")
         else Option.none
     | _ => []
-}
 
 /-- SC2253: `chmod -r` is not recursive. -/
-def checkChmodDashr : CommandCheck := {
-  name := .basename "chmod"
-  check := fun _params t =>
+def checkChmodDashr : CommandCheck :=
+  commandCheck0 "chmod" fun t =>
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
@@ -949,12 +929,10 @@ def checkChmodDashr : CommandCheck := {
         else
           Option.none
     | Option.none => []
-}
 
 /-- SC2117: Interactive su -/
-def checkInteractiveSu : CommandCheck := {
-  name := .exactly "su"
-  check := fun _params t =>
+def checkInteractiveSu : CommandCheck :=
+  commandCheckExact0 "su" fun t =>
     match getCommandArguments t with
     | some args =>
       let hasCommand := args.any fun a =>
@@ -965,20 +943,16 @@ def checkInteractiveSu : CommandCheck := {
           "To run commands as another user, use su -c or sudo."]
       else []
     | Option.none => []
-}
 
 /-- SC2230: which is non-standard -/
-def checkWhich : CommandCheck := {
-  name := .exactly "which"
-  check := fun _params t =>
+def checkWhich : CommandCheck :=
+  commandCheckExact0 "which" fun t =>
     [makeComment .infoC t.id 2230
       "'which' is non-standard. Use 'command -v' instead."]
-}
 
 /-- SC2237: Check for [ -n or -z $var ] without quotes -/
-def checkTestNZ : CommandCheck := {
-  name := .exactly "test"
-  check := fun _params t =>
+def checkTestNZ : CommandCheck :=
+  commandCheckExact0 "test" fun t =>
     match getCommandArguments t with
     | some args =>
       let rec checkArgs (remaining : List Token) (acc : List TokenComment) (fuel : Nat) : List TokenComment :=
@@ -1006,12 +980,10 @@ def checkTestNZ : CommandCheck := {
         | [_] => acc
       checkArgs args [] args.length
     | Option.none => []
-}
 
 /-- SC2185: Some finds need -L for symlink targets -/
-def checkFindWithSymlinks : CommandCheck := {
-  name := .exactly "find"
-  check := fun _params t =>
+def checkFindWithSymlinks : CommandCheck :=
+  commandCheckExact0 "find" fun t =>
     match getCommandArguments t with
     | some args =>
       let argStrs := args.map (getLiteralString · |>.getD "")
@@ -1028,12 +1000,10 @@ def checkFindWithSymlinks : CommandCheck := {
         | Option.none => []
       else []
     | Option.none => []
-}
 
 /-- SC2086 SC2248: Prefer printf over echo -n for portability -/
-def checkEchoN : CommandCheck := {
-  name := .basename "echo"
-  check := fun _params t =>
+def checkEchoN : CommandCheck :=
+  commandCheck0 "echo" fun t =>
     match getCommandArguments t with
     | some args =>
       if args.any fun a => getLiteralString a == some "-n" then
@@ -1041,12 +1011,10 @@ def checkEchoN : CommandCheck := {
           "echo -n is non-standard. Consider printf instead."]
       else []
     | Option.none => []
-}
 
 /-- SC2291: Quote repeated spaces to avoid them collapsing into one. -/
-def checkUnquotedEchoSpaces : CommandCheck := {
-  name := .basename "echo"
-  check := fun params t =>
+def checkUnquotedEchoSpaces : CommandCheck :=
+  commandCheck "echo" fun params t =>
     match getCommandArguments t with
     | some args =>
       let positions : List (Position × Position) :=
@@ -1059,7 +1027,6 @@ def checkUnquotedEchoSpaces : CommandCheck := {
           "Quote repeated spaces to avoid them collapsing into one."]
       else []
     | Option.none => []
-}
 where
   getRedirs (params : Parameters) (t : Token) : List Token :=
     match t.inner with
@@ -1091,17 +1058,14 @@ where
 -- Note: SC2002 (useless cat) and SC2009 (ps | grep) are handled by pipeline checks above
 
 /-- SC2219: Instead of 'let expr', use (( expr )) -/
-def checkLetArithmetic : CommandCheck := {
-  name := .exactly "let"
-  check := fun _params t =>
+def checkLetArithmetic : CommandCheck :=
+  commandCheckExact0 "let" fun t =>
     [makeComment .styleC t.id 2219
       "Instead of 'let expr', prefer (( expr )) ."]
-}
 
 /-- SC2006: Use $(...) instead of legacy backticks -/
-def checkBackticks : CommandCheck := {
-  name := .exactly "echo"  -- Applies generally, but check in echo context
-  check := fun _params t =>
+def checkBackticks : CommandCheck :=
+  commandCheckExact0 "echo" fun t =>
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
@@ -1111,20 +1075,16 @@ def checkBackticks : CommandCheck := {
             "Use $(...) notation instead of legacy backticks `...`.")
         | _ => Option.none
     | Option.none => []
-}
 
 /-- SC2230: which is non-standard. Use type, command -v, or hash -/
-def checkWhichCommand : CommandCheck := {
-  name := .basename "which"
-  check := fun _params t =>
+def checkWhichCommand : CommandCheck :=
+  commandCheck0 "which" fun t =>
     [makeComment .styleC t.id 2230
       "'which' is non-standard. Use type -p, command -v, or hash instead."]
-}
 
 /-- SC2024: sudo doesn't affect redirects. Use sudo tee or sudo sh -c. -/
-def checkSudoRedirect : CommandCheck := {
-  name := .basename "sudo"
-  check := fun params t =>
+def checkSudoRedirect : CommandCheck :=
+  commandCheck "sudo" fun params t =>
     -- Check if this sudo command has redirects
     match params.parentMap.get? t.id with
     | some parent =>
@@ -1136,12 +1096,10 @@ def checkSudoRedirect : CommandCheck := {
         else []
       | _ => []
     | Option.none => []
-}
 
 /-- SC2086 style: Don't use cd without checking return value -/
-def checkCdNoCheck : CommandCheck := {
-  name := .exactly "cd"
-  check := fun params t =>
+def checkCdNoCheck : CommandCheck :=
+  commandCheckExact "cd" fun params t =>
     -- Check if cd is followed by || or && or in an if
     match params.parentMap.get? t.id with
     | some parent =>
@@ -1153,21 +1111,17 @@ def checkCdNoCheck : CommandCheck := {
         [makeComment .infoC t.id 2164
           "Use 'cd ... || exit' or 'cd ... || return' to handle cd failure."]
     | Option.none => []
-}
 
 /-- SC2129: Consider using { cmd1; cmd2; } >> file -/
-def checkMultipleAppends : CommandCheck := {
-  name := .basename "echo"
-  check := fun _params _t =>
+def checkMultipleAppends : CommandCheck :=
+  commandCheck0 "echo" fun _t =>
     -- This would need more context to detect multiple appends to same file
     -- Simplified: just note that it's a style issue (not auto-detectable easily)
     []
-}
 
 /-- SC2008: echo doesn't read from stdin -/
-def checkEchoStdin : CommandCheck := {
-  name := .basename "echo"
-  check := fun params t =>
+def checkEchoStdin : CommandCheck :=
+  commandCheck "echo" fun params t =>
     -- Check if echo is being piped to
     match params.parentMap.get? t.id with
     | some parent =>
@@ -1182,12 +1136,10 @@ def checkEchoStdin : CommandCheck := {
         | Option.none => []
       | _ => []
     | Option.none => []
-}
 
 /-- SC2026: This word looks like a shell comment but isn't -/
-def checkUnintendedComment : CommandCheck := {
-  name := .basename "echo"
-  check := fun _params t =>
+def checkUnintendedComment : CommandCheck :=
+  commandCheck0 "echo" fun t =>
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
@@ -1199,7 +1151,6 @@ def checkUnintendedComment : CommandCheck := {
           else Option.none
         | Option.none => Option.none
     | Option.none => []
-}
 
 /-- SC2035: Use ./* or -- before glob to avoid matching dashes -/
 def checkGlobDash : CommandCheck :=
@@ -1207,9 +1158,8 @@ def checkGlobDash : CommandCheck :=
     2035 "Use ./*glob* or -- *glob* to avoid matching dash-prefixed files."
 
 /-- SC2088: Tilde does not expand in quotes -/
-def checkTildeInQuotes : CommandCheck := {
-  name := .basename "cd"
-  check := fun _params t =>
+def checkTildeInQuotes : CommandCheck :=
+  commandCheck0 "cd" fun t =>
     match getCommandArguments t with
     | some args =>
       args.filterMap fun arg =>
@@ -1221,12 +1171,10 @@ def checkTildeInQuotes : CommandCheck := {
           else Option.none
         | _ => Option.none
     | Option.none => []
-}
 
 /-- SC2093: Remove exec if following commands should run -/
-def checkExecFollowed : CommandCheck := {
-  name := .exactly "exec"
-  check := fun params t =>
+def checkExecFollowed : CommandCheck :=
+  commandCheckExact "exec" fun params t =>
     -- Check if there are commands after exec in the same sequence
     match params.parentMap.get? t.id with
     | some parent =>
@@ -1241,12 +1189,10 @@ def checkExecFollowed : CommandCheck := {
         | Option.none => []
       | _ => []
     | Option.none => []
-}
 
 /-- SC2115: Use "${var:?}" to ensure var is set -/
-def checkRmVar : CommandCheck := {
-  name := .basename "rm"
-  check := fun _params t =>
+def checkRmVar : CommandCheck :=
+  commandCheck0 "rm" fun t =>
     match getCommandArguments t with
     | some args =>
       let argStrs := args.map (getLiteralString · |>.getD "")
@@ -1269,20 +1215,16 @@ def checkRmVar : CommandCheck := {
           | _ => Option.none
       else []
     | Option.none => []
-}
 
 /-- SC2148: Add shebang if missing -/
-def checkMissingShebang : CommandCheck := {
-  name := .basename "bash"  -- Dummy - this should be a script-level check
-  check := fun _params _t => []  -- Script-level check, handled elsewhere
-}
+def checkMissingShebang : CommandCheck :=
+  commandCheck0 "bash" fun _t => []  -- Script-level check, handled elsewhere
 
 -- Note: SC2237 for [ ! -z ] is handled in Analytics.lean since [ ] is parsed as T_Condition
 
 /-- SC2236: Use -n instead of ! -z -/
-def checkTestNotZ : CommandCheck := {
-  name := .exactly "test"
-  check := fun _params t =>
+def checkTestNotZ : CommandCheck :=
+  commandCheckExact0 "test" fun t =>
     match getCommandArguments t with
     | some args =>
       let argStrs := args.map (getLiteralString · |>.getD "")
@@ -1291,12 +1233,10 @@ def checkTestNotZ : CommandCheck := {
           "Use -n instead of ! -z."]
       else []
     | Option.none => []
-}
 
 /-- SC2061: Quote the regex for grep -E or -P -/
-def checkGrepRegexQuoting : CommandCheck := {
-  name := .basename "grep"
-  check := fun _params t =>
+def checkGrepRegexQuoting : CommandCheck :=
+  commandCheck0 "grep" fun t =>
     match getCommandArguments t with
     | some args =>
       let argStrs := args.map (getLiteralString · |>.getD "")
@@ -1314,7 +1254,6 @@ def checkGrepRegexQuoting : CommandCheck := {
           | Option.none => Option.none
       else []
     | Option.none => []
-}
 
 /-- SC2012: Use find instead of ls to better handle filenames -/
 def checkLsInScript : CommandCheck := {
