@@ -38,6 +38,9 @@ def mkShExtCase (code : Int) (script : String) : CoverageCase :=
 def mkBashExtCase (code : Int) (script : String) : CoverageCase :=
   { code := code, script := script, shell := some .Bash, extended := true }
 
+def u (n : Nat) : String :=
+  String.singleton (Char.ofNat n)
+
 def runCase (c : CoverageCase) : Bool :=
   let cr :=
     match c.shell, c.extended with
@@ -50,11 +53,11 @@ def runCase (c : CoverageCase) : Bool :=
 def sc1xxxCases : List CoverageCase := [
   mkCase 1005 "echo $((1+2)",
   mkCase 1072 "echo 'foo",
-  mkCase 1082 "\u{FEFF}echo hi",
+  mkCase 1082 (u 0xFEFF ++ "echo hi"),
   mkCase 1017 "echo hi\r\n",
-  mkCase 1018 "echo\u{00A0}hi",
-  mkCase 1100 "echo \u{2013}n hi",
-  mkCase 1110 "echo \u{201C}hi\u{201D}"
+  mkCase 1018 ("echo" ++ u 0x00A0 ++ "hi"),
+  mkCase 1100 ("echo " ++ u 0x2013 ++ "n hi"),
+  mkCase 1110 ("echo " ++ u 0x201C ++ "hi" ++ u 0x201D)
 ]
 
 def sc1xxxFailures : List CoverageCase :=
@@ -205,7 +208,7 @@ def test_sc1xxx_coverage : Except String Bool := do
   if failures.isEmpty then
     pure true
   else
-    let codes := failures.map (fun c => toString c.code)
+    let codes := List.map (fun c => toString c.code) failures
     .error s!"Missing SC1xxx coverage: {String.intercalate ", " codes}"
 
 def test_sc2xxx_coverage : Except String Bool := do
@@ -213,7 +216,7 @@ def test_sc2xxx_coverage : Except String Bool := do
   if failures.isEmpty then
     pure true
   else
-    let codes := failures.map (fun c => toString c.code)
+    let codes := List.map (fun c => toString c.code) failures
     .error s!"Missing SC2xxx coverage: {String.intercalate ", " codes}"
 
 def test_sc3xxx_coverage : Except String Bool := do
@@ -221,7 +224,7 @@ def test_sc3xxx_coverage : Except String Bool := do
   if failures.isEmpty then
     pure true
   else
-    let codes := failures.map (fun c => toString c.code)
+    let codes := List.map (fun c => toString c.code) failures
     .error s!"Missing SC3xxx coverage: {String.intercalate ", " codes}"
 
 end ShellCheck.Tests.SCCoverage
