@@ -20,11 +20,18 @@ def sanitizeWord (s : String) : String :=
   let w := String.ofList (s.toList.map sanitizeChar)
   if w.isEmpty then "x" else w
 
+def sanitizeIdent (s : String) : String :=
+  let chars := s.toList.map (fun c => if c.isAlphanum || c == '_' then c else 'a')
+  let chars := if chars.isEmpty then ['x'] else chars
+  let head := chars.head!
+  let head := if head.isAlpha || head == '_' then head else 'x'
+  String.ofList (head :: chars.tail)
+
 def reverseString (s : String) : String :=
   String.ofList s.toList.reverse
 
 def scriptFromSeedQuoted (seed : String) : String :=
-  let name := sanitizeWord seed
+  let name := sanitizeIdent seed
   let value := sanitizeWord (reverseString seed)
   let assign := name ++ "=\"" ++ value ++ "\""
   let varRef := "$" ++ name
@@ -42,6 +49,21 @@ def scriptFromSeed (seed : String) : List (List String) :=
   let cmd1 := [s!"{w1}={w2}", w1, w3]
   let cmd2 := ["echo", w2]
   if seed.length % 2 == 0 then [cmd1] else [cmd1, cmd2]
+
+def scriptFromSeedComplex (seed : String) : String :=
+  let name := sanitizeIdent seed
+  let arr := sanitizeIdent (seed ++ "arr")
+  let value := sanitizeWord (reverseString seed)
+  let idx := sanitizeWord (seed ++ "i")
+  let heredocTag := "SC_EOF_1"
+  let line1 := s!"{name}={value}"
+  let line2 := s!"{arr}[{idx}]={value}"
+  let line3 := s!"echo $(printf '%s' \"{value}\")"
+  let line4 := s!"echo $((1+2)) ${name}"
+  let line5 := s!"cat <<{heredocTag}"
+  let line6 := s!"${name}"
+  let line7 := heredocTag
+  String.intercalate "\n" [line1, line2, line3, line4, line5, line6, line7]
 
 def renderScript (cmds : List (List String)) : String :=
   String.intercalate "\n" (cmds.map (String.intercalate " "))
@@ -148,8 +170,7 @@ def simpleRoundtrip (seed : String) : Bool :=
                 errors2.isEmpty &&
                   decide (normalizeScript root2 = some norm)
 
-def positionsOk (seed : String) : Bool :=
-  let script := renderScript (scriptFromSeed seed)
+def positionsOkScript (script : String) : Bool :=
   let (rootOpt, positions, errors) := runParser script "<prop>"
   match rootOpt with
   | none => false
@@ -157,20 +178,38 @@ def positionsOk (seed : String) : Bool :=
       errors.isEmpty &&
         positionsValid script positions &&
         positionsCoverTokens positions root
+
+def positionsOk (seed : String) : Bool :=
+  positionsOkScript (renderScript (scriptFromSeed seed))
 
 def parseOkQuoted (seed : String) : Bool :=
   let script := scriptFromSeedQuoted seed
   parseOk script
 
+def parseOkComplex (seed : String) : Bool :=
+  parseOk (scriptFromSeedComplex seed)
+
 def positionsOkQuoted (seed : String) : Bool :=
-  let script := scriptFromSeedQuoted seed
-  let (rootOpt, positions, errors) := runParser script "<prop>"
-  match rootOpt with
+  positionsOkScript (scriptFromSeedQuoted seed)
+
+def positionsOkComplex (seed : String) : Bool :=
+  positionsOkScript (scriptFromSeedComplex seed)
+
+def tokenIdsUnique (root : Token) : Bool :=
+  let ids := collectTokenIds root
+  let set := ids.foldl (fun acc id => acc.insert id) ({} : Std.HashSet Id)
+  set.size == ids.length
+
+def idsUniqueScript (script : String) : Bool :=
+  match parseRoot? script with
   | none => false
-  | some root =>
-      errors.isEmpty &&
-        positionsValid script positions &&
-        positionsCoverTokens positions root
+  | some root => tokenIdsUnique root
+
+def idsUnique (seed : String) : Bool :=
+  idsUniqueScript (renderScript (scriptFromSeed seed))
+
+def idsUniqueComplex (seed : String) : Bool :=
+  idsUniqueScript (scriptFromSeedComplex seed)
 
 def braceExpansionSplits (seed : String) : Bool :=
   let w1 := sanitizeWord seed
@@ -332,6 +371,22 @@ abbrev prop_parse_ok_quoted : Prop :=
 abbrev prop_positions_valid_quoted : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
     positionsOkQuoted seed = true
+
+abbrev prop_parse_ok_complex : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    parseOkComplex seed = true
+
+abbrev prop_positions_valid_complex : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    positionsOkComplex seed = true
+
+abbrev prop_ids_unique_simple : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    idsUnique seed = true
+
+abbrev prop_ids_unique_complex : Prop :=
+  Plausible.NamedBinder "seed" <| ∀ seed : String,
+    idsUniqueComplex seed = true
 
 abbrev prop_brace_expansion_splits : Prop :=
   Plausible.NamedBinder "seed" <| ∀ seed : String,
