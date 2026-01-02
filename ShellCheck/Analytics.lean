@@ -3406,13 +3406,12 @@ where
 def checkPipePitfalls (_params : Parameters) (t : Token) : List TokenComment :=
   match t.inner with
   | .T_Pipeline _ commands =>
-    let names := commands.map (fun c => headOrDefault "" (oversimplify c))
+    let names := commands.map (fun c => ShellCheck.Prelude.headOrDefault "" (oversimplify c))
     let forPattern (pattern : List String) (f : List Token → List TokenComment) :
         (List TokenComment × Bool) :=
       let indices := indexOfSublists pattern names
-      let comments := indices.foldl (fun acc n =>
-        acc ++ f ((commands.drop n).take pattern.length)
-      ) []
+      let comments := indices.flatMap fun n =>
+        f ((commands.drop n).take pattern.length)
       (comments, !indices.isEmpty)
     let forFirst (pattern : List String) (f : Token → List TokenComment) :
         (List TokenComment × Bool) :=
