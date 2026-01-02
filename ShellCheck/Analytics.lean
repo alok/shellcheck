@@ -11,6 +11,7 @@ import ShellCheck.ASTLib
 import ShellCheck.AnalyzerLib
 import ShellCheck.CFG
 import ShellCheck.CFGAnalysis
+import ShellCheck.Checks.RuleDSL
 import ShellCheck.Data
 import ShellCheck.Interface
 import ShellCheck.Parser
@@ -25,6 +26,7 @@ open ShellCheck.ASTLib
 open ShellCheck.AnalyzerLib
 open ShellCheck.CFG
 open ShellCheck.CFGAnalysis
+open ShellCheck.Checks.RuleDSL
 open ShellCheck.Data
 open ShellCheck.Interface
 open ShellCheck.Parser
@@ -988,88 +990,52 @@ where
 
 /-- SC2009: Consider using pgrep instead of grepping ps output -/
 def checkPsGrep (_params : Parameters) (t : Token) : List TokenComment :=
-  match t.inner with
-  | .T_Pipeline _ cmds =>
-    let cmdNames := cmds.filterMap fun c => getCommandBasename c
-    if hasPsGrep cmdNames then
-      cmds.filterMap fun c =>
-        if getCommandBasename c == some "ps" then
-          some (makeComment .infoC c.id 2009
-            "Consider using pgrep instead of grepping ps output.")
-        else none
+  match pipelineCommands t with
+  | some cmds =>
+    if pipelineMatches ["ps", "grep"] cmds (requireLeading := true) then
+      pipelineTargets "ps" cmds |>.map fun c =>
+        makeComment .infoC c.id 2009
+          "Consider using pgrep instead of grepping ps output."
     else []
   | _ => []
-where
-  hasPsGrep (names : List String) : Bool :=
-    match names with
-    | "ps" :: rest => rest.any (· == "grep")
-    | _ :: rest => hasPsGrep rest
-    | [] => false
 
 /-- SC2010: Don't use ls | grep -/
 def checkLsGrep (_params : Parameters) (t : Token) : List TokenComment :=
-  match t.inner with
-  | .T_Pipeline _ cmds =>
-    let cmdNames := cmds.filterMap fun c => getCommandBasename c
-    if hasLsGrep cmdNames then
-      cmds.filterMap fun c =>
-        if getCommandBasename c == some "ls" then
-          some (makeComment .warningC c.id 2010
-            "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames.")
-        else none
+  match pipelineCommands t with
+  | some cmds =>
+    if pipelineMatches ["ls", "grep"] cmds (requireLeading := true) then
+      pipelineTargets "ls" cmds |>.map fun c =>
+        makeComment .warningC c.id 2010
+          "Don't use ls | grep. Use a glob or a for loop with a condition to allow non-alphanumeric filenames."
     else []
   | _ => []
-where
-  hasLsGrep (names : List String) : Bool :=
-    match names with
-    | "ls" :: rest => rest.any (· == "grep")
-    | _ :: rest => hasLsGrep rest
-    | [] => false
 
 /-- SC2011: Use find .. -print0 | xargs -0 instead of ls | xargs -/
 def checkLsXargs (_params : Parameters) (t : Token) : List TokenComment :=
-  match t.inner with
-  | .T_Pipeline _ cmds =>
-    let cmdNames := cmds.filterMap fun c => getCommandBasename c
-    if hasLsXargs cmdNames then
-      cmds.filterMap fun c =>
-        if getCommandBasename c == some "ls" then
-          some (makeComment .warningC c.id 2011
-            "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames.")
-        else none
+  match pipelineCommands t with
+  | some cmds =>
+    if pipelineMatches ["ls", "xargs"] cmds (requireLeading := true) then
+      pipelineTargets "ls" cmds |>.map fun c =>
+        makeComment .warningC c.id 2011
+          "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."
     else []
   | _ => []
-where
-  hasLsXargs (names : List String) : Bool :=
-    match names with
-    | "ls" :: rest => rest.any (· == "xargs")
-    | _ :: rest => hasLsXargs rest
-    | [] => false
 
 /-- SC2038: Use find -print0 | xargs -0 -/
 def checkFindXargs (_params : Parameters) (t : Token) : List TokenComment :=
-  match t.inner with
-  | .T_Pipeline _ cmds =>
-    let cmdNames := cmds.filterMap fun c => getCommandBasename c
-    if hasFindXargs cmdNames then
+  match pipelineCommands t with
+  | some cmds =>
+    if pipelineMatches ["find", "xargs"] cmds (requireLeading := true) then
       let allArgs := cmds.flatMap oversimplify
       -- Check if -print0 or -0 is used
       if not (allArgs.any (· == "-print0") || allArgs.any (· == "-0") ||
               allArgs.any (· == "--null") || allArgs.any fun s => s.endsWith "printf") then
-        cmds.filterMap fun c =>
-          if getCommandBasename c == some "find" then
-            some (makeComment .warningC c.id 2038
-              "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames.")
-          else none
+        pipelineTargets "find" cmds |>.map fun c =>
+          makeComment .warningC c.id 2038
+            "Use 'find .. -print0 | xargs -0 ..' or 'find .. -exec .. +' to allow non-alphanumeric filenames."
       else []
     else []
   | _ => []
-where
-  hasFindXargs (names : List String) : Bool :=
-    match names with
-    | "find" :: rest => rest.any (· == "xargs")
-    | _ :: rest => hasFindXargs rest
-    | [] => false
 
 /-- SC2126: Consider using grep -c instead of grep|wc -l -/
 def checkGrepWc (_params : Parameters) (t : Token) : List TokenComment :=
