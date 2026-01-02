@@ -1650,20 +1650,13 @@ def checkArrayExpansion : CommandCheck := {
 }
 
 /-- Helper: Check if a token contains a command substitution -/
-def hasCommandSubstitution (t : Token) : Bool :=
+partial def hasCommandSubstitution (t : Token) : Bool :=
   match t.inner with
   | .T_DollarExpansion _ => true
   | .T_Backticked _ => true
-  | .T_NormalWord parts => parts.any fun p =>
-      match p.inner with
-      | .T_DollarExpansion _ => true
-      | .T_Backticked _ => true
-      | _ => false
-  | .T_DoubleQuoted parts => parts.any fun p =>
-      match p.inner with
-      | .T_DollarExpansion _ => true
-      | .T_Backticked _ => true
-      | _ => false
+  | .T_Assignment _ _ _ value => hasCommandSubstitution value
+  | .T_NormalWord parts => parts.any hasCommandSubstitution
+  | .T_DoubleQuoted parts => parts.any hasCommandSubstitution
   | _ => false
 
 /-- SC2155: Declare and assign separately to avoid masking return values -/

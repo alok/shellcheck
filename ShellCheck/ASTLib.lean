@@ -298,11 +298,14 @@ def getTrailingUnquotedLiteral (t : Token) : Option Token :=
   | _ => none
 
 /-- Is this an array expansion like ${arr[@]}? -/
-def isArrayExpansion (t : Token) : Bool :=
+partial def isArrayExpansion (t : Token) : Bool :=
   match t.inner with
   | .T_DollarBraced _ content =>
       let s := String.join (oversimplify content)
       s.startsWith "@" || (not (s.startsWith "#") && Regex.containsSubstring s "[@]")
+  | .T_NormalWord parts => parts.any isArrayExpansion
+  | .T_DoubleQuoted parts => parts.any isArrayExpansion
+  | .TA_Expansion parts => parts.any isArrayExpansion
   | _ => false
 
 /-- Can this token become multiple args (e.g. arrays or unquoted expansions)? -/

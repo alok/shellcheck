@@ -1110,23 +1110,25 @@ partial def checkShebangImpl (params : Parameters) (t : Token) : List TokenComme
   | .T_Script shebang _ =>
     match shebang.inner with
     | .T_Literal sb =>
+      let sbLine := if sb.startsWith "#!" then sb.drop 2 else sb
+      let sbTrim := (sbLine.dropWhile (· == ' ')).toString
       -- Use shebang token's id for proper line 1 position
       let comments1 :=
-        if sb.isEmpty && not params.shellTypeSpecified then
+        if sbTrim.isEmpty && not params.shellTypeSpecified then
           [makeComment .errorC shebang.id 2148
             "Tips depend on target shell and yours is unknown. Add a shebang or a 'shell' directive."]
         else []
       let comments2 :=
-        if Regex.containsSubstring sb "ash" && not (Regex.containsSubstring sb "bash") then
+        if Regex.containsSubstring sbTrim "ash" && not (Regex.containsSubstring sbTrim "bash") then
           [makeComment .warningC t.id 2187
             "Ash scripts will be checked as Dash. Add '# shellcheck shell=dash' to silence."]
         else []
       let comments3 :=
-        if not sb.isEmpty && not (sb.startsWith "/") && not (sb.startsWith "#") then
+        if not sbTrim.isEmpty && not (sbTrim.startsWith "/") && not ("env ".isPrefixOf sbTrim) then
           [makeComment .errorC t.id 2239
             "Ensure the shebang uses an absolute path to the interpreter."]
         else []
-      let firstWord := sb.splitOn " " |>.head? |>.getD ""
+      let firstWord := sbTrim.splitOn " " |>.head? |>.getD ""
       let comments4 :=
         if firstWord.endsWith "/" then
           [makeComment .errorC t.id 2246
