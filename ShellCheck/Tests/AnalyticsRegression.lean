@@ -120,6 +120,26 @@ def test_sc2089_sc2090_quoted_ok : Except String Bool := do
   let cr := runCheck "param='--foo=\"bar\"'; app \"$param\""
   pure (!hasCode cr 2089 && !hasCode cr 2090)
 
+def test_sc2018_tr_lower_class : Except String Bool := do
+  let cr := runCheck "tr a-z A-Z"
+  pure (hasCode cr 2018)
+
+def test_sc2019_tr_upper_class : Except String Bool := do
+  let cr := runCheck "tr a-z A-Z"
+  pure (hasCode cr 2019)
+
+def test_sc2020_tr_duplicates : Except String Bool := do
+  let cr := runCheck "tr aa bb"
+  pure (hasCode cr 2020)
+
+def test_sc2021_tr_bracket_class : Except String Bool := do
+  let cr := runCheck "tr '[a]' b"
+  pure (hasCode cr 2021)
+
+def test_sc2060_tr_unquoted_glob : Except String Bool := do
+  let cr := runCheck "tr * a"
+  pure (hasCode cr 2060)
+
 def test_sc2125_glob_assignment : Except String Bool := do
   let cr := runCheck "a=*.png"
   pure (hasCode cr 2125)
