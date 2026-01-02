@@ -457,7 +457,8 @@ def checkForInCat : CommandCheck :=
         "To read lines, use 'while IFS= read -r line; do ...; done < file'."]
     else []
 
-/-- SC2018/SC2019/SC2020/SC2021/SC2060: Common `tr` pitfalls. -/
+/-- SC2018/SC2019/SC2020/SC2021/SC2060: Common `tr` pitfalls.
+    Mirrors {haskell}`ShellCheck.Checks.Commands.checkTr`. -/
 def checkTr : CommandCheck :=
   commandCheckExact0 "tr" fun t =>
     match getCommandArguments t with
@@ -2144,7 +2145,8 @@ def checkEchoNPosix : CommandCheck :=
 ## Additional SC2xxx Checks
 -/
 
-/-- SC2005: Useless echo? Instead of 'echo $(cmd)', just use 'cmd' -/
+/-- SC2005: Useless echo? Instead of 'echo $(cmd)', just use 'cmd'.
+    Mirrors {haskell}`ShellCheck.Checks.Commands.checkUuoeCmd`. -/
 def checkUselessEcho : CommandCheck := {
   name := .basename "echo"
   check := fun _params t =>
@@ -3915,11 +3917,32 @@ theorem commandChecks_not_empty :
 
 theorem matchesCommandName_exactly (name : String) (cmd : Token) :
     matchesCommandName (.exactly name) cmd = true →
-    getCommandName cmd = some name := sorry
+    getCommandName cmd = some name := by
+  intro h
+  cases hname : getCommandName cmd with
+  | none =>
+      have : False := by
+        simpa [matchesCommandName, hname] using h
+      cases this
+  | some cmdName =>
+      have hbeq : (cmdName == name) = true := by
+        simpa [matchesCommandName, hname] using h
+      have hb : cmdName == name := by
+        simpa [hbeq]
+      have hEq : cmdName = name := eq_of_beq hb
+      simpa [hEq] using hname
 
 theorem matchesCommandName_basename (name : String) (cmd : Token) :
     matchesCommandName (.basename name) cmd = true →
-    (getCommandBasename cmd).isSome := sorry
+    (getCommandBasename cmd).isSome := by
+  intro h
+  cases hbase : getCommandBasename cmd with
+  | none =>
+      have : False := by
+        simpa [matchesCommandName, hbase] using h
+      cases this
+  | some _ =>
+      simp [hbase]
 
 theorem checker_applies_matching (_spec : AnalysisSpec) (_params : Parameters) :
     True := trivial  -- Would verify matching logic
