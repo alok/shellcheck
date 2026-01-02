@@ -6,8 +6,7 @@ import re
 
 ROOT = Path(__file__).resolve().parents[1]
 HS_DIR = ROOT / "src" / "ShellCheck"
-LEAN_ANALYTICS = ROOT / "ShellCheck" / "Analytics.lean"
-LEAN_CHECKS = ROOT / "ShellCheck" / "Checks"
+LEAN_DIR = ROOT / "ShellCheck"
 OUT1 = ROOT / "ShellCheck" / "Tests" / "SC1xxxLists.lean"
 OUT2 = ROOT / "ShellCheck" / "Tests" / "SC2xxxLists.lean"
 OUT3 = ROOT / "ShellCheck" / "Tests" / "SC3xxxLists.lean"
@@ -125,7 +124,11 @@ def extract_haskell_codes() -> list[int]:
 
 def extract_lean_codes() -> list[int]:
     codes: set[int] = set()
-    lean_files = [LEAN_ANALYTICS] + list(LEAN_CHECKS.rglob("*.lean"))
+    lean_files = [
+        path
+        for path in LEAN_DIR.rglob("*.lean")
+        if "Tests" not in path.parts
+    ]
     for path in lean_files:
         text = strip_lean_comments(path.read_text(encoding="utf-8"))
         for match in CODE_RE.findall(text):
