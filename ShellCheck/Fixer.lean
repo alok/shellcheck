@@ -218,7 +218,8 @@ def applyFix (fix : Fix) (fileLines : Array String) : List String :=
 
 -- overlap is symmetric by commutativity of && and the symmetric structure of the conditions
 theorem overlap_symmetric [Ranged α] (x y : α) :
-    overlap x y = overlap y x := sorry
+    overlap x y = overlap y x := by
+  simp [overlap, Bool.and_left_comm, Bool.and_comm]
 
 -- overlap_self requires start < end which isn't always true
 theorem overlap_self [Ranged α] (x : α) :
@@ -246,7 +247,10 @@ theorem mapPositions_identity (fix : Fix) :
   simp only [mapPositions, id, List.map_id']
 
 theorem mapPositions_composition (f g : Position → Position) (fix : Fix) :
-    mapPositions f (mapPositions g fix) = mapPositions (f ∘ g) fix := sorry
+    mapPositions f (mapPositions g fix) = mapPositions (f ∘ g) fix := by
+  cases fix with
+  | mk reps =>
+      simp [mapPositions, List.map_map, Function.comp]
 
 -- getPrefixSum and addPSValue are partial defs, so proving properties
 -- requires more elaborate machinery (fuel-based reasoning)
@@ -254,7 +258,8 @@ theorem getPrefixSum_empty (target : Int) :
     getPrefixSum target newPSTree = 0 := sorry
 
 theorem addPSValue_zero (key : Int) (tree : PSTree Int) :
-    addPSValue key 0 tree = tree := sorry
+    addPSValue key 0 tree = tree := by
+  simp [addPSValue]
 
 theorem getPrefixSum_after_add (key value target : Int) (tree : PSTree Int) :
     target < key →
